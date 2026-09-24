@@ -73,6 +73,7 @@ struct APIClient {
     func addFriend(_ f: NewFriend) async throws -> Friend { try await send("POST", "/friends", body: f) }
     func templates() async throws -> [PromptTemplate] { try await get("/templates") }
     func addTemplate(_ t: NewTemplate) async throws -> PromptTemplate { try await send("POST", "/templates", body: t) }
+    func deleteTemplate(_ id: String) async throws { _ = try await request("DELETE", "/templates/\(id)") }
     func calls() async throws -> [Call] { try await get("/calls") }
     func call(_ id: String) async throws -> Call { try await get("/calls/\(id)") }
     func startCall(_ c: NewCall) async throws -> Call { try await send("POST", "/calls", body: c) }

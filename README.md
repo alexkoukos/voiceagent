@@ -15,7 +15,7 @@ Code-complete and committed, but never run against real LiveKit/Gemini/Telnyx/R2
 
 - Backend: end-to-end on real Postgres (Docker), including migrations, auth, the agent-event endpoint, WebSocket push, and recording/transcript deletion (R2 and LiveKit stubbed).
 - Agent: imports and instantiates against the real `livekit-agents` 1.8.3 in its Docker image; the LiveKit request types it uses exist. The actual call flow is untested.
-- iOS: builds for the simulator with `xcodebuild`; not run yet.
+- iOS: builds and launches in the simulator against a local backend (templates load, auth works). The call flow itself hasn't been driven from the app.
 
 ## Local setup
 
@@ -67,8 +67,17 @@ Then set the app's Settings tab to the backend URL and `APP_API_TOKEN`. The WebS
 | M3 | Prompt merge, hang-up, hard cap, recording, schema + migrations | Done, backend tested on Postgres |
 | M4 | SwiftUI app | Builds, not run |
 | M5 | Deploy + first real prank call | Configs written, not deployed |
+| M6 | Concurrent calls: queue, active-calls list | Done (limit is a setting); more SIP channels are a Telnyx purchase |
 
 Set `APP_API_TOKEN` and `INTERNAL_API_TOKEN` in `.env`; the app needs the same `APP_API_TOKEN` in its Settings tab.
+
+## Behaviour worth knowing
+
+- **Hard cap:** the backend clamps every call to `MAX_CALL_DURATION_SECONDS` (default 300) whatever the app asks for. About 25 seconds before the cap the agent is told to do the reveal and mention the recording, then the call is cut.
+- **Concurrent calls (M6):** `MAX_CONCURRENT_CALLS` (default 1) is how many calls run at once. Extra calls are queued and start automatically when a line frees up; a queued call can be cancelled. The History tab lists active calls. Raise the limit after buying more SIP channels from Telnyx.
+- **Delete on request:** if the friend asks, the agent calls its `delete_recording` tool. The transcript is deleted immediately and the recording is deleted once it finishes uploading (the backend retries for about 5 minutes). Same retry applies to deleting from the app.
+- **Friend numbers** must be in international format (`+306...`).
+- Two example templates ("Wrong order", "Fake call from the university") are seeded by migration 0002.
 
 ## Known limits
 
