@@ -52,3 +52,13 @@ async def dispatch_call(
                 metadata=metadata,
             )
         )
+
+
+async def end_call(call_id: str) -> None:
+    settings = get_settings()
+    async with api.LiveKitAPI(
+        settings.livekit_url,
+        settings.livekit_api_key,
+        settings.livekit_api_secret,
+    ) as lk:
+        await lk.room.delete_room(api.DeleteRoomRequest(room=f"call-{call_id}"))
