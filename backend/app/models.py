@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -14,10 +14,12 @@ def _uuid() -> str:
 
 class CallStatus(str, enum.Enum):
     pending = "pending"
+    queued = "queued"
     dialing = "dialing"
     active = "active"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class TranscriptRole(str, enum.Enum):
@@ -66,6 +68,7 @@ class Call(Base):
     )
     recording_url: Mapped[str | None] = mapped_column(String, nullable=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delete_requested: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     started_at: Mapped[datetime | None] = mapped_column(nullable=True)

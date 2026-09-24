@@ -36,7 +36,7 @@ struct Call: Codable, Identifiable {
     let endedAt: Date?
     var transcriptEntries: [TranscriptEntry]?
 
-    var isInProgress: Bool { status == "pending" || status == "dialing" || status == "active" }
+    var isInProgress: Bool { ["pending", "queued", "dialing", "active"].contains(status) }
 }
 
 struct NewCall: Encodable {

@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     r2_bucket_name: str = "voiceagent-recordings"
 
     max_call_duration_seconds: int = 300
+    max_concurrent_calls: int = 1
 
     internal_api_token: str = ""
     app_api_token: str = ""

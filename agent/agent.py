@@ -71,8 +71,16 @@ async def start_recording(lk: api.LiveKitAPI, room_name: str, call_id: str) -> s
 
 
 class PrankCallerAgent(Agent):
-    def __init__(self, instructions: str) -> None:
+    def __init__(self, instructions: str, call_id: str) -> None:
         super().__init__(instructions=instructions)
+        self._call_id = call_id
+
+    @function_tool
+    async def delete_recording(self) -> str:
+        """Deletes the recording and transcript of this call. Use it as soon as
+        the friend asks for the recording to be deleted."""
+        await report(self._call_id, delete_recording=True)
+        return "recording and transcript will be deleted"
 
     @function_tool
     async def hang_up(self) -> str:
@@ -143,12 +151,23 @@ async def entrypoint(ctx: JobContext) -> None:
             )
 
     async def _enforce_duration_cap() -> None:
-        await asyncio.sleep(max_duration_seconds)
+        # Warn the agent shortly before the cap so the reveal and recording
+        # notice happen instead of the call being cut off mid-sentence.
+        warn_at = max(max_duration_seconds - 25, max_duration_seconds * 0.75)
+        await asyncio.sleep(warn_at)
+        session.generate_reply(
+            instructions="Time is almost up. Do the reveal now, mention the recording, say goodbye and hang up."
+        )
+        await asyncio.sleep(max_duration_seconds - warn_at)
         logger.info("call %s: hard duration cap reached, disconnecting", call_id)
         await ctx.room.disconnect()
 
+    @session.on("close")
+    def _on_close(_ev) -> None:
+        ctx.shutdown(reason="session closed")
+
     async def _finish() -> None:
-        # bucket is private; the backend serves playback via its own access
+        cap_task.cancel()
         event = {"status": "completed"}
         if recording_key:
             event["recording_url"] = recording_key
@@ -157,14 +176,10 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.add_shutdown_callback(_finish)
 
     cap_task = asyncio.create_task(_enforce_duration_cap())
-    try:
-        await session.start(agent=PrankCallerAgent(instructions=prompt), room=ctx.room)
-        await session.generate_reply(
-            instructions="Greet the friend naturally and open the scenario."
-        )
-    except Exception:
-        cap_task.cancel()
-        raise
+    await session.start(agent=PrankCallerAgent(instructions=prompt, call_id=call_id), room=ctx.room)
+    await session.generate_reply(
+        instructions="Greet the friend naturally and open the scenario."
+    )
 
 
 if __name__ == "__main__":

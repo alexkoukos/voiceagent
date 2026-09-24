@@ -5,28 +5,55 @@ struct HistoryView: View {
     private let api = APIClient()
     @State private var calls: [Call] = []
     @State private var errorMessage: String?
+    @State private var liveCall: Call?
+
+    private var active: [Call] { calls.filter(\.isInProgress) }
+    private var past: [Call] { calls.filter { !$0.isInProgress } }
 
     var body: some View {
         NavigationStack {
-            List(calls) { call in
-                NavigationLink(value: call.id) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(call.scenario).lineLimit(1)
-                        Text("\(call.status) · \(call.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.caption).foregroundStyle(.secondary)
+            List {
+                if !active.isEmpty {
+                    Section("Active calls") {
+                        ForEach(active) { call in
+                            Button { liveCall = call } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(call.scenario).lineLimit(1)
+                                    Text(call.status.capitalized).font(.caption).foregroundStyle(.orange)
+                                }
+                            }
+                        }
                     }
                 }
+                Section(active.isEmpty ? "" : "Past calls") {
+                    ForEach(past) { call in
+                        NavigationLink(value: call.id) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(call.scenario).lineLimit(1)
+                                Text("\(call.status) · \(call.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
             }
             .overlay { if calls.isEmpty { ContentUnavailableView("No calls yet", systemImage: "phone") } }
             .navigationTitle("History")
             .navigationDestination(for: String.self) { CallDetailView(callId: $0) }
-            .task { await load() }
+            .fullScreenCover(item: $liveCall) { LiveCallView(callId: $0.id) }
+            .task {
+                while !Task.isCancelled {
+                    await load()
+                    try? await Task.sleep(for: .seconds(3))
+                }
+            }
             .refreshable { await load() }
         }
     }
 
     private func load() async {
-        do { calls = try await api.calls() } catch { errorMessage = error.localizedDescription }
+        do { calls = try await api.calls(); errorMessage = nil } catch { errorMessage = error.localizedDescription }
     }
 }
 
@@ -41,8 +68,11 @@ struct CallDetailView: View {
         VStack {
             if let call {
                 if call.recordingUrl != nil {
+                    if let player {
+                        VideoPlayer(player: player).frame(height: 80)
+                    }
                     HStack {
-                        Button { Task { await play() } } label: { Label("Play recording", systemImage: "play.fill") }
+                        Button { Task { await play() } } label: { Label(player == nil ? "Load recording" : "Restart", systemImage: "play.fill") }
                         Spacer()
                         Button("Delete recording", role: .destructive) { confirmDelete = true }
                     }

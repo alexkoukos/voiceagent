@@ -122,12 +122,17 @@ struct AddFriendView: View {
     @State private var phone = ""
     @State private var errorMessage: String?
 
+    private var phoneValid: Bool { phone.range(of: #"^\+\d{8,15}$"#, options: .regularExpression) != nil }
+
     var body: some View {
         NavigationStack {
             Form {
                 TextField("Name", text: $name)
                 TextField("Phone (+306…)", text: $phone)
                     .keyboardType(.phonePad)
+                if !phone.isEmpty && !phoneValid {
+                    Text("Use international format, e.g. +306912345678").font(.caption).foregroundStyle(.secondary)
+                }
                 if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
             }
             .navigationTitle("Add friend")
@@ -142,7 +147,7 @@ struct AddFriendView: View {
                             } catch { errorMessage = error.localizedDescription }
                         }
                     }
-                    .disabled(name.isEmpty || phone.isEmpty)
+                    .disabled(name.isEmpty || !phoneValid)
                 }
             }
         }

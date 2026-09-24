@@ -10,7 +10,7 @@ struct LiveCallView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 HStack {
-                    Text((call?.status ?? "starting").capitalized).font(.headline)
+                    Text(call?.status == "queued" ? "Queued (waiting for a free line)" : (call?.status ?? "starting").capitalized).font(.headline)
                     Spacer()
                     if let d = call?.durationSeconds { Text("\(d)s").monospacedDigit() }
                 }
@@ -24,7 +24,7 @@ struct LiveCallView: View {
                     Button(role: .destructive) {
                         Task { await hangUp() }
                     } label: {
-                        Label("Hang up", systemImage: "phone.down.fill").frame(maxWidth: .infinity)
+                        Label(call?.status == "queued" ? "Cancel" : "Hang up", systemImage: "phone.down.fill").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)

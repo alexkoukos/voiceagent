@@ -26,3 +26,24 @@ def presigned_recording_url(key: str, expires_seconds: int = 600) -> str:
 
 def delete_recording(key: str) -> None:
     _client().delete_object(Bucket=get_settings().r2_bucket_name, Key=key)
+
+
+_background: set = set()
+
+
+def delete_recording_later(key: str) -> None:
+    """Egress finishes uploading after the call ends, so retry the delete a few times."""
+    import asyncio
+    import logging
+
+    async def _run() -> None:
+        for delay in (0, 30, 120, 300):
+            await asyncio.sleep(delay)
+            try:
+                await asyncio.to_thread(delete_recording, key)
+            except Exception:
+                logging.getLogger(__name__).exception("recording delete failed for %s", key)
+
+    task = asyncio.get_running_loop().create_task(_run())
+    _background.add(task)
+    task.add_done_callback(_background.discard)

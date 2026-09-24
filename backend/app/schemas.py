@@ -1,13 +1,13 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import CallStatus, TranscriptRole
 
 
 class FriendCreate(BaseModel):
-    name: str
-    phone_number: str
+    name: str = Field(min_length=1)
+    phone_number: str = Field(pattern=r"^\+\d{8,15}$")
 
 
 class FriendOut(BaseModel):
@@ -25,7 +25,7 @@ class CallCreate(BaseModel):
     context: str = ""
     reveal: str = ""
     voice: str = "default"
-    max_duration_seconds: int = 300
+    max_duration_seconds: int = Field(default=300, gt=0)
 
 
 class CallEvent(BaseModel):
@@ -33,6 +33,7 @@ class CallEvent(BaseModel):
     transcript_role: TranscriptRole | None = None
     transcript_text: str | None = None
     recording_url: str | None = None
+    delete_recording: bool = False
 
 
 class TranscriptEntryOut(BaseModel):
