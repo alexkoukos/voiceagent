@@ -22,6 +22,7 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     function_tool,
+    get_job_context,
 )
 from livekit.plugins import google
 
@@ -77,7 +78,7 @@ class PrankCallerAgent(Agent):
     async def hang_up(self) -> str:
         """Ends the call. Use this once the reveal is done or the scenario
         has run its course — never leave a call open indefinitely."""
-        job_ctx = JobContext.current()
+        job_ctx = get_job_context()
         await job_ctx.room.disconnect()
         return "call ended"
 

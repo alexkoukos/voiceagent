@@ -43,6 +43,20 @@ struct LiveCallView: View {
 
     private func poll() async {
         let api = APIClient()
+        // Preferred: the backend pushes "changed" over a WebSocket and we refetch.
+        if let socket = try? api.updates(callId) {
+            socket.resume()
+            defer { socket.cancel(with: .goingAway, reason: nil) }
+            while !Task.isCancelled {
+                do {
+                    _ = try await socket.receive()
+                    call = try await api.call(callId)
+                    errorMessage = nil
+                    if call?.isInProgress == false { return }
+                } catch { break }
+            }
+        }
+        // Fallback if the socket fails or drops: poll once a second.
         while !Task.isCancelled {
             do {
                 call = try await api.call(callId)

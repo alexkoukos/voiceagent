@@ -76,6 +76,15 @@ struct APIClient {
     func calls() async throws -> [Call] { try await get("/calls") }
     func call(_ id: String) async throws -> Call { try await get("/calls/\(id)") }
     func startCall(_ c: NewCall) async throws -> Call { try await send("POST", "/calls", body: c) }
+    func updates(_ id: String) throws -> URLSessionWebSocketTask {
+        var wsBase = Settings.baseURL
+        if wsBase.hasPrefix("https://") { wsBase = "wss://" + wsBase.dropFirst(8) }
+        else if wsBase.hasPrefix("http://") { wsBase = "ws://" + wsBase.dropFirst(7) }
+        guard let url = URL(string: wsBase + "/calls/\(id)/ws") else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        req.setValue(Settings.apiKey, forHTTPHeaderField: "x-api-key")
+        return URLSession.shared.webSocketTask(with: req)
+    }
     func hangUp(_ id: String) async throws -> Call { try await send("POST", "/calls/\(id)/hangup") }
     func recordingURL(_ id: String) async throws -> URL {
         let link: RecordingLink = try await get("/calls/\(id)/recording")

@@ -2,7 +2,10 @@ import SwiftUI
 
 struct NewCallView: View {
     private let api = APIClient()
-    static let voices = ["default", "Puck", "Charon", "Kore", "Fenrir", "Aoede"]
+    static let voices: [(id: String, label: String)] = [
+        ("default", "Default (Puck, male)"), ("Puck", "Male, upbeat (Puck)"), ("Charon", "Male, calm (Charon)"),
+        ("Fenrir", "Male, excitable (Fenrir)"), ("Kore", "Female, firm (Kore)"), ("Aoede", "Female, breezy (Aoede)"),
+    ]
 
     @State private var friends: [Friend] = []
     @State private var templates: [PromptTemplate] = []
@@ -52,7 +55,7 @@ struct NewCallView: View {
                 }
                 Section("Call settings") {
                     Picker("Voice", selection: $voice) {
-                        ForEach(Self.voices, id: \.self) { Text($0) }
+                        ForEach(Self.voices, id: \.id) { Text($0.label).tag($0.id) }
                     }
                     Stepper("Max duration: \(maxMinutes) min", value: $maxMinutes, in: 1...5)
                 }
