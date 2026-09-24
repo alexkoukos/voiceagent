@@ -59,23 +59,23 @@ flowchart LR
     A[iOS app<br/>SwiftUI] -->|REST + WebSocket| B[Backend<br/>FastAPI + Postgres]
     B --> V[Voice agent<br/>LiveKit Cloud]
     V <--> R[Gemini Live]
-    V <-->|SIP trunk| T[DIDWW<br/>210 number]
+    V <-->|SIP trunk| T[Telnyx<br/>210 number]
     T -->|PSTN| F[Friend]
     V -->|audio| S[(Recordings bucket)]
 ```
 
-[DIDWW](https://www.didww.com/phone-numbers/local-numbers/Greece/Local/Athens/30-21) sells +30 21 (Athens) numbers with local and international SIP trunking for outbound, which is all LiveKit SIP needs. Greek landline numbers require ID and an address inside the prefix area ([Twilio regulatory](https://www.twilio.com/en-us/guidelines/gr/regulatory)), and my Athens address covers 210.
+DIDWW was the first choice but does not offer outbound calling, so it is out. [Telnyx](https://telnyx.com/phone-numbers/greece) sells Greek local numbers ($1/month) and outbound Elastic SIP Trunking, and has an official [LiveKit setup guide](https://developers.telnyx.com/docs/voice/sip-trunking/livekit-configuration-guide). Greek local numbers require ID, a VAT number (ΑΦΜ) and proof of address dated within 3 months that matches the area code, and the buyer must be physically in Greece when ordering ([Telnyx Greece requirements](https://support.telnyx.com/en/articles/3739406-greece-did-requirements)). My Athens address covers 210.
 
 | Layer | Level 1 choice | Alternative |
 | --- | --- | --- |
-| 210 number + SIP trunk | DIDWW, +30 21 number with outbound SIP trunking | Zadarma or Telnyx |
+| 210 number + SIP trunk | Telnyx, +30 21 number with outbound Elastic SIP Trunking | Twilio (also has a LiveKit guide) or Zadarma |
 | Voice pipeline | LiveKit Agents + LiveKit SIP | Pipecat με SIP transport |
 | Voice model | Gemini Live native audio (speech-to-speech) | gpt-realtime-mini (about $0.10 to $0.33 per minute) or STT + cheap LLM + TTS |
 | Backend | FastAPI + Postgres, stateful (calls, prompts, templates, transcripts, recording metadata) | Spring Boot |
 | Hosting | Online in the cloud (Fly.io or Railway) + LiveKit Cloud, recordings in a private bucket (e.g. Cloudflare R2) | Local Mac + ngrok, dev only |
 | App | SwiftUI iOS app, sideloaded from Xcode | TestFlight |
 
-Everything runs online: the DIDWW SIP trunk connects straight to LiveKit Cloud, with nothing at home.
+Everything runs online: the Telnyx SIP trunk connects straight to LiveKit Cloud, with nothing at home.
 
 Recording happens in the voice agent (LiveKit Egress or saving the audio frames), not at the carrier, and the iOS app plays it back.
 
@@ -107,7 +107,7 @@ Max duration: {minutes}
 
 ## Guardrails
 
-The number is tied to my ID through KYC, so these protect me too, not only my friends.
+The number is tied to my ID through the provider's identity check, so these protect me too, not only my friends.
 
 - **Hard duration cap:** 5 minutes, then automatic hang-up.
 - **No voice cloning** of real people without their consent.
@@ -117,11 +117,11 @@ j
 
 ## Milestones & development time
 
-v1 (M1 to M5) is about 40 to 65 hours of work: roughly 4 to 6 weeks solo at 10 to 15 hours a week. The estimate assumes first time with LiveKit SIP and SwiftUI; the DIDWW KYC wait runs in parallel.
+v1 (M1 to M5) is about 40 to 65 hours of work: roughly 4 to 6 weeks solo at 10 to 15 hours a week. The estimate assumes first time with LiveKit SIP and SwiftUI; the Telnyx verification wait runs in parallel.
 
 | Milestone | Deliverable | Effort |
 | --- | --- | --- |
-| M1: 210 line | Buy a 210 number on DIDWW (KYC), SIP trunk into LiveKit Cloud, test call | 3 to 5 h + KYC wait |
+| M1: 210 line | Buy a 210 number on Telnyx (ID + VAT + address check), SIP trunk into LiveKit Cloud, test call | 3 to 5 h + verification wait |
 | M2: Hello call | LiveKit agent calls my phone and speaks Greek through Gemini Live | 8 to 12 h |
 | M3: Prompts, recording, state | Master + per-call merge, hang-up tool, hard cap, recording, Postgres schema | 10 to 15 h |
 | M4: iOS app | SwiftUI: prompt form, Call, live transcript, recording playback | 15 to 25 h |
@@ -132,14 +132,14 @@ v1 (M1 to M5) is about 40 to 65 hours of work: roughly 4 to 6 weeks solo at 10 t
 
 ## Estimated cost
 
-Running v1 costs roughly $15 to $30 a month at 200 call minutes. The variable cost is about $0.03 to $0.07 per minute all-in, less than a fifth of what OpenAI Realtime alone would cost ($0.40).
+Gemini Live plus LiveKit come to about $0.03 per minute. The Telnyx rate to Greek mobiles is not confirmed yet and will likely be the biggest variable cost, so the all-in per-minute figure and the monthly total are unknown until I check it. Fixed costs are about $6 to $11 a month (number, hosting).
 
 | Item | Cost | Type |
 | --- | --- | --- |
 | Gemini Live, audio in + out ([pricing](https://ai.google.dev/gemini-api/docs/pricing)) | \~$0.023 / min | Per minute |
-| DIDWW calls to Greek mobiles | \~$0.02 to $0.05 / min (estimate, not on the public page) | Per minute |
+| Telnyx outbound calls to Greek mobiles | Unknown, check Telnyx's rates-by-country page (SIP trunking starts at $0.005 / min, but that is a US baseline) | Per minute |
 | LiveKit agent minutes ([pricing](https://livekit.com/pricing)) | Free up to 1,000 min, then $0.01 / min | Per minute |
-| DIDWW 210 number | \~$2 to $5 / month (estimate) | Fixed |
+| Telnyx 210 number ([pricing](https://telnyx.com/phone-numbers/greece)) | $1 / month | Fixed |
 | LiveKit Cloud Build plan | $0 / month | Fixed |
 | Backend + Postgres hosting (Fly.io or Railway) | \~$5 to $10 / month | Fixed |
 | Recordings bucket (Cloudflare R2) | \~$0 within the free tier | Fixed |
@@ -147,7 +147,8 @@ Running v1 costs roughly $15 to $30 a month at 200 call minutes. The variable co
 
 ## Open questions
 
-- [ ] How good is Gemini Live's Greek over 8 kHz phone audio, and what does DIDWW charge per minute to Greek mobiles?
-- [ ] Does DIDWW's KYC accept my Athens address, and how many days does it take?
+- [ ] How good is Gemini Live's Greek over 8 kHz phone audio, and what does Telnyx charge per minute to Greek mobiles?
+- [ ] Does Telnyx's verification accept my Athens address, and how many days does it take?
+- [ ] Does Telnyx let me use the 210 number as caller ID on outbound calls to Greek mobiles, and do Greek mobile carriers show it properly?
 - [ ] How natural does Realtime's Greek sound compared to ElevenLabs?
 - [ ] How many concurrent channels does the SIP trunk include in the base plan?

@@ -18,8 +18,8 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
 
-    didww_sip_trunk_id: str = ""
-    didww_outbound_number: str = ""
+    sip_trunk_id: str = ""
+    sip_outbound_number: str = ""
 
     r2_account_id: str = ""
     r2_access_key_id: str = ""
