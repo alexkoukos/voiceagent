@@ -3,7 +3,7 @@
 Registered as agent "prank-caller". The backend dispatches a job per call
 (see backend/app/livekit_dispatch.py) with job.metadata carrying the merged
 master + per-call prompt, the friend's number, voice, and the hard duration
-cap. This worker dials out over the DIDWW SIP trunk, runs the conversation
+cap. This worker dials out over the Telnyx SIP trunk, runs the conversation
 through Gemini Live, records the call to R2, reports transcript/status back to
 the backend, and hangs up via its own tool or the duration cap.
 """
@@ -91,7 +91,7 @@ async def entrypoint(ctx: JobContext) -> None:
     prompt = metadata["prompt"]
     voice = metadata.get("voice", "default")
     max_duration_seconds = metadata.get("max_duration_seconds", 300)
-    sip_trunk_id = metadata.get("sip_trunk_id") or os.environ.get("DIDWW_SIP_TRUNK_ID", "")
+    sip_trunk_id = metadata.get("sip_trunk_id") or os.environ.get("SIP_TRUNK_ID", "")
     outbound_number = metadata.get("outbound_number")
 
     logger.info("call %s: dialing %s via trunk %s", call_id, friend_phone_number, sip_trunk_id)

@@ -6,17 +6,17 @@ Personal tool: calls a friend from a Greek 210 landline number and runs a prank 
 
 - `backend/` — FastAPI + Postgres. Owns friends, calls, prompt templates, transcripts, recording metadata. Merges the master + per-call prompt and dispatches the LiveKit agent job.
   - `backend/config/master_prompt.md` — the fixed master system prompt (F2), edit directly, no code change needed.
-- `agent/` — LiveKit worker (`prank-caller`). Picks up dispatched jobs, dials the friend over the DIDWW SIP trunk, runs the conversation through Gemini Live, enforces the hard duration cap, and hangs up via its own tool.
+- `agent/` — LiveKit worker (`prank-caller`). Picks up dispatched jobs, dials the friend over the Telnyx SIP trunk, runs the conversation through Gemini Live, enforces the hard duration cap, and hangs up via its own tool.
 - `ios/` — SwiftUI app (M4, not started).
 
 ## Status
 
-Code-complete scaffold, committed but never run against real LiveKit/Gemini/DIDWW/R2. The backend was exercised end to end on SQLite with LiveKit stubbed; the iOS sources type-check but haven't run in a simulator.
+Code-complete scaffold, committed but never run against real LiveKit/Gemini/Telnyx/R2. The backend was exercised end to end on SQLite with LiveKit stubbed; the iOS sources type-check but haven't run in a simulator.
 
 ## Local setup
 
 ```bash
-cp .env.example .env   # fill in LiveKit / Gemini / DIDWW / R2 keys as you get them
+cp .env.example .env   # fill in LiveKit / Gemini / Telnyx / R2 keys as you get them
 docker compose up -d   # local Postgres
 
 cd backend
@@ -36,7 +36,7 @@ python agent.py dev
 
 | Milestone | Deliverable | Status |
 | --- | --- | --- |
-| M1 | 210 number on DIDWW (KYC) + SIP trunk into LiveKit Cloud | You: start KYC |
+| M1 | 210 number on Telnyx (KYC) + SIP trunk into LiveKit Cloud | You: start KYC |
 | M2 | LiveKit agent calls a phone, speaks Greek via Gemini Live | Written, untested |
 | M3 | Prompt merge, hang-up, hard cap, recording, Postgres schema | Written, backend tested on SQLite |
 | M4 | SwiftUI app | Written, type-checks (`ios/README.md`) |

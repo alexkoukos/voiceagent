@@ -1,7 +1,7 @@
 """Starts an outbound call by dispatching a LiveKit agent job.
 
 The agent (see agent/agent.py) picks up the job, dials the friend through the
-DIDWW SIP trunk, and gets the merged prompt + guardrails via job metadata.
+Telnyx SIP trunk, and gets the merged prompt + guardrails via job metadata.
 This is a thin wrapper so routers/calls.py doesn't need to know LiveKit's API
 shape; fill in the trunk/room details once M1 (the 210 number) is live.
 """
@@ -31,8 +31,8 @@ async def dispatch_call(
             "prompt": merged_prompt,
             "voice": voice,
             "max_duration_seconds": max_duration_seconds,
-            "sip_trunk_id": settings.didww_sip_trunk_id,
-            "outbound_number": settings.didww_outbound_number,
+            "sip_trunk_id": settings.sip_trunk_id,
+            "outbound_number": settings.sip_outbound_number,
         }
     )
 
