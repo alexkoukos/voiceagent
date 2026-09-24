@@ -1,0 +1,17 @@
+name: PrankCaller
+options:
+  bundleIdPrefix: com.alekos
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  PrankCaller:
+    type: application
+    platform: iOS
+    sources: [PrankCaller]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alekos.prankcaller
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
+        SWIFT_VERSION: "5.0"

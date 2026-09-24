@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+*.db
+recordings/
+.idea/
+.vscode/
+xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
