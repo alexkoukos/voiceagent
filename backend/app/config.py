@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
@@ -10,7 +11,7 @@ MASTER_PROMPT_PATH = CONFIG_DIR / "master_prompt.md"
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+asyncpg://user:password@localhost:5432/voiceagent"
+    database_url: str = "postgresql+asyncpg://user:password@localhost:5433/voiceagent"
 
     livekit_url: str = ""
     livekit_api_key: str = ""
@@ -31,6 +32,14 @@ class Settings(BaseSettings):
     internal_api_token: str = ""
     app_api_token: str = ""
     backend_public_url: str = "http://localhost:8000"
+
+    @field_validator("database_url")
+    @classmethod
+    def _async_driver(cls, v: str) -> str:
+        for prefix in ("postgres://", "postgresql://"):
+            if v.startswith(prefix):
+                return "postgresql+asyncpg://" + v[len(prefix):]
+        return v
 
 
 @lru_cache

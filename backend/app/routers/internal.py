@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import events
 from app.config import get_settings
 from app.database import get_db
 from app.models import Call, CallStatus, TranscriptEntry
@@ -40,3 +41,4 @@ async def call_event(call_id: str, event: CallEvent, db: AsyncSession = Depends(
     if event.recording_url:
         call.recording_url = event.recording_url
     await db.commit()
+    events.publish(call.id)

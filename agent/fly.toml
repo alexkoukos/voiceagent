@@ -1,0 +1,12 @@
+app = "prankcaller-agent"
+primary_region = "ams"
+
+[build]
+
+[processes]
+  worker = "python agent.py start"
+
+[[vm]]
+  memory = "1gb"
+  cpu_kind = "shared"
+  cpus = 1

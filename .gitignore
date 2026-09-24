@@ -12,3 +12,4 @@ recordings/
 xcuserdata/
 *.xcworkspace/xcuserdata/
 DerivedData/
+ios/*.xcodeproj/
