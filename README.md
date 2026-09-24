@@ -11,7 +11,7 @@ Personal tool: calls a friend from a Greek 210 landline number and runs a prank 
 
 ## Status
 
-Scaffolding only — no external accounts wired up yet. Nothing here has been run end-to-end.
+Code-complete scaffold, committed but never run against real LiveKit/Gemini/DIDWW/R2. The backend was exercised end to end on SQLite with LiveKit stubbed; the iOS sources type-check but haven't run in a simulator.
 
 ## Local setup
 
@@ -36,15 +36,17 @@ python agent.py dev
 
 | Milestone | Deliverable | Status |
 | --- | --- | --- |
-| M1 | 210 number on DIDWW (KYC) + SIP trunk into LiveKit Cloud | Not started |
-| M2 | LiveKit agent calls a phone, speaks Greek via Gemini Live | Skeleton in `agent/agent.py`, untested |
-| M3 | Prompt merge, hang-up tool, hard cap, recording, Postgres schema | Backend skeleton done; recording (F6) not yet implemented |
-| M4 | SwiftUI app | Not started |
+| M1 | 210 number on DIDWW (KYC) + SIP trunk into LiveKit Cloud | You: start KYC |
+| M2 | LiveKit agent calls a phone, speaks Greek via Gemini Live | Written, untested |
+| M3 | Prompt merge, hang-up, hard cap, recording, Postgres schema | Written, backend tested on SQLite |
+| M4 | SwiftUI app | Written, type-checks (`ios/README.md`) |
 | M5 | Deploy + first real prank call | Not started |
+
+Set `APP_API_TOKEN` and `INTERNAL_API_TOKEN` in `.env`; the app needs the same `APP_API_TOKEN` in its Settings tab.
 
 ## Not yet implemented
 
-- Recording capture (LiveKit Egress) and upload to R2, plus the "recording with notice + delete on request" flow required by the PRD's guardrails.
-- Live transcript streaming to the app (currently only persisted `TranscriptEntry` rows, no WebSocket push).
-- Voice selection mapping (F8) beyond passing a raw voice name through to Gemini Live.
-- Alembic migrations (`Base.metadata.create_all` is used for now — fine for local dev, not for a real deploy).
+- WebSocket push for the live transcript (the app polls once a second).
+- Deleting a recording does not delete its transcript.
+- Voice selection is just a Gemini voice name (F8).
+- Alembic migrations (`create_all` is used for now; fine locally, not for a real deploy).

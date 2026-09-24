@@ -7,7 +7,7 @@ from fastapi import Depends
 from fastapi.concurrency import run_in_threadpool
 
 from app.database import get_db
-from app.livekit_dispatch import dispatch_call
+from app.livekit_dispatch import dispatch_call, end_call
 from app.models import Call, CallStatus, Friend
 from app.prompts import build_call_prompt
 from app.schemas import CallCreate, CallDetailOut, CallOut
@@ -107,8 +107,10 @@ async def hangup_call(call_id: str, db: AsyncSession = Depends(get_db)):
     if call.status not in (CallStatus.dialing, CallStatus.active):
         raise HTTPException(status_code=400, detail="Call is not in progress")
 
-    # TODO: signal the LiveKit room (e.g. delete_room or a data message the
-    # agent listens for) so the agent invokes its own hang-up tool cleanly.
+    try:
+        await end_call(call.id)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not end the call")
     call.status = CallStatus.completed
     call.ended_at = datetime.utcnow()
     await db.commit()
