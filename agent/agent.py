@@ -646,10 +646,35 @@ def log_latency(session: AgentSession, call_id: str) -> None:
 RECEPTIONIST_ENGINE = os.environ.get("RECEPTIONIST_ENGINE", "pipeline")
 
 
-def pick_engine(call_id: str, receptionist: bool = False) -> str:
+async def elevenlabs_usable() -> bool:
+    """Tiny paid TTS request (~1 credit): ElevenLabs refuses it with quota_exceeded when the
+    account is out of credits. A 1-character text is let through even at 0 credits, so the
+    probe is two. The key lacks user_read, so the subscription endpoint isn't an option."""
+    try:
+        async with httpx.AsyncClient(timeout=2.5) as client:
+            r = await client.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{elevenlabs_voice('default')}",
+                params={"output_format": "mp3_22050_32"},
+                headers={"xi-api-key": os.environ["ELEVEN_API_KEY"]},
+                json={"text": "ok", "model_id": "eleven_flash_v2_5"},
+            )
+    except Exception as e:
+        logger.warning("ElevenLabs check failed: %r", e)
+        return False
+    if r.status_code != 200:
+        logger.warning("ElevenLabs unusable (%s): %s", r.status_code, r.text[:200])
+        return False
+    return True
+
+
+async def pick_engine(call_id: str, receptionist: bool = False) -> str:
     engine = RECEPTIONIST_ENGINE if receptionist else ENGINE
     if engine == "pipeline" and not os.environ.get("ELEVEN_API_KEY"):
         logger.warning("call %s: ELEVEN_API_KEY missing, using the realtime engine", call_id)
+        engine = "realtime"
+    # Out of credits (or ElevenLabs down) would mean a silent call: fall back to Gemini Live.
+    if engine == "pipeline" and not await elevenlabs_usable():
+        logger.warning("call %s: ElevenLabs unusable, using the realtime engine", call_id)
         engine = "realtime"
     if engine == "openai" and not os.environ.get("OPENAI_API_KEY"):
         logger.warning("call %s: OPENAI_API_KEY missing, using the realtime engine", call_id)
@@ -984,7 +1009,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
                 r = await client.post(f"{BACKEND_URL}/internal/inbound", headers={"x-agent-token": AGENT_TOKEN},
                                       json={"dialed_number": dialed, "caller_number": caller_number})
             if r.status_code == 429:
-                await say_busy_and_leave(ctx, pick_engine("busy", receptionist=True), r.json())
+                await say_busy_and_leave(ctx, await pick_engine("busy", receptionist=True), r.json())
                 return
             r.raise_for_status()
             metadata = r.json()
@@ -994,7 +1019,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
             ctx.shutdown(reason="no practice")
             return
 
-    rc = ReceptionistCall(ctx, metadata, pick_engine(metadata["call_id"], receptionist=True))
+    rc = ReceptionistCall(ctx, metadata, await pick_engine(metadata["call_id"], receptionist=True))
     call_id = rc.call_id
     max_duration_seconds = metadata.get("max_duration_seconds", 300)
     logger.info("call %s: receptionist (%s, %s), engine %s, language %s",
@@ -1112,7 +1137,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # Test mode: skip the phone call and talk to whoever joins the room.
     test_no_dial = bool(metadata.get("test_no_dial"))
 
-    engine = pick_engine(call_id)
+    engine = await pick_engine(call_id)
 
     # Everything that doesn't need the friend happens while the phone rings:
     # connections open and the opening line gets written and voiced.
