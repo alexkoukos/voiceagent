@@ -20,13 +20,21 @@ The receptionist 2.0 PRD is the current target. This pass improves existing back
 
 Calendar behavior follows Google's [Events list API](https://developers.google.com/workspace/calendar/api/v3/reference/events/list); notification deduplication uses SQLAlchemy's [Postgres conflict handling](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html#insert-on-conflict-upsert).
 
+## Closures and staff leave (OP3), 2026-09-25
+
+- `practice.rules.closures`: dated ranges for the whole business, or with `staff_id` for one person's leave. No migration: it lives in the existing `rules` JSON.
+- Booking offers no slots on those days; `hours_state` finds the next opening after a long closure; `check_availability` returns `business_closed` or `staff_away` with spoken dates, and next free days are searched from the end of the closure.
+- The agent's prompt lists current and upcoming closures, and both prompt files tell it to say the dates and offer the next free day or a message.
+- `GET/POST /practices/<id>/closures`, `DELETE /practices/<id>/closures/<closure_id>`. A new closure returns the booked appointments inside it (`to_rebook`) and emails them to the business once.
+- Tests: `backend/tests/test_closures.py` (slot blocking, next opening, agent output, endpoint). 50 tests pass. Not deployed; no real call yet. OP3's "the doctor says it by phone or SMS" belongs to OP2 and is not built.
+
 ## Remaining engineering work
 
-1. **B1/B3: auditable offer and confirmation state.** The prompt requires returned slots and explicit readback/yes, but the backend does not persist an offer and bind the write to the caller's confirmation. Availability is rechecked, but verbal confirmation still depends on model behavior.
-2. **B8: ambiguous external writes and atomic follow-up.** Google writes happen before the Postgres commit. A provider timeout or database failure can leave an event without a local appointment; deterministic provider event IDs and reconciliation are still needed. Appointment writes and their customer notification/call-outcome updates also use separate transactions, leaving a crash window.
-3. **Retention: durable recording deletion.** Recording deletion retries are in-memory tasks, while the stored object key is cleared immediately. A restart or prolonged storage outage can lose cleanup work. Use a persistent deletion queue and retain its object key until confirmed deletion.
-4. **Summary and notification recovery policy.** A failed summary-model request returns no summary but still finalizes the call. Provider delivery failures become visible `failed` rows after eight attempts and require a replay/operator workflow. Previously skipped notification rows are not automatically replayed by this change. The existing policy suppresses abandoned/off-topic business summaries, which is narrower than the PRD's “every call outcome” wording.
-5. **G9 and language routing.** Outbound waitlist offers do not verify an existing appointment for the selected number. R7 first-turn language switching is intentionally disabled in the current agent to avoid the documented Greek transcription drift; this differs from the PRD's P1 requirement.
+Items 1 to 3 and G9 of the earlier list were addressed in `95694eb` (offer + readback state via `prepare_action`, deterministic Google event IDs, durable `recording_deletions` queue, fallback summaries, and the G9 check on waitlist calls). Still open:
+
+1. **R7 language switching** stays off on purpose: the agent never switches language mid-call (owner's decision).
+2. **P0 features with no code yet:** onboarding imports and config versions (O1 to O6, with draft/publish/rollback), OP1 failover (needs Telnyx), and OP2 changes after go-live by phone PIN, SMS or magic link.
+3. **P1 features with no code yet:** OP8 patient data export/delete, OP10 monthly cost cap and spam blocking, OP7 offboarding export.
 
 ## Remaining acceptance and onboarding work
 
