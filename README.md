@@ -37,7 +37,25 @@ pip install -r requirements.txt
 python agent.py dev
 ```
 
-## Deploy (M5)
+## Deploy on Railway (M5)
+
+One Railway project with three services, all from this GitHub repo:
+
+1. **Postgres:** New → Database → PostgreSQL.
+2. **backend:** New → GitHub repo → set **Root Directory** to `backend` (it picks up `backend/railway.toml` and the Dockerfile; migrations run on boot). Under Networking, generate a public domain. Variables:
+   - `DATABASE_URL=${{Postgres.DATABASE_URL}}`
+   - `APP_API_TOKEN`, `INTERNAL_API_TOKEN`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `SIP_TRUNK_ID`, `SIP_OUTBOUND_NUMBER`, `TELNYX_PUBLIC_KEY` (copy from `.env`)
+   - `R2_*` once you have them
+3. **agent:** New → same repo → **Root Directory** `agent`. No public domain needed. Variables:
+   - `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `GEMINI_API_KEY`, `INTERNAL_API_TOKEN`, `SIP_TRUNK_ID`
+   - `BACKEND_PUBLIC_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}`
+   - `R2_*` once you have them
+
+If a service ignores its `railway.toml`, set Settings → Config-as-code path to `backend/railway.toml` / `agent/railway.toml`. Keep the backend at one replica. Point the Telnyx webhook at `https://<backend domain>/webhooks/telnyx` and the app's Settings tab at the backend domain.
+
+Stop the local agent (`python agent.py dev`) once the Railway one is up, or both will compete for jobs.
+
+## Deploy on Fly.io (alternative)
 
 Fly.io configs are in `backend/fly.toml` and `agent/fly.toml`; both services have a Dockerfile (Railway works too).
 
