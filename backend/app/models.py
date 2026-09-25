@@ -71,7 +71,7 @@ class Practice(Base):
     slug: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     timezone: Mapped[str] = mapped_column(String, default="Europe/Athens")
     language: Mapped[str] = mapped_column(String, default="el")
-    voice: Mapped[str] = mapped_column(String, default="Algieba")
+    voice: Mapped[str] = mapped_column(String, default="Zubenelgenubi")
     # First thing the agent says; discloses that it's an AI assistant (PRD G1).
     greeting: Mapped[str] = mapped_column(Text, default="")
     phone_numbers: Mapped[list] = mapped_column(JSON, default=list)
