@@ -4,10 +4,11 @@ import statistics
 from collections import Counter
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Appointment, Call, CallStatus, Notification, Practice, RoutingEvent
+from app.finalize import wants_business_summary
 
 RESOLVED = {"booked", "rescheduled", "cancelled", "confirmed", "info_given", "message_taken"}
 
@@ -38,14 +39,17 @@ async def compute(db: AsyncSession, practice: Practice, days: int = 30, include_
         Notification.practice_id == practice.id, Notification.kind == "call_summary",
         Notification.channel == "email", Notification.created_at >= since,
     ))).scalars())
-    ended = {c.id: c.ended_at for c in calls}
-    timed = [(n_.sent_at - ended[n_.call_id]).total_seconds() for n_ in notes
-             if n_.sent_at and n_.call_id in ended and ended[n_.call_id]]
+    # Count calls, not recipient rows. Pending, failed and missing notifications
+    # must stay in the denominator or an outage misleadingly reports 100% success.
+    ended = {c.id: c.ended_at for c in calls if c.ended_at and wants_business_summary(practice, c)}
+    on_time = {n_.call_id for n_ in notes
+               if n_.status == "sent" and n_.sent_at and n_.call_id in ended
+               and 0 <= (n_.sent_at - ended[n_.call_id]).total_seconds() <= 60}
 
-    bookings = len(list((await db.execute(select(Appointment.id).where(
+    bookings = (await db.execute(select(func.count()).select_from(Appointment).where(
         Appointment.practice_id == practice.id, Appointment.source.in_(["agent", "waitlist"]),
         Appointment.created_at >= since,
-    ))).scalars()))
+    ))).scalar_one()
     return {
         "days": days,
         "calls": len(calls),
@@ -59,7 +63,7 @@ async def compute(db: AsyncSession, practice: Practice, days: int = 30, include_
         "handoff_pct": _pct(sum(c.outcome == "transferred" for c in answered), n),
         "abandoned_pct": _pct(sum(c.outcome == "abandoned" for c in answered), n),
         "latency_ms_median": int(statistics.median(latencies)) if latencies else None,
-        "notified_within_60s_pct": _pct(sum(t <= 60 for t in timed), len(timed)),
+        "notified_within_60s_pct": _pct(len(on_time), len(ended)),
         "cost_per_minute_eur": round(cost / minutes, 4) if minutes else None,
         "cost_total_eur": round(cost, 2),
         "bookings": bookings,

@@ -34,12 +34,12 @@ class Settings(BaseSettings):
     aws_default_region: str = "auto"
     aws_s3_url_style: str = "virtual-host"
 
-    # Service account key (the whole JSON) for practices' Google Calendars; empty keeps
-    # appointments only in our database.
+    # Service account key (the whole JSON) for practices' Google Calendars.
+    # Database-only booking requires an unassigned calendar_id.
     google_service_account_json: str = ""
 
     # Notifications. Email over SMTP (any provider); SMS through Telnyx Messaging;
-    # push through APNs (needs a paid Apple developer account). Unset channels are skipped.
+    # push through APNs (needs a paid Apple developer account). Unset channels stay pending.
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""

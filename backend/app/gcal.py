@@ -2,13 +2,16 @@
 
 The practice shares its calendar with the service account's email ("Make changes to
 events"). Without GOOGLE_SERVICE_ACCOUNT_JSON, or for a practice with no calendar_id,
-appointments live only in our database.
+appointments live only in our database when no calendar_id is assigned. Assigned
+calendars must be reachable; missing credentials must never imply an empty calendar.
 """
 
 import asyncio
 import json
 from datetime import datetime
 from functools import lru_cache
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -62,6 +65,34 @@ async def busy(calendar_id: str, start: datetime, end: datetime) -> list[tuple[d
     ]
 
 
+async def busy_except(
+    calendar_id: str, start: datetime, end: datetime, event_id: str,
+) -> list[tuple[datetime, datetime]]:
+    """Exclude only the appointment being moved, preserving overlapping other events.
+
+    FreeBusy merges intervals and has no event IDs, so subtracting the appointment's
+    time from it could hide a separate booking. Expand recurring events and paginate.
+    """
+    params = {"timeMin": start.isoformat(), "timeMax": end.isoformat(),
+              "singleEvents": "true", "showDeleted": "false", "maxResults": 2500}
+    intervals = []
+    while True:
+        data = await _request("GET", f"/calendars/{quote(calendar_id, safe='')}/events", params=params)
+        tz = ZoneInfo(data.get("timeZone", "UTC"))
+        for event in data.get("items", []):
+            if (event["id"] == event_id or event.get("status") == "cancelled"
+                    or event.get("transparency") == "transparent"):
+                continue
+            def when(value):
+                if "dateTime" in value:
+                    return datetime.fromisoformat(value["dateTime"])
+                return datetime.fromisoformat(value["date"]).replace(tzinfo=tz)
+            intervals.append((when(event["start"]), when(event["end"])))
+        if not data.get("nextPageToken"):
+            return intervals
+        params["pageToken"] = data["nextPageToken"]
+
+
 async def create_event(
     calendar_id: str, *, summary: str, description: str, start: datetime, end: datetime, timezone: str
 ) -> str:
@@ -75,7 +106,12 @@ async def create_event(
 
 
 async def delete_event(calendar_id: str, event_id: str) -> None:
-    await _request("DELETE", f"/calendars/{calendar_id}/events/{event_id}")
+    try:
+        await _request("DELETE", f"/calendars/{quote(calendar_id, safe='')}/events/{quote(event_id, safe='')}")
+    except httpx.HTTPStatusError as exc:
+        # A retry after a successful remote delete is already complete.
+        if exc.response.status_code not in (404, 410):
+            raise
 
 
 async def move_event(calendar_id: str, event_id: str, start: datetime, end: datetime, timezone: str) -> None:
