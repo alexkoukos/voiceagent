@@ -23,6 +23,7 @@ import httpx
 from google.genai import types as genai_types
 from google.protobuf.duration_pb2 import Duration
 from livekit import api
+from livekit.agents import inference
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -37,7 +38,6 @@ from livekit.agents import (
 )
 from livekit.plugins import elevenlabs, google, noise_cancellation, silero
 from livekit.agents.voice.turn import TurnHandlingOptions
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from fillers import FillerPicker, normalize_language
 from opening import prepare_opening, ready_opening
@@ -222,8 +222,9 @@ class PrankCallerAgent(Agent):
 
 
 def prewarm(proc: JobProcess) -> None:
-    # Loaded once per worker process, not per call.
-    proc.userdata["vad"] = silero.VAD.load()
+    # Loaded once per worker process, not per call; only the pipeline engine needs it.
+    if ENGINE == "pipeline":
+        proc.userdata["vad"] = silero.VAD.load()
 
 
 def build_session(ctx: JobContext, engine: str, voice: str, language: str) -> AgentSession:
@@ -245,11 +246,12 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str) -> Ag
                 thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
             ),
             tts=tts,
-            vad=ctx.proc.userdata["vad"],
+            vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             turn_handling=TurnHandlingOptions(
                 # Understands when someone has finished a sentence, in any language,
-                # instead of waiting for a fixed silence.
-                turn_detection=MultilingualModel(),
+                # instead of waiting for a fixed silence. Runs on LiveKit Cloud, so the
+                # worker doesn't load a local model (that process ran out of memory on Railway).
+                turn_detection=inference.TurnDetector(local_fallback=False),
                 endpointing={"mode": "dynamic", "min_delay": 0.4, "max_delay": 2.5},
                 # Start writing and voicing the reply before the friend has fully finished.
                 preemptive_generation={"enabled": True, "preemptive_tts": True},
@@ -461,4 +463,7 @@ if __name__ == "__main__":
     cli.run_app(WorkerOptions(
         entrypoint_fnc=entrypoint, prewarm_fnc=prewarm,
         agent_name=os.environ.get("AGENT_NAME", "prank-caller"),
+        # Each standby process holds its own copy of the models; keep few so the worker
+        # fits in a small container (MAX_CONCURRENT_CALLS is 1 by default anyway).
+        num_idle_processes=int(os.environ.get("NUM_IDLE_PROCESSES", "1")),
     ))
