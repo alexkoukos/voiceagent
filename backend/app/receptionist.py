@@ -183,6 +183,8 @@ async def build_metadata(
             "script": routing.EMERGENCY_SCRIPT,
         },
         "handoff_timeout_seconds": rules["handoff"]["timeout_seconds"],
+        # Words the transcriber should expect: staff, services, departments.
+        "vocabulary": _vocabulary(practice, staff),
         "waitlist": bool((practice.reminders or {}).get("waitlist")),
     }
     if call.direction == "outbound":
@@ -193,6 +195,15 @@ async def build_metadata(
             outbound_number=practice.outbound_number or settings.sip_outbound_number,
         )
     return meta
+
+
+def _vocabulary(practice: Practice, staff) -> list[str]:
+    words = [practice.name]
+    for p in staff:
+        words += [p.name, *(p.aliases or [])]
+    words += [s.get("name", "") for s in practice.services or []]
+    words += [d.get("name", "") for d in practice.departments or []]
+    return [w for w in dict.fromkeys(words) if w][:60]
 
 
 async def _purpose(db: AsyncSession, practice: Practice, call: Call, staff, language: str) -> dict | None:
