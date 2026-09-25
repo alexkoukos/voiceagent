@@ -59,7 +59,7 @@ def rules_for(practice: Practice) -> dict:
         # Off by default: the call keeps its language (Greek, or English for foreign numbers).
         "language_switch": r.get("language_switch", False),
         # Off-topic or abusive requests allowed before the agent ends the call.
-        "off_topic_limit": int(r.get("off_topic_limit", 3)),
+        "off_topic_limit": int(r.get("off_topic_limit", 2)),
         "end_line": r.get("end_line") or {},
     }
 
