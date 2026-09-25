@@ -1,4 +1,4 @@
-livekit-agents[google,elevenlabs,silero,turn-detector]==1.8.3
+livekit-agents[google,elevenlabs,silero]==1.8.3
 livekit-plugins-noise-cancellation>=0.3.2
 livekit-api>=0.8
 python-dotenv>=1.0
