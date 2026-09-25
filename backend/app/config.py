@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     sip_trunk_id: str = ""
     sip_outbound_number: str = ""
+    telnyx_public_key: str = ""
 
     r2_account_id: str = ""
     r2_access_key_id: str = ""

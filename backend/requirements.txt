@@ -8,3 +8,4 @@ alembic>=1.14
 python-dotenv>=1.0
 livekit-api>=0.8
 boto3>=1.35
+pynacl>=1.5
