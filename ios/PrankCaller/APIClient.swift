@@ -56,6 +56,18 @@ struct APIClient {
         // Backend sends naive UTC timestamps, with or without fractional seconds.
         d.dateDecodingStrategy = .custom { decoder in
             let s = try decoder.singleValueContainer().decode(String.self)
+            // Appointment times carry a timezone ("...Z" / "+03:00").
+            let iso = ISO8601DateFormatter()
+            for options: ISO8601DateFormatter.Options in [[.withInternetDateTime, .withFractionalSeconds], [.withInternetDateTime]] {
+                iso.formatOptions = options
+                if let date = iso.date(from: s) { return date }
+            }
+            if s.hasPrefix("20"), s.count == 10 {
+                let f = DateFormatter()
+                f.locale = Locale(identifier: "en_US_POSIX")
+                f.dateFormat = "yyyy-MM-dd"
+                if let date = f.date(from: s) { return date }
+            }
             for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss"] {
                 let f = DateFormatter()
                 f.locale = Locale(identifier: "en_US_POSIX")
@@ -127,4 +139,46 @@ struct APIClient {
         return url
     }
     func deleteRecording(_ id: String) async throws { _ = try await request("DELETE", "/calls/\(id)/recording") }
+
+    // MARK: Receptionist (2.0)
+
+    func practices() async throws -> [Practice] { try await get("/practices") }
+    func practiceCalls(_ pid: String, outcome: String? = nil) async throws -> [ReceptionistCall] {
+        try await get("/practices/\(pid)/calls" + (outcome.map { "?outcome=\($0)" } ?? ""))
+    }
+    func practiceCall(_ pid: String, _ id: String) async throws -> ReceptionistCall { try await get("/practices/\(pid)/calls/\(id)") }
+    func review(_ pid: String, _ id: String, _ r: CallReview) async throws -> ReceptionistCall {
+        try await send("PUT", "/practices/\(pid)/calls/\(id)/review", body: r)
+    }
+    func messages(_ pid: String) async throws -> [PracticeMessage] { try await get("/practices/\(pid)/messages") }
+    func setMessage(_ pid: String, _ id: String, done: Bool) async throws -> PracticeMessage {
+        try await send("PATCH", "/practices/\(pid)/messages/\(id)", body: ["status": done ? "done" : "new"])
+    }
+    func appointments(_ pid: String) async throws -> [Appointment] { try await get("/practices/\(pid)/appointments?upcoming=true") }
+    func cancelAppointment(_ pid: String, _ id: String) async throws -> Appointment {
+        try await send("DELETE", "/practices/\(pid)/appointments/\(id)")
+    }
+    func metrics(_ pid: String) async throws -> PracticeMetrics { try await get("/practices/\(pid)/metrics") }
+    func handoffs(_ pid: String) async throws -> [Handoff] { try await get("/practices/\(pid)/handoffs") }
+    func joinHandoff(_ pid: String, _ id: String, listenOnly: Bool) async throws -> RoomAccess {
+        try await send("POST", "/practices/\(pid)/handoffs/\(id)/join", body: ["listen_only": listenOnly])
+    }
+    func registerDevice(token: String, practiceId: String?, sandbox: Bool) async throws {
+        _ = try await request("POST", "/devices", body: DeviceRegistration(
+            token: token, practiceId: practiceId, environment: sandbox ? "sandbox" : "production"))
+    }
+    /// "changed" whenever a call, message or handoff of the practice changes.
+    func practiceUpdates(_ pid: String) throws -> URLSessionWebSocketTask {
+        try socket("/practices/\(pid)/ws")
+    }
+
+    private func socket(_ path: String) throws -> URLSessionWebSocketTask {
+        var wsBase = Settings.baseURL
+        if wsBase.hasPrefix("https://") { wsBase = "wss://" + wsBase.dropFirst(8) }
+        else if wsBase.hasPrefix("http://") { wsBase = "ws://" + wsBase.dropFirst(7) }
+        guard let url = URL(string: wsBase + path) else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        req.setValue(Settings.apiKey, forHTTPHeaderField: "x-api-key")
+        return URLSession.shared.webSocketTask(with: req)
+    }
 }

@@ -25,14 +25,14 @@ _TAG = re.compile(r"\[[^\]]{1,30}\]\s*")
 
 _INSTRUCTION = {
     "el": (
-        "Ο φίλος μόλις σήκωσε το τηλέφωνο και είπε «Εμπρός;». Γράψε ΜΟΝΟ την πρώτη σου ατάκα: "
+        "Ο άλλος μόλις σήκωσε το τηλέφωνο και είπε «Εμπρός;». Γράψε ΜΟΝΟ την πρώτη σου ατάκα: "
         "μία ή δύο σύντομες, φυσικές φράσεις, στον ρόλο σου. Μπορείς να βάλεις στην αρχή ένα "
-        "συναίσθημα στα αγγλικά σε αγκύλες, π.χ. [annoyed], [cheerful], [excited]."
+        "συναίσθημα στα αγγλικά σε αγκύλες, π.χ. [calm], [friendly], [warm]."
     ),
     "other": (
-        "The friend just picked up and said hello. Write ONLY your very first line, in {language}: "
+        "They just picked up and said hello. Write ONLY your very first line, in {language}: "
         "one or two short, natural phrases, in your role. You may start with one emotion tag in "
-        "English in square brackets, e.g. [annoyed], [cheerful], [excited]."
+        "English in square brackets, e.g. [calm], [friendly], [warm]."
     ),
 }
 

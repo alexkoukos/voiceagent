@@ -3,11 +3,17 @@ options:
   bundleIdPrefix: com.alekos
   deploymentTarget:
     iOS: "17.0"
+packages:
+  LiveKit:
+    url: https://github.com/livekit/client-sdk-swift
+    from: 2.0.0
 targets:
   PrankCaller:
     type: application
     platform: iOS
     sources: [PrankCaller]
+    dependencies:
+      - package: LiveKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alekos.prankcaller
@@ -18,3 +24,4 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
         SWIFT_VERSION: "5.0"
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Για να μιλήσεις με πελάτες που ζητούν άνθρωπο."

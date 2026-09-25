@@ -22,6 +22,7 @@ ELEVENLABS_VOICES: dict[str, str] = {
     "Charon": "JBFqnCBsd6RMkjVDRZzb",  # George: male, warm and calm
     "Fenrir": "TX3LPaxmHKxFdv7VOQHJ",  # Liam: male, energetic
     "Algenib": "N2lVS1w4EtoT3dr4eOWO",  # Callum: male, husky and intense (the grumpy caller)
+    "Algieba": "nPczCjzI2devNBz1zQrb",  # Brian: male, deep and soothing
 }
 
 
@@ -49,6 +50,7 @@ OPENAI_VOICES: dict[str, str] = {
     "Charon": "cedar",  # male, calm
     "Fenrir": "verse",  # male, energetic
     "Algenib": "echo",  # male, rougher
+    "Algieba": "ballad",  # male, soft
 }
 
 

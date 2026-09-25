@@ -1,14 +1,31 @@
+import asyncio
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
 
 from app.auth import require_app_token
 from app.config import get_settings
 from app.languages import LANGUAGES
-from app.routers import calls, friends, internal, templates, webhooks
+from app.routers import calls, demo, friends, internal, practices, templates, webhooks
 
 _docs = get_settings().enable_docs
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Notification sender and the once-a-minute jobs (digests, reminders, retention).
+    tasks = []
+    if get_settings().scheduler_enabled:
+        from app import notifications, scheduler
+        tasks = [asyncio.create_task(notifications.run_worker()), asyncio.create_task(scheduler.run())]
+    yield
+    for t in tasks:
+        t.cancel()
+
+
 app = FastAPI(
     title="AI Caller",
+    lifespan=lifespan,
     docs_url="/docs" if _docs else None,
     redoc_url=None,
     openapi_url="/openapi.json" if _docs else None,
@@ -17,7 +34,10 @@ app = FastAPI(
 app.include_router(friends.router, dependencies=[Depends(require_app_token)])
 app.include_router(calls.router, dependencies=[Depends(require_app_token)])
 app.include_router(templates.router, dependencies=[Depends(require_app_token)])
+app.include_router(practices.router, dependencies=[Depends(require_app_token)])
+app.include_router(practices.misc, dependencies=[Depends(require_app_token)])
 app.include_router(internal.router)
+app.include_router(demo.router)
 app.include_router(webhooks.router)
 
 

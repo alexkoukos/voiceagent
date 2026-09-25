@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct PrankCallerApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup {
             #if DEBUG
@@ -17,14 +19,21 @@ struct PrankCallerApp: App {
         }
     }
 
+    // DEBUG: `-startTab 2` opens a tab directly (for simulator screenshots).
+    @State private var tab = UserDefaults.standard.integer(forKey: "startTab")
+
     private var tabs: some View {
-        TabView {
+        TabView(selection: $tab) {
             NewCallView()
-                .tabItem { Label("Κλήση", systemImage: "phone.fill") }
+                .tabItem { Label("Κλήση", systemImage: "phone.fill") }.tag(0)
             HistoryView()
-                .tabItem { Label("Ιστορικό", systemImage: "clock") }
+                .tabItem { Label("Ιστορικό", systemImage: "clock") }.tag(1)
+            ReceptionistView()
+                .tabItem { Label("Γραμματεία", systemImage: "phone.arrow.down.left") }.tag(2)
         }
         .tint(Palette.ink)
+        .environment(PushRouter.shared)
+        .onChange(of: tab, initial: true) { _, t in if t == 2 { PushRegistration.shared.askPermission() } }
     }
 }
 

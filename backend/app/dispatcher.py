@@ -65,6 +65,12 @@ async def start_next_queued(db: AsyncSession) -> None:
         call = result.scalar_one_or_none()
         if call is None:
             return
+        if call.practice_id:
+            # Receptionist reminder / waitlist call.
+            from app.receptionist import dispatch_outbound
+            await dispatch_outbound(db, call)
+            events.publish(call.id)
+            continue
         friend = await db.get(Friend, call.friend_id)
         try:
             await start_call(db, call, friend)
