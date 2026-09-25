@@ -427,7 +427,7 @@ def prewarm(proc: JobProcess) -> None:
 
 def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> AgentSession:
     if engine == "pipeline":
-        stt = scribe_stt(language, [w for w in (GREEK_VOCABULARY if language == "el" else []) + list(vocabulary or []) if len(w) < 50][:100])
+        stt = scribe_stt(language, vocab_terms(language, vocabulary))
         tts = elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
         # Open the connections now, while the phone rings, not on the first reply.
         for part in (stt, tts):
@@ -481,10 +481,19 @@ GREEK_VOCABULARY = [
 ]
 
 
+def vocab_terms(language: str, vocabulary: list[str] | None) -> list[str]:
+    """Everyday Greek plus the business's names, split into words: Scribe realtime rejects
+    the whole session if any keyterm is over 20 characters."""
+    terms = list(GREEK_VOCABULARY if language == "el" else [])
+    for phrase in vocabulary or []:
+        terms += [phrase] if len(phrase) <= 20 else phrase.split()
+    return [t for t in dict.fromkeys(terms) if 2 <= len(t) <= 20][:100]
+
+
 def language_parts(engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> dict:
     """The parts of a session that are pinned to one language. A receptionist call that
     switches language (R7) hands over to a new agent built with these."""
-    words = [w for w in (GREEK_VOCABULARY if language == "el" else []) + list(vocabulary or []) if len(w) < 50][:100]
+    words = vocab_terms(language, vocabulary)
     if engine == "pipeline":
         return {"stt": scribe_stt(language, words)}
     if engine == "openai":
