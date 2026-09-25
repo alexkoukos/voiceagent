@@ -1,11 +1,12 @@
 from app.config import load_master_prompt
 
-PER_CALL_TEMPLATE = """Friend: {name}
-Your role: {persona}
-Scenario: {scenario}
-Inside jokes / context: {context}
-Reveal: {reveal}
-Max duration: {max_duration_minutes} minutes"""
+PER_CALL_TEMPLATE = """## Αυτή η κλήση
+- Φίλος: {name}
+- Ο ρόλος σου: {persona}
+- Η φάρσα: {scenario}
+- Τι ξέρεις για τον φίλο: {context}
+- Αποκάλυψη: {reveal}
+- Μέγιστη διάρκεια: {max_duration_minutes} λεπτά"""
 
 
 def build_call_prompt(
@@ -21,8 +22,8 @@ def build_call_prompt(
         name=friend_name,
         persona=persona,
         scenario=scenario,
-        context=context or "none",
-        reveal=reveal or "improvise a natural reveal once the joke has landed",
+        context=context or "τίποτα ιδιαίτερο",
+        reveal=reveal or "κάν' την με φυσικό τρόπο μόλις πετύχει το αστείο",
         max_duration_minutes=round(max_duration_seconds / 60, 1),
     )
-    return f"{load_master_prompt()}\n\n---\n\n{per_call}"
+    return f"{load_master_prompt().strip()}\n\n{per_call}"
