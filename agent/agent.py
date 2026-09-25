@@ -274,21 +274,18 @@ class ReceptionistAgent(PrankCallerAgent):
         return json.dumps(result, ensure_ascii=False)
 
     @function_tool
-    async def route_call(self, intent: str, staff: str = "", department: str = "", language: str = "") -> str:
+    async def route_call(self, intent: str, staff: str = "", department: str = "") -> str:
         """Call first, as soon as you know what the caller wants, and again if it changes.
 
         Args:
             intent: One of book, change, cancel, confirm, question, message, human, emergency, unclear.
             staff: Who they asked for, in their words ("με τον Γιώργο", "τον γιατρό"); empty if nobody.
             department: The department they named, if any.
-            language: "en" if the caller speaks English, "el" if Greek; empty if it's the call's language.
         """
-        result = await self._rc.tool("route_call", {
-            "intent": intent, "staff": staff or None, "department": department or None, "language": language or None,
+        # The call's language is fixed (Greek, or English for foreign numbers): no switching.
+        return await self._tool("route_call", {
+            "intent": intent, "staff": staff or None, "department": department or None,
         })
-        if result.get("switch_language"):
-            await self._rc.switch_language(result["switch_language"])
-        return json.dumps(result, ensure_ascii=False)
 
     @function_tool
     async def check_availability(self, when: str, service_id: str = "", staff: str = "", appointment_id: str = "") -> str:
@@ -428,9 +425,9 @@ def prewarm(proc: JobProcess) -> None:
         proc.userdata["vad"] = silero.VAD.load()
 
 
-def build_session(ctx: JobContext, engine: str, voice: str, language: str) -> AgentSession:
+def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> AgentSession:
     if engine == "pipeline":
-        stt = scribe_stt(language)
+        stt = scribe_stt(language, ((GREEK_VOCABULARY if language == "el" else []) + list(vocabulary or []))[:100])
         tts = elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
         # Open the connections now, while the phone rings, not on the first reply.
         for part in (stt, tts):
@@ -461,11 +458,12 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str) -> Ag
                 preemptive_generation={"enabled": True, "preemptive_tts": True},
             ),
         )
-    return AgentSession(**language_parts(engine, voice, language))
+    return AgentSession(**language_parts(engine, voice, language, vocabulary))
 
 
-def scribe_stt(language: str):
+def scribe_stt(language: str, keyterms: list[str] | None = None):
     return elevenlabs.STT(
+        keyterms=keyterms or None,
         model="scribe_v2_realtime",
         # Without a language hint Scribe hears Greek phone audio as Ukrainian (Cyrillic text).
         language_code=language,
@@ -476,11 +474,19 @@ def scribe_stt(language: str):
     )
 
 
-def language_parts(engine: str, voice: str, language: str) -> dict:
+# Everyday Greek the transcriber should expect; the business adds its own names and services.
+GREEK_VOCABULARY = [
+    "ρε", "μωρέ", "κομπλέ", "γαμώτο", "άσ' το", "θα 'ρθω", "κάνα", "τίποτα", "εντάξει", "μπορείς",
+    "απογευματάκι", "πρωινό", "ραντεβουδάκι", "ρε φίλε", "έλα", "λέγε", "άντε", "οκ", "ναι ρε",
+]
+
+
+def language_parts(engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> dict:
     """The parts of a session that are pinned to one language. A receptionist call that
     switches language (R7) hands over to a new agent built with these."""
+    words = ((GREEK_VOCABULARY if language == "el" else []) + list(vocabulary or []))[:100]
     if engine == "pipeline":
-        return {"stt": scribe_stt(language)}
+        return {"stt": scribe_stt(language, words)}
     if engine == "openai":
         return {"llm": openai.realtime.RealtimeModel(
             model=OPENAI_REALTIME_MODEL,
@@ -496,6 +502,11 @@ def language_parts(engine: str, voice: str, language: str) -> dict:
         model=GEMINI_MODEL,
         voice=gemini_voice(voice),
         language=REALTIME_LANGUAGE.get(language),
+        # Transcribe only the call's language. Left on auto-detect, Greek came back as
+        # Italian/Spanish fragments and swear words were rewritten ("Γαμώτο" -> "Σταματήστε").
+        input_audio_transcription=genai_types.AudioTranscriptionConfig(
+            language_codes=[REALTIME_LANGUAGE.get(language, "en-US")], custom_vocabulary=words or None,
+        ),
         api_key=os.environ.get("GEMINI_API_KEY"),
         # Decide the friend has finished after a short pause, not Gemini's slower default.
         realtime_input_config=genai_types.RealtimeInputConfig(
@@ -613,26 +624,6 @@ class ReceptionistCall:
             language=language, language_name="Greek" if language == "el" else "English",
             fillers=self.engine == "pipeline", **(parts or {}),
         )
-
-    async def switch_language(self, language: str) -> None:
-        """R7: hand over to an agent whose model is pinned to the new language."""
-        if language == self.language or self.session is None:
-            return
-        logger.info("call %s: switching language %s -> %s", self.call_id, self.language, language)
-        self.language = language
-        parts = language_parts(self.engine, self.metadata.get("voice", "default"), language)
-        if self.agent is not None:
-            parts["chat_ctx"] = self.agent.chat_ctx.copy()
-        new = self.make_agent(language, parts)
-        self.agent = new
-        self.session.update_agent(new)
-        self.spawn(self._greet_switched())
-
-    async def _greet_switched(self) -> None:
-        await asyncio.sleep(0.3)
-        text = ("Continue the conversation in English from where it was, briefly." if self.language == "en"
-                else "Συνέχισε τη συζήτηση στα ελληνικά από εκεί που ήταν, σύντομα.")
-        self.session.generate_reply(instructions=text)
 
     # --- emergency (R5): a deterministic phrase match on what the caller said ---
 
@@ -813,7 +804,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
     max_duration_seconds = metadata.get("max_duration_seconds", 300)
     logger.info("call %s: receptionist (%s, %s), engine %s, language %s",
                 call_id, metadata.get("practice_id"), metadata.get("direction"), rc.engine, rc.language)
-    session = build_session(ctx, rc.engine, metadata.get("voice", "default"), rc.language)
+    session = build_session(ctx, rc.engine, metadata.get("voice", "default"), rc.language, metadata.get("vocabulary"))
     rc.session = session
 
     if dialing:
