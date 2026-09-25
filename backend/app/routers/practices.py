@@ -1,24 +1,22 @@
 """Founder-side setup and the receptionist call log (manual onboarding, PRD scope)."""
 
 import json
-import uuid
-from datetime import datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import booking, events, finalize, metrics, notifications, receptionist, texts
-from app.config import CONFIG_DIR
+from app import booking, config_changes, events, finalize, metrics, notifications, receptionist, texts
+from app.config import CONFIG_DIR, get_settings
 from app.database import get_db
 from app.models import (
-    Appointment, Call, Device, Handoff, Message, Notification, Practice, RoutingEvent, Staff, TranscriptEntry,
+    AdminLink, Appointment, Call, ConfigVersion, Device, Handoff, Message, Notification, Practice, RoutingEvent, Staff, TranscriptEntry,
     TranscriptRole, WaitlistEntry,
 )
 from app.schemas import (
-    AppointmentCreate, AppointmentMove, AppointmentOut, CallReview, ClosureIn, ClosureOut, DeviceIn, HandoffJoin, HandoffOut,
+    AppointmentCreate, AppointmentMove, AppointmentOut, AdminLinkIn, AdminLinkOut, CallReview, ClosureIn, ClosureOut, ConfigVersionOut, DeviceIn, HandoffJoin, HandoffOut,
     MessageOut, MessageUpdate, PracticeIn, PracticeOut, ReceptionistCallDetail, ReceptionistCallOut, StaffIn,
     StaffOut, WaitlistOut,
 )
@@ -92,7 +90,12 @@ async def get_practice(practice_id: str, db: AsyncSession = Depends(get_db)):
 @router.put("/{practice_id}", response_model=PracticeOut)
 async def update_practice(practice_id: str, payload: PracticeIn, db: AsyncSession = Depends(get_db)):
     practice = await _get(db, practice_id)
-    for k, v in payload.to_columns().items():
+    columns = payload.to_columns()
+    # Closures have their own calls; a full update never drops them.
+    columns["rules"]["closures"] = (practice.rules or {}).get("closures") or []
+    await config_changes.publish(db, practice, {k: columns.pop(k) for k in config_changes.FIELDS},
+                                 source="app", author="founder")
+    for k, v in columns.items():
         setattr(practice, k, v)
     return await _save(db, practice)
 
@@ -384,23 +387,14 @@ async def cancel_appointment(practice_id: str, appointment_id: str, db: AsyncSes
 # --- closures and leave (OP3) ---
 
 
-async def _to_rebook(db: AsyncSession, practice: Practice, closure: dict) -> list[Appointment]:
-    tz = ZoneInfo(practice.timezone)
-    start = datetime.combine(datetime.fromisoformat(closure["from"]).date(), time(0), tz)
-    end = datetime.combine(datetime.fromisoformat(closure["to"]).date() + timedelta(days=1), time(0), tz)
-    q = select(Appointment).where(
-        Appointment.practice_id == practice.id, Appointment.status == "booked",
-        Appointment.starts_at >= start, Appointment.starts_at < end,
-    )
-    if closure.get("staff_id"):
-        q = q.where(Appointment.staff_id == closure["staff_id"])
-    return list((await db.execute(q.order_by(Appointment.starts_at))).scalars())
+def _change_error(e: config_changes.ChangeError) -> HTTPException:
+    return HTTPException(status_code=404 if e.code in ("not_found", "unknown_staff") else 409, detail=e.code)
 
 
 async def _closure_out(db: AsyncSession, practice: Practice, c: dict) -> ClosureOut:
     return ClosureOut(
         id=c["id"], date_from=c["from"], date_to=c["to"], staff_id=c.get("staff_id"), reason=c.get("reason"),
-        to_rebook=[AppointmentOut.model_validate(a) for a in await _to_rebook(db, practice, c)],
+        to_rebook=[AppointmentOut.model_validate(a) for a in await config_changes.to_rebook(db, practice, c)],
     )
 
 
@@ -416,34 +410,13 @@ async def add_closure(practice_id: str, payload: ClosureIn, db: AsyncSession = D
     """The agent stops offering these days at once; appointments already in the range are
     returned in `to_rebook` and emailed to the business."""
     practice = await _get(db, practice_id)
-    person = None
-    if payload.staff_id:
-        person = await db.get(Staff, payload.staff_id)
-        if person is None or person.practice_id != practice.id:
-            raise HTTPException(status_code=404, detail="Staff not found")
-    closure = {"id": uuid.uuid4().hex, "from": payload.date_from.isoformat(), "to": payload.date_to.isoformat()}
-    if person:
-        closure["staff_id"] = person.id
-    if payload.reason:
-        closure["reason"] = payload.reason
-    rules = dict(practice.rules or {})
-    rules["closures"] = [*(rules.get("closures") or []), closure]
-    practice.rules = rules
-    await db.flush()
+    try:
+        closure = await config_changes.add_closure(
+            db, practice, date_from=payload.date_from, date_to=payload.date_to, staff_id=payload.staff_id,
+            reason=payload.reason, source="app", author="founder")
+    except config_changes.ChangeError as e:
+        raise _change_error(e)
     out = await _closure_out(db, practice, closure)
-    if out.to_rebook:
-        staff = await booking.staff_of(db, practice.id)
-        lang = practice.language
-        who = person.name if person else practice.name
-        span = f"{booking.say_date(payload.date_from, lang)} – {booking.say_date(payload.date_to, lang)}"
-        lines = []
-        for a in await _to_rebook(db, practice, closure):
-            d = booking.describe(practice, a, staff, lang)
-            lines.append(f"- {d['date_spoken']} {d['time']}, {a.customer_name} {a.customer_phone or ''}, {d['service']}")
-        subject = (f"{len(lines)} ραντεβού για αλλαγή: {who} κλειστά {span}" if lang == "el"
-                   else f"{len(lines)} appointments to rebook: {who} closed {span}")
-        await notifications.queue_business(db, practice, kind="closure_rebook", subject=subject,
-                                           body="\n".join(lines), dedupe_key=f"closure:{closure['id']}")
     await db.commit()
     notifications.kick()
     events.publish(f"practice:{practice.id}")
@@ -453,14 +426,76 @@ async def add_closure(practice_id: str, payload: ClosureIn, db: AsyncSession = D
 @router.delete("/{practice_id}/closures/{closure_id}", status_code=204)
 async def delete_closure(practice_id: str, closure_id: str, db: AsyncSession = Depends(get_db)):
     practice = await _get(db, practice_id)
-    rules = dict(practice.rules or {})
-    kept = [c for c in rules.get("closures") or [] if c["id"] != closure_id]
-    if len(kept) == len(rules.get("closures") or []):
-        raise HTTPException(status_code=404, detail="Closure not found")
-    rules["closures"] = kept
-    practice.rules = rules
+    try:
+        await config_changes.remove_closure(db, practice, closure_id, source="app", author="founder")
+    except config_changes.ChangeError as e:
+        raise _change_error(e)
     await db.commit()
     events.publish(f"practice:{practice.id}")
+
+
+# --- config versions, approval queue and doctor links (OP2) ---
+
+
+@router.get("/{practice_id}/versions", response_model=list[ConfigVersionOut])
+async def list_versions(practice_id: str, status: str | None = None, db: AsyncSession = Depends(get_db)):
+    """Newest first. `status=pending` is the approval queue."""
+    await _get(db, practice_id)
+    q = select(ConfigVersion).where(ConfigVersion.practice_id == practice_id)
+    if status:
+        q = q.where(ConfigVersion.status == status)
+    return (await db.execute(q.order_by(ConfigVersion.created_at.desc()).limit(100))).scalars().all()
+
+
+async def _decide(db: AsyncSession, practice_id: str, version_id: str, action) -> ConfigVersion:
+    practice = await _get(db, practice_id)
+    try:
+        version = await action(db, practice, version_id)
+    except config_changes.ChangeError as e:
+        raise _change_error(e)
+    await db.commit()
+    events.publish(f"practice:{practice.id}")
+    return version
+
+
+@router.post("/{practice_id}/versions/{version_id}/approve", response_model=ConfigVersionOut)
+async def approve_version(practice_id: str, version_id: str, db: AsyncSession = Depends(get_db)):
+    return await _decide(db, practice_id, version_id, config_changes.approve)
+
+
+@router.post("/{practice_id}/versions/{version_id}/reject", response_model=ConfigVersionOut)
+async def reject_version(practice_id: str, version_id: str, db: AsyncSession = Depends(get_db)):
+    return await _decide(db, practice_id, version_id, config_changes.reject)
+
+
+@router.post("/{practice_id}/versions/{version_id}/rollback", response_model=ConfigVersionOut | None)
+async def rollback_version(practice_id: str, version_id: str, db: AsyncSession = Depends(get_db)):
+    """Back to how things were right after this version. None when that is already the case."""
+    async def action(db, practice, version_id):
+        return await config_changes.rollback(db, practice, version_id, author="founder")
+    return await _decide(db, practice_id, version_id, action)
+
+
+@router.post("/{practice_id}/links", response_model=AdminLinkOut)
+async def create_link(practice_id: str, payload: AdminLinkIn, db: AsyncSession = Depends(get_db)):
+    """A magic link for the business: hours, closures and leave, prices and FAQ, no app needed."""
+    practice = await _get(db, practice_id)
+    try:
+        token, link = await config_changes.create_link(db, practice, staff_id=payload.staff_id, hours=payload.hours)
+    except config_changes.ChangeError as e:
+        raise _change_error(e)
+    await db.commit()
+    url = f"{get_settings().backend_public_url.rstrip('/')}/manage/{token}"
+    return AdminLinkOut(url=url, expires_at=link.expires_at)
+
+
+@router.delete("/{practice_id}/links", status_code=204)
+async def revoke_links(practice_id: str, db: AsyncSession = Depends(get_db)):
+    """Turns off every link of this practice."""
+    await _get(db, practice_id)
+    for link in (await db.execute(select(AdminLink).where(AdminLink.practice_id == practice_id))).scalars():
+        link.revoked = True
+    await db.commit()
 
 
 @router.get("/{practice_id}/waitlist", response_model=list[WaitlistOut])

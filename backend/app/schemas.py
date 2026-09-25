@@ -464,6 +464,29 @@ class ClosureOut(BaseModel):
     to_rebook: list[AppointmentOut]
 
 
+class ConfigVersionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    status: str
+    source: str
+    author: str
+    summary: str
+    changes: dict
+    created_at: datetime
+    decided_at: datetime | None
+
+
+class AdminLinkIn(BaseModel):
+    staff_id: str | None = None
+    hours: int = Field(default=72, ge=1, le=24 * 30)
+
+
+class AdminLinkOut(BaseModel):
+    url: str
+    expires_at: datetime
+
+
 class WaitlistOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
