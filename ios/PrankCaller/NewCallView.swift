@@ -129,7 +129,13 @@ struct AddFriendView: View {
     @State private var phone = ""
     @State private var errorMessage: String?
 
-    private var phoneValid: Bool { phone.range(of: #"^\+\d{8,15}$"#, options: .regularExpression) != nil }
+    /// "+30 690 762-6384" / "0030 (690) 7626384" -> "+306907626384"; the backend normalizes the same way.
+    private var normalizedPhone: String {
+        var p = phone.filter { !" -().\u{00A0}".contains($0) && !$0.isWhitespace }
+        if p.hasPrefix("00") { p = "+" + p.dropFirst(2) }
+        return p
+    }
+    private var phoneValid: Bool { normalizedPhone.range(of: #"^\+\d{8,15}$"#, options: .regularExpression) != nil }
 
     var body: some View {
         NavigationStack {
@@ -149,12 +155,12 @@ struct AddFriendView: View {
                     Button("Save") {
                         Task {
                             do {
-                                onAdded(try await APIClient().addFriend(NewFriend(name: name, phoneNumber: phone)))
+                                onAdded(try await APIClient().addFriend(NewFriend(name: name.trimmingCharacters(in: .whitespacesAndNewlines), phoneNumber: normalizedPhone)))
                                 dismiss()
                             } catch { errorMessage = error.localizedDescription }
                         }
                     }
-                    .disabled(name.isEmpty || !phoneValid)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || !phoneValid)
                 }
             }
         }
