@@ -22,6 +22,7 @@ Three engines (AGENT_ENGINE):
 """
 
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -68,7 +69,10 @@ OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2.
 # Pipeline engine: the "brain". Flash-Lite starts answering in ~0.45 s.
 LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
 # Realtime and OpenAI engines: how long a pause means the friend has finished talking.
-REALTIME_SILENCE_MS = int(os.environ.get("REALTIME_SILENCE_MS", "500"))
+REALTIME_SILENCE_MS = int(os.environ.get("REALTIME_SILENCE_MS", "400"))
+# Turn detector (pipeline engine): the longest we wait after the caller stops before
+# treating the turn as finished. Lower is snappier at the risk of cutting slow speech.
+TURN_MAX_DELAY_MS = int(os.environ.get("TURN_MAX_DELAY_MS", "1000"))
 # Say a filler word if the reply hasn't started this long after the friend stops talking.
 FILLER_DELAY_SECONDS = 0.5
 # At most one filler within this many seconds.
@@ -211,9 +215,24 @@ class PrankCallerAgent(Agent):
     async def hang_up(self) -> str:
         """Ends the call. Use this once the call has done its job or the other
         person wants to stop — never leave a call open indefinitely."""
+        # Let any goodbye that's still playing finish before dropping the line, so the
+        # closing isn't cut off and there's no dangling gap.
+        await self._drain_speech()
         job_ctx = get_job_context()
         await job_ctx.room.disconnect()
         return "call ended"
+
+    async def _drain_speech(self, timeout: float = 5.0) -> None:
+        """Wait (bounded) for the speech that's currently playing to finish."""
+        speech = getattr(self.session, "current_speech", None)
+        if speech is None:
+            return
+        try:
+            await asyncio.wait_for(speech.wait_for_playout(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        except Exception:
+            logger.debug("call %s: waiting for closing playout failed", self._call_id, exc_info=True)
 
     async def _play_opening(self) -> bool:
         opening = await ready_opening(self._opening_task)
@@ -468,7 +487,7 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
                 # doesn't know Greek, so Greek turns end on max_delay. version="v1" (cloud) got
                 # the job process OOM-killed on Railway on 2026-09-25; don't retry it blindly.
                 turn_detection=inference.TurnDetector(local_fallback=False),
-                endpointing={"mode": "dynamic", "min_delay": ENDPOINT_MIN_DELAY, "max_delay": 1.5},
+                endpointing={"mode": "dynamic", "min_delay": ENDPOINT_MIN_DELAY, "max_delay": TURN_MAX_DELAY_MS / 1000},
                 # A cough or a one-word "ναι" mid-reply shouldn't cut the agent off; if it was
                 # a false alarm, carry on where it stopped.
                 interruption={"min_duration": 0.6, "min_words": 2, "resume_false_interruption": True,
@@ -605,6 +624,37 @@ def track_transcript(session: AgentSession, call_id: str) -> None:
             asyncio.create_task(
                 report(call_id, transcript_role=role, transcript_text=text)
             )
+
+
+# If the agent says roughly the same thing this many times in a row it's stuck (looping on
+# nonsense or a broken tool): end the call instead of leaving the friend with a broken bot.
+REPEAT_HANGUP_COUNT = 3
+# How alike two consecutive agent turns must be to count as the same utterance.
+REPEAT_SIMILARITY = 0.9
+
+
+def guard_repetition(session: AgentSession, ctx: JobContext, call_id: str) -> None:
+    """Hang up if the agent repeats itself ~3 times in a row."""
+    state = {"last": "", "count": 0}
+
+    @session.on("conversation_item_added")
+    def _on_item(ev) -> None:
+        item = ev.item
+        if getattr(item, "type", None) != "message" or item.role != "assistant":
+            return
+        text = _plain((item.text_content or "").strip())
+        if not text:
+            return
+        if state["last"] and difflib.SequenceMatcher(None, state["last"], text).ratio() >= REPEAT_SIMILARITY:
+            state["count"] += 1
+        else:
+            state["count"] = 1
+        state["last"] = text
+        if state["count"] >= REPEAT_HANGUP_COUNT:
+            logger.warning("call %s: agent repeated itself %d times, hanging up", call_id, state["count"])
+            asyncio.create_task(ctx.room.disconnect())
+
+    return
 
 
 def room_options(web: bool = False) -> room_io.RoomOptions:
@@ -889,6 +939,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
     rc.agent = agent
     track_transcript(session, call_id)
     log_latency(session, call_id)
+    guard_repetition(session, ctx, call_id)
     rc.track_latency()
 
     @session.on("conversation_item_added")
@@ -975,8 +1026,38 @@ async def entrypoint(ctx: JobContext) -> None:
             voice_id=elevenlabs_voice(voice), llm_model=LLM_MODEL,
         ))
 
+    agent = PrankCallerAgent(
+        instructions=prompt, call_id=call_id, language=language, language_name=language_name,
+        opening_task=opening_task, fillers=engine == "pipeline",
+    )
+
+    track_transcript(session, call_id)
+    log_latency(session, call_id)
+    guard_repetition(session, ctx, call_id)
+
+    @session.on("close")
+    def _on_close(_ev) -> None:
+        ctx.shutdown(reason="session closed")
+
+    # Let the callee speak first ("Εμπρός;") like a real caller would. This also
+    # lets the agent hear a voicemail greeting before it says anything.
+    callee_spoke = asyncio.Event()
+
+    @session.on("user_state_changed")
+    def _on_user_state(ev) -> None:
+        if ev.new_state == "speaking":
+            callee_spoke.set()
+
     logger.info("call %s: engine %s, language %s, dialing %s via trunk %s",
                 call_id, engine, language, friend_phone_number, sip_trunk_id)
+
+    # Warm up the model connection during the ring: start the session concurrently with the
+    # dial so the (Gemini) cold start is hidden behind the ringing, not paid after pickup.
+    # The agent only greets once the callee speaks or open_after_silence runs, so nothing is
+    # said before someone answers.
+    warm_task = asyncio.create_task(session.start(
+        agent=agent, room=ctx.room, room_options=room_options(),
+    ))
 
     lk = api.LiveKitAPI()
     try:
@@ -997,6 +1078,7 @@ async def entrypoint(ctx: JobContext) -> None:
                     )
                 )
         except Exception as e:
+            warm_task.cancel()
             if opening_task:
                 opening_task.cancel()
             reason = dial_failure_reason(e)
@@ -1029,14 +1111,6 @@ async def entrypoint(ctx: JobContext) -> None:
 
     await report(call_id, status="active")
 
-    agent = PrankCallerAgent(
-        instructions=prompt, call_id=call_id, language=language, language_name=language_name,
-        opening_task=opening_task, fillers=engine == "pipeline",
-    )
-
-    track_transcript(session, call_id)
-    log_latency(session, call_id)
-
     async def _enforce_duration_cap() -> None:
         # Warn the agent shortly before the cap so it wraps up and says goodbye
         # instead of the call being cut off mid-sentence.
@@ -1046,10 +1120,6 @@ async def entrypoint(ctx: JobContext) -> None:
         await asyncio.sleep(max_duration_seconds - warn_at)
         logger.info("call %s: hard duration cap reached, disconnecting", call_id)
         await ctx.room.disconnect()
-
-    @session.on("close")
-    def _on_close(_ev) -> None:
-        ctx.shutdown(reason="session closed")
 
     async def _finish() -> None:
         cap_task.cancel()
@@ -1062,21 +1132,10 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.add_shutdown_callback(_finish)
 
-    # Let the callee speak first ("Εμπρός;") like a real caller would. This also
-    # lets the agent hear a voicemail greeting before it says anything.
-    callee_spoke = asyncio.Event()
-
-    @session.on("user_state_changed")
-    def _on_user_state(ev) -> None:
-        if ev.new_state == "speaking":
-            callee_spoke.set()
-
     cap_task = asyncio.create_task(_enforce_duration_cap())
-    await session.start(
-        agent=agent,
-        room=ctx.room,
-        room_options=room_options(),
-    )
+    # The warm-up usually finishes during the ring; make sure it's done before we rely
+    # on the session for the greeting.
+    await warm_task
     try:
         await asyncio.wait_for(callee_spoke.wait(), timeout=GREETING_WAIT_SECONDS)
     except asyncio.TimeoutError:
