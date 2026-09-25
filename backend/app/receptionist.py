@@ -4,6 +4,7 @@ Every tool returns a small dict the model reads; every decision and write happen
 """
 
 import json
+import re
 from datetime import date as date_cls
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -135,12 +136,20 @@ async def build_metadata(
     purpose = await _purpose(db, practice, call, staff, language)
 
     def prompt_for(lang: str) -> str:
-        return build_receptionist_prompt(
+        prompt = build_receptionist_prompt(
             practice, now=now, caller_number=call.caller_number, language=lang, hours_state=state,
             next_open=next_open, customer_name=customer.name if customer else None,
             upcoming=[booking.describe(practice, a, staff, lang) for a in upcoming], staff=staff,
             purpose=purpose.get(lang) if purpose else None,
         )
+        if rules["language_switch"]:
+            prompt += ("\nΑν ο πελάτης μιλά καθαρά αγγλικά στην πρώτη του απάντηση, κάλεσε route_call με language=en "
+                       "και συνέχισε στα αγγλικά. Αν είναι ασαφές ή ακούγεται φωνή στο βάθος, ζήτα επανάληψη στα "
+                       "ελληνικά· μην αλλάξεις γλώσσα.\n" if lang == "el" else
+                       "\nIf the caller clearly speaks Greek on the first turn, call route_call with language=el "
+                       "and continue in Greek. If unclear or a background voice is audible, ask them to repeat "
+                       "in English; do not switch languages.\n")
+        return prompt
 
     record = call.direction != "web"
     greeting = default_greeting(practice, now=now, language=language, recording=record, hours_state=state,
@@ -220,11 +229,11 @@ async def _purpose(db: AsyncSession, practice: Practice, call: Call, staff, lang
                    f"{el['date_spoken']} στις {el['time']} για {el['service']} (appointment_id {appt.id}). "
                    "Ρώτα αν θα έρθει. Αν ναι, confirm_appointment. Αν θέλει αλλαγή, check_availability και "
                    "reschedule_appointment. Αν θέλει ακύρωση, cancel_appointment. Αν απαντήσει τηλεφωνητής, "
-                   "κλείσε αμέσως με hang_up χωρίς να πεις τίποτα."),
+                   "κλείσε αμέσως με hang_up(silent=true) χωρίς να πεις τίποτα."),
             "en": (f"This is an OUTBOUND reminder call. The customer ({appt.customer_name}) has an appointment on "
                    f"{en['date_spoken']} at {en['time']} for {en['service']} (appointment_id {appt.id}). Ask whether "
                    "they'll come. Yes: confirm_appointment. Change: check_availability then reschedule_appointment. "
-                   "Cancel: cancel_appointment. If voicemail answers, hang_up at once without speaking."),
+                   "Cancel: cancel_appointment. If voicemail answers, hang_up(silent=true) at once without speaking."),
             "greeting_el": (f"Ο πελάτης σήκωσε. Χαιρέτα, πες ότι είσαι ο ψηφιακός βοηθός από «{practice.name}» και "
                             f"ότι παίρνεις για να θυμίσεις το ραντεβού του {el['date_spoken']} στις {el['time']}. "
                             "Ρώτα αν θα έρθει."),
@@ -245,11 +254,11 @@ async def _purpose(db: AsyncSession, practice: Practice, call: Call, staff, lang
             "el": (f"Αυτή είναι ΕΞΕΡΧΟΜΕΝΗ κλήση: ο πελάτης ({entry.customer_name}) ήταν σε λίστα αναμονής για "
                    f"{service['name']}. Ελευθερώθηκε θέση {el_day} στις {hhmm} (date {day}, time {hhmm}, "
                    f"service_id {entry.service_id}). Πρότεινέ τη. Αν τη θέλει, επιβεβαίωσε και κάλεσε "
-                   "book_appointment. Αν απαντήσει τηλεφωνητής, κλείσε αμέσως με hang_up."),
+                   "check_availability, prepare_action, έπειτα book_appointment. Αν απαντήσει τηλεφωνητής, κλείσε αμέσως με hang_up(silent=true)."),
             "en": (f"This is an OUTBOUND call: the customer ({entry.customer_name}) was on the waitlist for "
                    f"{service['name']}. A slot opened on {en_day} at {hhmm} (date {day}, time {hhmm}, service_id "
                    f"{entry.service_id}). Offer it; if they want it, read back and book_appointment. If voicemail "
-                   "answers, hang_up at once."),
+                   "answers, hang_up(silent=true) at once."),
             "greeting_el": (f"Ο πελάτης σήκωσε. Χαιρέτα, πες ότι είσαι ο ψηφιακός βοηθός από «{practice.name}» και "
                             f"ότι ελευθερώθηκε θέση {el_day} στις {hhmm}. Ρώτα αν τη θέλει."),
             "greeting_en": (f"They picked up. Say hello, that you're the digital assistant of \"{practice.name}\", "
@@ -327,6 +336,13 @@ async def offer_freed_slot(db: AsyncSession, practice: Practice, appt: Appointme
     )).scalars()
     for entry in entries:
         if entry.phone == appt.customer_phone or not booking.in_part_of_day(local, entry.part_of_day):
+            continue
+        # G9: a waitlist entry alone does not authorize an outbound call.
+        existing = (await db.execute(select(Appointment.id).where(
+            Appointment.practice_id == practice.id, Appointment.customer_phone == entry.phone,
+            Appointment.status == "booked", Appointment.starts_at > utcnow(),
+        ).limit(1))).scalar_one_or_none()
+        if existing is None:
             continue
         entry.status = "offered"
         call = _outbound_call(practice, entry.phone, f"waitlist:{entry.id}:{slot}")
@@ -420,8 +436,118 @@ async def tool_check_availability(db: AsyncSession, call: Call, args) -> dict:
         db, practice, args.when, args.service_id, utcnow(), staff_name=args.staff,
         staff_ids=await _department_staff(db, practice, call), language=_lang(call, practice), exclude_id=exclude,
     )
+    if not result.get("error"):
+        # Persist exactly what the backend offered so a later write cannot use an
+        # invented date or time, even if the model misheard a second voice.
+        db.add(RoutingEvent(practice_id=practice.id, call_id=call.id, kind="offer", value=json.dumps({
+            "result": result, "appointment_id": exclude, "requested_staff": args.staff or "",
+        }, ensure_ascii=False), rule="B1 availability offer"))
     await db.commit()
     return result
+
+
+def _affirmative(text: str | None) -> bool:
+    """Require an unambiguous yes in the caller's transcribed reply."""
+    plain = booking._plain(text or "")
+    words = set(re.findall(r"[\w]+", plain))
+    if words & {"οχι", "μη", "δεν", "no", "not", "wait", "αλλα", "but"}:
+        return False
+    return bool(words & {"ναι", "σωστα", "βεβαια", "επιβεβαιωνω", "ενταξει", "οκ",
+                         "yes", "correct", "confirm", "okay", "ok"})
+
+
+async def _offered(db: AsyncSession, call: Call, *, day: str, time: str, service_id: str,
+                   appointment_id: str | None, staff: str | None) -> bool:
+    cutoff = datetime.utcnow() - timedelta(minutes=5)
+    events = (await db.execute(select(RoutingEvent).where(
+        RoutingEvent.call_id == call.id, RoutingEvent.kind == "offer", RoutingEvent.created_at >= cutoff,
+    ).order_by(RoutingEvent.created_at.desc()))).scalars()
+    for event in events:
+        offer = json.loads(event.value)
+        result = offer["result"]
+        if (result.get("service_id") != service_id or offer.get("appointment_id") != appointment_id
+                or booking._plain(offer.get("requested_staff") or "") != booking._plain(staff or "")):
+            continue
+        days = [result, *(result.get("next_days_with_free_times") or [])]
+        if any(d.get("date") == day and time in (d.get("free_times") or []) for d in days):
+            return True
+    return False
+
+
+async def tool_prepare_action(db: AsyncSession, call: Call, args) -> dict:
+    """Produce the readback from trusted appointment data and arm one confirmation."""
+    practice = await _practice(db, call)
+    action = args.action
+    appointment_id = args.appointment_id if action != "book" else None
+    appt = None
+    if action != "book":
+        if not appointment_id or appointment_id not in await _found_ids(db, call):
+            return {"error": "call find_appointments first"}
+        appt = await db.get(Appointment, appointment_id)
+        if appt is None or appt.practice_id != practice.id or appt.status != "booked":
+            return {"error": "unknown_appointment"}
+    if action == "cancel":
+        day = appt.starts_at.astimezone(ZoneInfo(practice.timezone)).date().isoformat()
+        time = appt.starts_at.astimezone(ZoneInfo(practice.timezone)).strftime("%H:%M")
+        service_id, name, staff_name = appt.service_id, appt.customer_name, ""
+    else:
+        if not (args.date and args.time and args.service_id and (args.customer_name or appt)):
+            return {"error": "missing_details"}
+        day, time = args.date.isoformat(), args.time
+        service_id = args.service_id
+        name = (args.customer_name or appt.customer_name).strip()
+        staff_name = args.staff or ""
+        if not await _offered(db, call, day=day, time=time, service_id=service_id,
+                              appointment_id=appointment_id, staff=staff_name):
+            return {"error": "check_availability_first"}
+        if appt and appt.service_id != service_id:
+            return {"error": "service_mismatch"}
+    service = booking.find_service(practice, service_id)
+    if service is None:
+        return {"error": "unknown_service"}
+    staff = await booking.staff_of(db, practice.id)
+    person = booking.match_staff(staff, staff_name) if staff_name else None
+    staff_spoken = f", με {person.name}" if person else ""
+    spoken_day = booking.say_date(date_cls.fromisoformat(day), _lang(call, practice))
+    if _lang(call, practice) == "el":
+        verb = "Να ακυρώσω" if action == "cancel" else "Να επιβεβαιώσω"
+        line = f"{verb}: {name}, {spoken_day} στις {time}, για {service['name']}{staff_spoken}. Σωστά;"
+    else:
+        verb = "Shall I cancel" if action == "cancel" else "Please confirm"
+        line = f"{verb}: {name}, {spoken_day} at {time}, for {service['name']}{staff_spoken}. Is that correct?"
+    data = {"action": action, "date": day, "time": time, "service_id": service_id,
+            "customer_name": name, "staff": staff_name, "appointment_id": appointment_id}
+    event = RoutingEvent(practice_id=practice.id, call_id=call.id, kind="confirmation",
+                         value=json.dumps(data, ensure_ascii=False), rule="B3 trusted readback", path="pending")
+    db.add(event)
+    await db.commit()
+    return {"confirmation_id": event.id, "say": line}
+
+
+async def _confirmed(db: AsyncSession, call: Call, args, action: str) -> bool:
+    if not args.confirmation_id or not _affirmative(args.confirmation_text):
+        return False
+    event = await db.get(RoutingEvent, args.confirmation_id)
+    if (event is None or event.call_id != call.id or event.kind != "confirmation"
+            or event.created_at < datetime.utcnow() - timedelta(minutes=4)):
+        return False
+    data = json.loads(event.value)
+    if data["action"] != action:
+        return False
+    if action == "book":
+        matches = (data["date"] == args.date.isoformat() and data["time"] == args.time
+                   and data["service_id"] == args.service_id
+                   and data["customer_name"] == args.customer_name.strip()
+                   and booking._plain(data["staff"]) == booking._plain(args.staff or ""))
+    elif action == "reschedule":
+        matches = (data["appointment_id"] == args.appointment_id and data["date"] == args.date.isoformat()
+                   and data["time"] == args.time)
+    else:
+        matches = data["appointment_id"] == args.appointment_id
+    if matches:
+        event.path = "accepted"
+        await routing.log(db, call, "confirmation_answer", args.confirmation_text.strip(), "B3 caller yes")
+    return matches
 
 
 async def _customer_sms(db: AsyncSession, practice: Practice, call: Call, kind: str, appt: Appointment) -> None:
@@ -444,6 +570,8 @@ async def tool_book(db: AsyncSession, call: Call, args) -> dict:
     practice = await _practice(db, call)
     language = _lang(call, practice)
     source = "waitlist" if (call.purpose or "").startswith("waitlist:") else "agent"
+    if not await _confirmed(db, call, args, "book"):
+        return {"booked": False, "error": "confirmation_required"}
     try:
         appt = await booking.book(
             db, practice, day=args.date, start_time=args.time, service_id=args.service_id,
@@ -505,6 +633,8 @@ async def tool_reschedule(db: AsyncSession, call: Call, args) -> dict:
     practice = await _practice(db, call)
     if args.appointment_id not in await _found_ids(db, call):
         return {"error": "call find_appointments first"}
+    if not await _confirmed(db, call, args, "reschedule"):
+        return {"rescheduled": False, "error": "confirmation_required"}
     try:
         appt, old = await booking.reschedule(
             db, practice, appointment_id=args.appointment_id, day=args.date, start_time=args.time, now=utcnow()
@@ -537,6 +667,8 @@ async def tool_cancel(db: AsyncSession, call: Call, args) -> dict:
     practice = await _practice(db, call)
     if args.appointment_id not in await _found_ids(db, call):
         return {"error": "call find_appointments first"}
+    if not await _confirmed(db, call, args, "cancel"):
+        return {"cancelled": False, "error": "confirmation_required"}
     try:
         appt = await booking.cancel(db, practice, appointment_id=args.appointment_id)
     except booking.BookingError as e:

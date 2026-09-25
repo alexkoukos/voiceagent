@@ -243,6 +243,19 @@ class TranscriptEntry(Base):
     call: Mapped["Call"] = relationship(back_populates="transcript_entries")
 
 
+class RecordingDeletion(Base):
+    """Durable object deletion, including egress uploads that finish after hang-up."""
+
+    __tablename__ = "recording_deletions"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    call_id: Mapped[str | None] = mapped_column(ForeignKey("calls.id"), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
 class Message(Base):
     """A message taken for the business (C3)."""
 

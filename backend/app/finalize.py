@@ -69,15 +69,27 @@ def cost(call: Call) -> float | None:
 
 
 def wants_business_summary(practice: Practice, call: Call) -> bool:
-    if call.outcome == "abandoned":
-        return False
-    if "off_topic" in (call.flags or []) and call.outcome in ("info_given", None):
-        return False
     return {
         "inbound": True,
         "web": bool((practice.notifications or {}).get("web_summaries")),
-        "outbound": call.outcome in ("booked", "rescheduled", "cancelled", "message_taken"),
+        "outbound": True,
     }.get(call.direction, False)
+
+
+def fallback_summary(call: Call, language: str) -> str:
+    """Safe, non-medical summary while the text model is unavailable."""
+    outcome = {
+        "booked": ("κλείστηκε ραντεβού", "an appointment was booked"),
+        "rescheduled": ("αλλάχθηκε ραντεβού", "an appointment was moved"),
+        "cancelled": ("ακυρώθηκε ραντεβού", "an appointment was cancelled"),
+        "message_taken": ("κρατήθηκε μήνυμα", "a message was taken"),
+        "transferred": ("η κλήση συνδέθηκε με άνθρωπο", "the call was transferred"),
+        "abandoned": ("η κλήση έληξε πριν ολοκληρωθεί", "the call ended before resolution"),
+        "failed": ("η κλήση απέτυχε", "the call failed"),
+    }.get(call.outcome or "", ("δόθηκαν πληροφορίες", "information was provided"))
+    if language == "el":
+        return f"Η κλήση ολοκληρώθηκε και {outcome[0]}. Δεν ήταν διαθέσιμη αναλυτική περίληψη."
+    return f"The call ended and {outcome[1]}. A detailed summary was unavailable."
 
 
 async def finalize(call_id: str) -> None:
@@ -106,6 +118,9 @@ async def finalize(call_id: str) -> None:
             lines = [f"{'Πελάτης' if language == 'el' else 'Caller'}: {e.text}" if e.role == TranscriptRole.friend
                      else f"{'Βοηθός' if language == 'el' else 'Assistant'}: {e.text}" for e in entries]
             call.summary = await summarize("\n".join(lines), language)
+            if not call.summary:
+                call.summary = fallback_summary(call, language)
+                call.flags = [*{*(call.flags or []), "summary_fallback"}]
             call.finalized = True
 
             # One email per call to the business, within 60 s of hang-up (web demos only if asked).
