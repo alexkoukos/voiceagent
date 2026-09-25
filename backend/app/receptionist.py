@@ -308,6 +308,16 @@ async def offer_freed_slot(db: AsyncSession, practice: Practice, appt: Appointme
     if not (practice.reminders or {}).get("waitlist"):
         return None
     local = appt.starts_at.astimezone(ZoneInfo(practice.timezone))
+    # A repeated cancellation must not call another person for the same freed slot.
+    # Keep this lock through the caller's commit so simultaneous retries serialize.
+    await booking._lock(db, practice)
+    slot = f"{local.date().isoformat()}T{local.strftime('%H:%M')}"
+    offered = await db.execute(select(RoutingEvent.id).where(
+        RoutingEvent.practice_id == practice.id, RoutingEvent.kind == "waitlist_offer",
+        RoutingEvent.value == appt.id,
+    ).limit(1))
+    if offered.first():
+        return None
     entries = (await db.execute(
         select(WaitlistEntry).where(
             WaitlistEntry.practice_id == practice.id, WaitlistEntry.status == "waiting",
@@ -319,8 +329,10 @@ async def offer_freed_slot(db: AsyncSession, practice: Practice, appt: Appointme
         if entry.phone == appt.customer_phone or not booking.in_part_of_day(local, entry.part_of_day):
             continue
         entry.status = "offered"
-        call = _outbound_call(practice, entry.phone, f"waitlist:{entry.id}:{local.date().isoformat()}T{local.strftime('%H:%M')}")
+        call = _outbound_call(practice, entry.phone, f"waitlist:{entry.id}:{slot}")
         db.add(call)
+        await db.flush()
+        await routing.log(db, call, "waitlist_offer", appt.id, "B8 cancellation retry")
         return call
     return None
 
@@ -393,7 +405,7 @@ async def tool_emergency(db: AsyncSession, call: Call) -> dict:
     if "emergency" not in (call.flags or []):
         await routing.log(db, call, "emergency", "phrase", "R5 emergency phrase", "emergency")
         await _emergency(db, practice, call)
-        await notifications.commit_ignoring_duplicates(db)
+        await db.commit()
         notifications.kick()
     return {"say": routing.EMERGENCY_SCRIPT["el" if _lang(call, practice) == "el" else "en"]}
 
@@ -402,6 +414,8 @@ async def tool_check_availability(db: AsyncSession, call: Call, args) -> dict:
     practice = await _practice(db, call)
     call.use_case = call.use_case if call.use_case == "outbound" else "booking"
     exclude = args.appointment_id if getattr(args, "appointment_id", None) else None
+    if exclude and exclude not in await _found_ids(db, call):
+        return {"error": "call find_appointments first"}
     result = await booking.check_availability(
         db, practice, args.when, args.service_id, utcnow(), staff_name=args.staff,
         staff_ids=await _department_staff(db, practice, call), language=_lang(call, practice), exclude_id=exclude,
@@ -418,7 +432,7 @@ async def _customer_sms(db: AsyncSession, practice: Practice, call: Call, kind: 
         return
     staff = await booking.staff_of(db, practice.id)
     language = _lang(call, practice) if call else practice.language
-    notifications.queue(
+    await notifications.queue(
         db, practice_id=practice.id, kind=f"{kind}_customer", channel="sms", recipient=appt.customer_phone,
         body=texts.customer_sms(practice, kind, booking.describe(practice, appt, staff, language), language),
         call_id=call.id if call else None, dedupe_key=key,
@@ -426,6 +440,7 @@ async def _customer_sms(db: AsyncSession, practice: Practice, call: Call, kind: 
 
 
 async def tool_book(db: AsyncSession, call: Call, args) -> dict:
+    call_id = call.id  # Rollback expires ORM attributes, including call.id.
     practice = await _practice(db, call)
     language = _lang(call, practice)
     source = "waitlist" if (call.purpose or "").startswith("waitlist:") else "agent"
@@ -438,7 +453,7 @@ async def tool_book(db: AsyncSession, call: Call, args) -> dict:
         )
     except booking.BookingError as e:
         if e.code == "calendar_error":
-            call = await db.get(Call, call.id)
+            call = await db.get(Call, call_id)
             add_flag(call, "tool_error")
             await db.commit()
         return {"booked": False, "error": e.code, **e.details}
@@ -455,7 +470,7 @@ async def tool_book(db: AsyncSession, call: Call, args) -> dict:
         if entry:
             entry.status = "booked"
     await _customer_sms(db, practice, call, "booked", appt)
-    await notifications.commit_ignoring_duplicates(db)
+    await db.commit()
     notifications.kick()
     staff = await booking.staff_of(db, practice.id)
     return {"booked": True, **booking.describe(practice, appt, staff, language)}
@@ -486,6 +501,7 @@ async def tool_find_appointments(db: AsyncSession, call: Call, args) -> dict:
 
 
 async def tool_reschedule(db: AsyncSession, call: Call, args) -> dict:
+    call_id = call.id
     practice = await _practice(db, call)
     if args.appointment_id not in await _found_ids(db, call):
         return {"error": "call find_appointments first"}
@@ -495,7 +511,7 @@ async def tool_reschedule(db: AsyncSession, call: Call, args) -> dict:
         )
     except booking.BookingError as e:
         if e.code == "calendar_error":
-            call = await db.get(Call, call.id)
+            call = await db.get(Call, call_id)
             add_flag(call, "tool_error")
             await db.commit()
         return {"rescheduled": False, "error": e.code, **e.details}
@@ -510,13 +526,14 @@ async def tool_reschedule(db: AsyncSession, call: Call, args) -> dict:
     old_local = old.astimezone(ZoneInfo(practice.timezone))
     await routing.log(db, call, "action", f"rescheduled_from:{old_local.isoformat()}", "B5 reschedule")
     await _customer_sms(db, practice, call, "rescheduled", appt)
-    await notifications.commit_ignoring_duplicates(db)
+    await db.commit()
     notifications.kick()
     staff = await booking.staff_of(db, practice.id)
     return {"rescheduled": True, **booking.describe(practice, appt, staff, _lang(call, practice))}
 
 
 async def tool_cancel(db: AsyncSession, call: Call, args) -> dict:
+    call_id = call.id
     practice = await _practice(db, call)
     if args.appointment_id not in await _found_ids(db, call):
         return {"error": "call find_appointments first"}
@@ -524,7 +541,7 @@ async def tool_cancel(db: AsyncSession, call: Call, args) -> dict:
         appt = await booking.cancel(db, practice, appointment_id=args.appointment_id)
     except booking.BookingError as e:
         if e.code == "calendar_error":
-            call = await db.get(Call, call.id)
+            call = await db.get(Call, call_id)
             add_flag(call, "tool_error")
             await db.commit()
         return {"cancelled": False, "error": e.code}
@@ -538,7 +555,7 @@ async def tool_cancel(db: AsyncSession, call: Call, args) -> dict:
         appt.reminder_status = "cancelled"
     await _customer_sms(db, practice, call, "cancelled", appt)
     await offer_freed_slot(db, practice, appt)
-    await notifications.commit_ignoring_duplicates(db)
+    await db.commit()
     notifications.kick()
     from app.dispatcher import start_next_queued
     await start_next_queued(db)
@@ -631,7 +648,7 @@ async def tool_handoff_result(db: AsyncSession, call: Call, args) -> dict:
         await notifications.queue_business(db, practice, kind="handoff_unanswered", subject=subject, body=body,
                                            call_id=call.id, urgent=True, dedupe_key=f"handoff:{handoff.id}")
         add_flag(call, "urgent")
-    await notifications.commit_ignoring_duplicates(db)
+    await db.commit()
     notifications.kick()
     events.publish(f"practice:{practice.id}")
     return {"ok": True}

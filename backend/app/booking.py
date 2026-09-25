@@ -316,8 +316,15 @@ async def busy_intervals(
         q = q.where(Appointment.id != exclude_id)
     busy = [(s, e) for s, e in (await db.execute(q)).all()]
     calendar_id = resource.calendar_id if resource is not None else practice.calendar_id
-    if calendar_id and gcal.configured():
-        busy += await gcal.busy(calendar_id, start, end)
+    if calendar_id:
+        if not gcal.configured():
+            raise BookingError("calendar_error")
+        excluded = await db.get(Appointment, exclude_id) if exclude_id else None
+        if (excluded and excluded.practice_id == practice.id and excluded.gcal_event_id
+                and excluded.staff_id == (resource.staff_id if resource else None)):
+            busy += await gcal.busy_except(calendar_id, start, end, excluded.gcal_event_id)
+        else:
+            busy += await gcal.busy(calendar_id, start, end)
     return busy
 
 
@@ -335,9 +342,13 @@ async def availability(
         resources = resources_for(practice, await staff_of(db, practice.id), service["id"])
     tz = ZoneInfo(practice.timezone)
     start = datetime.combine(day, time(0), tz)
+    buffer = timedelta(minutes=rules_for(practice)["buffer_minutes"])
     free: dict[datetime, list[Resource]] = {}
     for r in resources:
-        busy = await busy_intervals(db, practice, start, start + timedelta(days=1), r, exclude_id)
+        # Closed days, holidays and dates outside the booking window need no I/O.
+        if not free_slots(practice, day, service["duration_minutes"], [], now, r.hours):
+            continue
+        busy = await busy_intervals(db, practice, start - buffer, start + timedelta(days=1) + buffer, r, exclude_id)
         for slot in free_slots(practice, day, service["duration_minutes"], busy, now, r.hours):
             free.setdefault(slot, []).append(r)
     return dict(sorted(free.items()))
@@ -419,6 +430,8 @@ async def _next_free_days(
     found = []
     for i in range(1, 15):
         day = after + timedelta(days=i)
+        if day > now.astimezone(ZoneInfo(practice.timezone)).date() + timedelta(days=rules_for(practice)["max_days_ahead"]):
+            break
         slots = list(await availability(db, practice, day, service, now, resources, exclude_id))
         if slots:
             found.append({
@@ -564,15 +577,20 @@ async def book(
         await db.rollback()
         raise BookingError("duplicate")
     except Exception:
-        # Google refused the event: nothing is booked, the agent takes a message instead (B7).
+        # Roll back locally and take a message (B7). A timed-out remote write may
+        # still have succeeded; full Calendar/Postgres reconciliation is pending.
         await db.rollback()
         raise BookingError("calendar_error")
     return appt
 
 
-async def _booked(db: AsyncSession, practice: Practice, appointment_id: str) -> Appointment:
-    appt = await db.get(Appointment, appointment_id)
-    if appt is None or appt.practice_id != practice.id or appt.status != AppointmentStatus.booked:
+async def _booked(
+    db: AsyncSession, practice: Practice, appointment_id: str, *, allow_cancelled: bool = False,
+) -> Appointment:
+    # Refresh after acquiring the advisory lock; another transaction may have changed it.
+    appt = await db.get(Appointment, appointment_id, populate_existing=True)
+    statuses = [AppointmentStatus.booked, AppointmentStatus.cancelled] if allow_cancelled else [AppointmentStatus.booked]
+    if appt is None or appt.practice_id != practice.id or appt.status not in statuses:
         await db.commit()
         raise BookingError("unknown_appointment")
     return appt
@@ -593,13 +611,17 @@ async def reschedule(
     starts_at = _slot_start(practice, day, start_time)
     await _lock(db, practice)
     appt = await _booked(db, practice, appointment_id)
+    if appt.starts_at == starts_at:
+        await db.commit()
+        return appt, appt.starts_at
     service = find_service(practice, appt.service_id) or {
         "id": appt.service_id, "duration_minutes": int((appt.ends_at - appt.starts_at).total_seconds() // 60)
     }
     staff = await staff_of(db, practice.id)
-    resources = resources_for(practice, staff, service["id"], appt.staff_id) or [
-        Resource(None, practice.hours or {}, practice.calendar_id)
-    ]
+    resources = resources_for(practice, staff, service["id"], appt.staff_id)
+    if not resources:
+        await db.commit()
+        raise BookingError("unknown_staff")
     free = await availability(db, practice, day, service, now, resources, exclude_id=appt.id)
     if starts_at not in free:
         raise await _slot_taken(db, practice, day, starts_at, list(free), service, now, resources, appt.id)
@@ -609,6 +631,8 @@ async def reschedule(
     appt.updated_at = datetime.utcnow()
     try:
         calendar_id = _calendar_of(practice, staff, appt)
+        if appt.gcal_event_id and not (calendar_id and gcal.configured()):
+            raise BookingError("calendar_error")
         if calendar_id and appt.gcal_event_id and gcal.configured():
             await gcal.move_event(calendar_id, appt.gcal_event_id, appt.starts_at, appt.ends_at, practice.timezone)
         await db.commit()
@@ -620,12 +644,17 @@ async def reschedule(
 
 async def cancel(db: AsyncSession, practice: Practice, *, appointment_id: str) -> Appointment:
     await _lock(db, practice)
-    appt = await _booked(db, practice, appointment_id)
+    appt = await _booked(db, practice, appointment_id, allow_cancelled=True)
+    if appt.status == AppointmentStatus.cancelled:
+        await db.commit()
+        return appt
     staff = await staff_of(db, practice.id)
     appt.status = AppointmentStatus.cancelled
     appt.updated_at = datetime.utcnow()
     try:
         calendar_id = _calendar_of(practice, staff, appt)
+        if appt.gcal_event_id and not (calendar_id and gcal.configured()):
+            raise BookingError("calendar_error")
         if calendar_id and appt.gcal_event_id and gcal.configured():
             await gcal.delete_event(calendar_id, appt.gcal_event_id)
         await db.commit()

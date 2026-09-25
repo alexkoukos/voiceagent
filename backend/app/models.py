@@ -279,7 +279,7 @@ class Notification(Base):
     subject: Mapped[str] = mapped_column(String, default="")
     body: Mapped[str] = mapped_column(Text, default="")
     data: Mapped[dict] = mapped_column(JSON, default=dict)
-    # pending, sent, failed (gave up), skipped (channel not configured)
+    # pending (also awaiting configuration), sent, failed (gave up), skipped (dedupe marker)
     status: Mapped[str] = mapped_column(String, default="pending", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)

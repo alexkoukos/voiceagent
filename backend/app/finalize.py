@@ -68,11 +68,28 @@ def cost(call: Call) -> float | None:
     return round(call.duration_seconds / 60 * per_min, 4)
 
 
+def wants_business_summary(practice: Practice, call: Call) -> bool:
+    if call.outcome == "abandoned":
+        return False
+    if "off_topic" in (call.flags or []) and call.outcome in ("info_given", None):
+        return False
+    return {
+        "inbound": True,
+        "web": bool((practice.notifications or {}).get("web_summaries")),
+        "outbound": call.outcome in ("booked", "rescheduled", "cancelled", "message_taken"),
+    }.get(call.direction, False)
+
+
 async def finalize(call_id: str) -> None:
     try:
         async with async_session() as db:
-            call = await db.get(Call, call_id)
-            if call is None or call.practice_id is None or call.finalized:
+            # Agent retries and scheduler recovery can arrive together. Only one
+            # transaction may summarize and queue this call's outcome.
+            call = (await db.execute(select(Call).where(
+                Call.id == call_id, Call.practice_id.is_not(None), Call.finalized.is_(False),
+                Call.status.in_([CallStatus.completed, CallStatus.failed]),
+            ).with_for_update(skip_locked=True))).scalar_one_or_none()
+            if call is None:
                 return
             practice = await db.get(Practice, call.practice_id)
             entries = list((await db.execute(
@@ -92,15 +109,7 @@ async def finalize(call_id: str) -> None:
             call.finalized = True
 
             # One email per call to the business, within 60 s of hang-up (web demos only if asked).
-            wants = {
-                "inbound": True,
-                "web": bool((practice.notifications or {}).get("web_summaries")),
-                # Reminder / waitlist calls: only when something changed.
-                "outbound": call.outcome in ("booked", "rescheduled", "cancelled", "message_taken"),
-            }.get(call.direction, False)
-            if "off_topic" in (call.flags or []) and call.outcome in ("info_given", "abandoned", None):
-                wants = False  # a troll call isn't worth an email; it's still in the call log
-            if wants and call.outcome != "abandoned":
+            if wants_business_summary(practice, call):
                 appt = await db.get(Appointment, call.appointment_id) if call.appointment_id else None
                 staff = await booking.staff_of(db, practice.id)
                 described = booking.describe(practice, appt, staff, language) if appt else None
@@ -127,7 +136,7 @@ async def finalize(call_id: str) -> None:
                 entry = await db.get(WaitlistEntry, call.purpose.split(":")[1])
                 if entry and entry.status == "offered":
                     entry.status = "waiting"
-            await notifications.commit_ignoring_duplicates(db)
+            await db.commit()
             notifications.kick()
             events.publish(call.id)
             events.publish(f"practice:{practice.id}")
