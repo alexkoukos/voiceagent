@@ -6,7 +6,7 @@ struct NewCallView: View {
     static let voices: [(id: String, label: String)] = [
         ("default", "Γυναικεία, ήρεμη (Kore)"), ("Aoede", "Γυναικεία, ανάλαφρη (Aoede)"),
         ("Puck", "Αντρική, κεφάτη (Puck)"), ("Charon", "Αντρική, ήρεμη (Charon)"),
-        ("Fenrir", "Αντρική, ενθουσιώδης (Fenrir)"),
+        ("Fenrir", "Αντρική, ενθουσιώδης (Fenrir)"), ("Algenib", "Αντρική, τραχιά (Algenib)"),
     ]
     private static let customId = "custom"
 
@@ -56,7 +56,7 @@ struct NewCallView: View {
                 .padding(.bottom, Space.xxxl)
             }
             .background(Palette.background)
-            .navigationTitle("Νέα φάρσα")
+            .navigationTitle("Νέα κλήση")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
@@ -128,17 +128,17 @@ struct NewCallView: View {
 
     private var prankSection: some View {
         VStack(alignment: .leading, spacing: Space.m) {
-            SectionTitle("Ποια φάρσα;")
+            SectionTitle("Ποιο σενάριο;")
             if !loaded {
                 ForEach(0..<3, id: \.self) { _ in
-                    PrankCard(title: "Φάρσα φόρτωση", subtitle: "Περιγραφή της φάρσας που φορτώνει", selected: false) {}
+                    PrankCard(title: "Σενάριο που φορτώνει", subtitle: "Περιγραφή του σεναρίου που φορτώνει", selected: false) {}
                 }
                 .redacted(reason: .placeholder)
             } else {
                 ForEach(templates) { t in
                     PrankCard(title: t.displayTitle, subtitle: t.scenario, selected: prankId == t.id) { select(t) }
                 }
-                PrankCard(title: "Δική μου φάρσα", subtitle: "Γράψε εσύ ποιος παίρνει και τι θα πει.",
+                PrankCard(title: "Δικό μου σενάριο", subtitle: "Γράψε εσύ ποιος παίρνει και τι θα πει.",
                           selected: isCustom) { prankId = Self.customId }
                 if isCustom { customFields }
             }
@@ -148,9 +148,9 @@ struct NewCallView: View {
     private var customFields: some View {
         VStack(alignment: .leading, spacing: Space.m) {
             Field("Ποιος παίρνει;", text: $persona, hint: "π.χ. υπάλληλος της ΔΕΗ")
-            Field("Ποια είναι η φάρσα;", text: $scenario, hint: "π.χ. του λες ότι θα του κόψουν το ρεύμα για…")
+            Field("Τι θα γίνει στην κλήση;", text: $scenario, hint: "π.χ. του λες ότι θα του κόψουν το ρεύμα για…")
             Field("Τι ξέρει ο AI για τον φίλο; (προαιρετικό)", text: $context, hint: "π.χ. είναι Ολυμπιακός, λέει συνέχεια «ρε φίλε»")
-            Field("Πότε να αποκαλύψει τη φάρσα; (προαιρετικό)", text: $reveal, hint: "π.χ. μόλις θυμώσει")
+            Field("Πότε να πει ότι είναι AI; (προαιρετικό)", text: $reveal, hint: "π.χ. μόλις θυμώσει")
             Button { Task { await saveTemplate() } } label: {
                 Label("Αποθήκευση για επόμενη φορά", systemImage: "bookmark")
             }
@@ -188,7 +188,7 @@ struct NewCallView: View {
 
     private var callBar: some View {
         Button { Task { await startCall() } } label: {
-            Label(starting ? "Ξεκινάει…" : (selectedFriend.map { "Κάλεσε · \($0.name)" } ?? "Διάλεξε φίλο και φάρσα"),
+            Label(starting ? "Ξεκινάει…" : (selectedFriend.map { "Κάλεσε · \($0.name)" } ?? "Διάλεξε φίλο και σενάριο"),
                   systemImage: "phone.fill")
         }
         .buttonStyle(PrimaryButtonStyle())
@@ -203,6 +203,7 @@ struct NewCallView: View {
     private func select(_ t: PromptTemplate) {
         prankId = t.id
         persona = t.persona; scenario = t.scenario; context = t.context; reveal = t.reveal
+        if let v = t.voice, Self.voices.contains(where: { $0.id == v }) { voice = v }
     }
 
     private func load() async {
@@ -241,7 +242,7 @@ struct NewCallView: View {
                 scenario: scenario.trimmed, context: context.trimmed, reveal: reveal.trimmed))
             templates.append(t)
             prankId = t.id
-            notice = "Αποθηκεύτηκε στις φάρσες σου."
+            notice = "Αποθηκεύτηκε στα σενάριά σου."
         } catch { errorMessage = friendlyMessage(error) }
     }
 }

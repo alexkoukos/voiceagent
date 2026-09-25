@@ -11,7 +11,7 @@ from app.models import CallStatus, TranscriptRole
 SHORT_TEXT = 200
 LONG_TEXT = 2000
 
-Voice = Literal["default", "Puck", "Charon", "Fenrir", "Kore", "Aoede"]
+Voice = Literal["default", "Puck", "Charon", "Fenrir", "Algenib", "Kore", "Aoede"]
 
 
 def normalize_phone(value: str) -> str:
@@ -102,6 +102,7 @@ class PromptTemplateCreate(BaseModel):
     scenario: str = Field(min_length=1, max_length=LONG_TEXT)
     context: str = Field(default="", max_length=LONG_TEXT)
     reveal: str = Field(default="", max_length=LONG_TEXT)
+    voice: Voice | None = None
 
 
 class PromptTemplateOut(BaseModel):
@@ -113,3 +114,4 @@ class PromptTemplateOut(BaseModel):
     scenario: str
     context: str
     reveal: str
+    voice: str | None = None

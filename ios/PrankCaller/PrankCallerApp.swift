@@ -6,7 +6,7 @@ struct PrankCallerApp: App {
         WindowGroup {
             TabView {
                 NewCallView()
-                    .tabItem { Label("Φάρσα", systemImage: "phone.fill") }
+                    .tabItem { Label("Κλήση", systemImage: "phone.fill") }
                 HistoryView()
                     .tabItem { Label("Ιστορικό", systemImage: "clock") }
             }
