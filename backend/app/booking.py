@@ -30,6 +30,9 @@ DEFAULT_RULES = {
     "max_days_ahead": 60,
     "min_notice_minutes": 60,
     "holidays": [],
+    # Dated closures (OP3): [{"id", "from", "to", "staff_id"?, "reason"?}], ISO dates, both ends
+    # included. With a staff_id it is that person's leave; without, the whole business is closed.
+    "closures": [],
 }
 
 # Parts of the day as callers say them -> (from, to) in local time.
@@ -171,6 +174,25 @@ def rules_for(practice: Practice) -> dict:
     return {**DEFAULT_RULES, **(practice.rules or {})}
 
 
+def closure_on(practice: Practice, day: date, staff_id: str | None = None) -> dict | None:
+    """The closure covering `day`: the whole business's, or `staff_id`'s leave (OP3)."""
+    d = day.isoformat()
+    for c in rules_for(practice)["closures"] or []:
+        if c["from"] <= d <= c["to"] and (not c.get("staff_id") or c["staff_id"] == staff_id):
+            return c
+    return None
+
+
+def say_closure(closure: dict, language: str) -> dict:
+    out = {
+        "from": say_date(date.fromisoformat(closure["from"]), language),
+        "to": say_date(date.fromisoformat(closure["to"]), language),
+    }
+    if closure.get("reason"):
+        out["reason"] = closure["reason"]
+    return out
+
+
 def find_service(practice: Practice, service_id: str | None) -> dict | None:
     services = practice.services or []
     if not service_id:
@@ -193,12 +215,13 @@ def free_slots(
     busy: list[tuple[datetime, datetime]],
     now: datetime,
     hours: dict | None = None,
+    staff_id: str | None = None,
 ) -> list[datetime]:
     """Start times on `day` where a `duration_minutes` visit fits inside working hours,
     after the minimum notice, and clear of every busy interval (plus the buffer)."""
     rules = rules_for(practice)
     tz = ZoneInfo(practice.timezone)
-    if day.isoformat() in rules["holidays"]:
+    if day.isoformat() in rules["holidays"] or closure_on(practice, day, staff_id):
         return []
     if day > now.astimezone(tz).date() + timedelta(days=rules["max_days_ahead"]):
         return []
@@ -234,7 +257,7 @@ def hours_state(practice: Practice, now: datetime) -> tuple[str, datetime | None
     holidays = rules_for(practice)["holidays"]
 
     def spans(d: date) -> list[tuple[datetime, datetime]]:
-        if d.isoformat() in holidays:
+        if d.isoformat() in holidays or closure_on(practice, d):
             return []
         return [
             (datetime.combine(d, _hhmm(a), tz), datetime.combine(d, _hhmm(b), tz))
@@ -245,7 +268,7 @@ def hours_state(practice: Practice, now: datetime) -> tuple[str, datetime | None
     if any(a <= local < b for a, b in today):
         return "open", None
     next_open = None
-    for i in range(0, 15):
+    for i in range(0, rules_for(practice)["max_days_ahead"] + 1):
         starts = [a for a, _ in spans(local.date() + timedelta(days=i)) if a > local]
         if starts:
             next_open = min(starts)
@@ -368,10 +391,10 @@ async def availability(
     free: dict[datetime, list[Resource]] = {}
     for r in resources:
         # Closed days, holidays and dates outside the booking window need no I/O.
-        if not free_slots(practice, day, service["duration_minutes"], [], now, r.hours):
+        if not free_slots(practice, day, service["duration_minutes"], [], now, r.hours, r.staff_id):
             continue
         busy = await busy_intervals(db, practice, start - buffer, start + timedelta(days=1) + buffer, r, exclude_id)
-        for slot in free_slots(practice, day, service["duration_minutes"], busy, now, r.hours):
+        for slot in free_slots(practice, day, service["duration_minutes"], busy, now, r.hours, r.staff_id):
             free.setdefault(slot, []).append(r)
     return dict(sorted(free.items()))
 
@@ -446,10 +469,20 @@ async def check_availability(
         out["before"] = before.strftime("%H:%M")
     if person:
         out["staff"] = person.name
+    # OP3: say why the day is empty and search from the day the closure ends.
+    search_from = resolved.day
+    closed = closure_on(practice, resolved.day)
+    away = closure_on(practice, resolved.day, person.id) if person and not closed else None
+    if closed:
+        out["business_closed"] = say_closure(closed, language)
+        search_from = max(search_from, date.fromisoformat(closed["to"]))
+    elif away:
+        out["staff_away"] = say_closure(away, language)
+        search_from = max(search_from, date.fromisoformat(away["to"]))
     if not matching:
         out["other_free_times_that_day"] = [s.strftime("%H:%M") for s in slots][:6]
         out["next_days_with_free_times"] = await _next_free_days(
-            db, practice, resolved.day, service, now, resources=resources, language=language, exclude_id=exclude_id
+            db, practice, search_from, service, now, resources=resources, language=language, exclude_id=exclude_id
         )
     return out
 

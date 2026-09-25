@@ -439,6 +439,31 @@ class AppointmentMove(BaseModel):
     time: str = Field(pattern=HHMM)
 
 
+class ClosureIn(BaseModel):
+    """"Κλειστά 10 έως 25 Αυγούστου" or "ο Γιώργος λείπει Παρασκευή" (OP3). Both days included."""
+    date_from: dt.date
+    date_to: dt.date
+    staff_id: str | None = None
+    reason: str | None = Field(default=None, max_length=200)
+
+    @field_validator("date_to")
+    @classmethod
+    def _not_before_start(cls, v: dt.date, info) -> dt.date:
+        if "date_from" in info.data and v < info.data["date_from"]:
+            raise ValueError("date_to is before date_from")
+        return v
+
+
+class ClosureOut(BaseModel):
+    id: str
+    date_from: dt.date
+    date_to: dt.date
+    staff_id: str | None
+    reason: str | None
+    # Booked appointments inside the closure: they need rebooking.
+    to_rebook: list[AppointmentOut]
+
+
 class WaitlistOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
