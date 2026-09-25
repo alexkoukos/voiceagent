@@ -239,7 +239,7 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str) -> Ag
             # ElevenLabs decides when a sentence is finished. The plugin's default ("manual")
             # waits for a commit the session never sends, so no final transcript ever arrived
             # and the agent stayed silent for the whole call.
-            server_vad={"vad_silence_threshold_secs": 0.5},
+            server_vad={"vad_silence_threshold_secs": 0.3},
         )
         tts = elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
         # Open the connections now, while the phone rings, not on the first reply.
@@ -265,7 +265,7 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str) -> Ag
                 # version="v1" must be explicit: outside LiveKit Cloud hosting the default is the
                 # local v1-mini model, which doesn't know Greek, so every turn waited max_delay.
                 turn_detection=inference.TurnDetector(version="v1", local_fallback=False),
-                endpointing={"mode": "dynamic", "min_delay": 0.4, "max_delay": 1.5},
+                endpointing={"mode": "dynamic", "min_delay": 0.2, "max_delay": 1.5},
                 # Start writing and voicing the reply before the friend has fully finished.
                 preemptive_generation={"enabled": True, "preemptive_tts": True},
             ),
