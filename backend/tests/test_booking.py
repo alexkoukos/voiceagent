@@ -80,3 +80,23 @@ def test_free_slots_closed_holiday_notice_and_horizon():
 def test_part_of_day():
     assert in_part_of_day(datetime(2026, 9, 28, 17, 0, tzinfo=ATH), "afternoon")
     assert not in_part_of_day(datetime(2026, 9, 28, 9, 0, tzinfo=ATH), "afternoon")
+
+
+def test_relative_to_last_offer():
+    offered = date(2026, 9, 29)
+    assert resolve_date("νωρίτερα", TODAY, offered).day == offered
+    assert resolve_date("πιο αργά το απόγευμα", TODAY, offered).part_of_day == "afternoon"
+    assert resolve_date("την επόμενη μέρα", TODAY, offered).day == date(2026, 9, 30)
+    assert resolve_date("την άλλη μέρα", TODAY, offered).day == date(2026, 9, 30)
+    assert resolve_date("νωρίτερα", TODAY).day is None  # nothing offered yet
+    assert resolve_date("την Πέμπτη νωρίτερα", TODAY, offered).day == date(2026, 10, 1)
+
+
+def test_relative_time_words():
+    from app.booking import relative_time
+    assert relative_time("πιο νωρίς") == "earlier"
+    assert relative_time("Νωρίτερα γίνεται;") == "earlier"
+    assert relative_time("κάτι πιο αργά") == "later"
+    assert relative_time("αργότερα") == "later"
+    assert relative_time("later please") == "later"
+    assert relative_time("την Τρίτη") is None

@@ -323,6 +323,8 @@ class ReceptionistAgent(PrankCallerAgent):
 
         Args:
             intent: One of book, change, cancel, confirm, question, message, human, emergency, unclear, off_topic (not about the business, or trolling).
+                book = they need a visit or treatment ("θέλω ραντεβού", "να φτιάξω/αλλάξω ένα δόντι", "με πονάει").
+                change = only an appointment they ALREADY have ("να αλλάξω το ραντεβού μου", "να το μεταφέρω").
             staff: Who they asked for, in their words ("με τον Γιώργο", "τον γιατρό"); empty if nobody.
             department: The department they named, if any.
             language: el or en only when the caller clearly speaks that language; empty if uncertain.
@@ -342,19 +344,27 @@ class ReceptionistAgent(PrankCallerAgent):
         return json.dumps(result, ensure_ascii=False)
 
     @function_tool
-    async def check_availability(self, when: str, service_id: str = "", staff: str = "", appointment_id: str = "") -> str:
-        """Finds free appointment times. Call it before offering any time.
+    async def check_availability(
+        self, when: str, service_id: str = "", staff: str = "", appointment_id: str = "",
+        after: str = "", before: str = "",
+    ) -> str:
+        """Finds free appointment times. Call it before offering any time, and again whenever
+        the caller wants a different day or time ("νωρίτερα", "αργότερα", "την επόμενη μέρα").
 
         Args:
             when: The day the caller asked for, in their own words, e.g. "την Τρίτη το
                 απόγευμα", "αύριο", "next Monday morning". Never convert it to a date yourself.
+                For "νωρίτερα"/"αργότερα"/"την επόμενη μέρα" pass their words: they are taken
+                relative to the day you just offered.
             service_id: The id of the service from the list of services, if known.
             staff: Who they want it with, in their words; empty for anyone free.
             appointment_id: When moving an existing appointment, its id.
+            after: "αργότερα" / "later": the latest time you just offered (HH:MM); only later times come back.
+            before: "νωρίτερα" / "earlier": the earliest time you just offered (HH:MM); only earlier times come back.
         """
         return await self._tool("check_availability", {
             "when": when, "service_id": service_id or None, "staff": staff or None,
-            "appointment_id": appointment_id or None,
+            "appointment_id": appointment_id or None, "after": after or None, "before": before or None,
         })
 
     @function_tool
@@ -596,11 +606,10 @@ def language_parts(engine: str, voice: str, language: str, vocabulary: list[str]
         model=GEMINI_MODEL,
         voice=gemini_voice(voice),
         language=REALTIME_LANGUAGE.get(language),
-        # Transcribe only the call's language. Left on auto-detect, Greek came back as
-        # Italian/Spanish fragments and swear words were rewritten ("Γαμώτο" -> "Σταματήστε").
-        input_audio_transcription=genai_types.AudioTranscriptionConfig(
-            language_codes=[REALTIME_LANGUAGE.get(language, "en-US")], custom_vocabulary=words or None,
-        ),
+        # Gemini Live understands Greek well but its own transcript of it doesn't: even pinned
+        # to el-GR it wrote Portuguese/Spanish/German fragments ("diepes", "né"). The caller's
+        # words come from the STT below instead (see CallerTurns).
+        input_audio_transcription=None,
         api_key=os.environ.get("GEMINI_API_KEY"),
         # Decide the friend has finished after a short pause, not Gemini's slower default.
         realtime_input_config=genai_types.RealtimeInputConfig(
@@ -609,7 +618,71 @@ def language_parts(engine: str, voice: str, language: str, vocabulary: list[str]
                 silence_duration_ms=REALTIME_SILENCE_MS,
             ),
         ),
-    )}
+    ), "stt": caller_stt(language)}
+
+
+def caller_stt(language: str):
+    """Transcript-only STT for the realtime engine (Gemini replies to the audio itself).
+    Deepgram nova-3 via LiveKit Inference was the best streaming option on a real Greek
+    phone recording (2026-09-25); Speechmatics, Cartesia and Gemini Transcribe Live garbled
+    more, AssemblyAI has no Greek."""
+    return inference.STT("deepgram/nova-3", language=language)
+
+
+class CallerTurns:
+    """Calls `on_turn(text)` once per caller turn. The realtime engine takes the text from the
+    STT (Deepgram), joining its final segments until Gemini commits the turn; if the STT
+    fails or stays silent, it falls back to Gemini's own text. Other engines use the turn text."""
+
+    LATE_SECONDS = 1.5  # how long to wait for the STT when Gemini's turn arrives first
+
+    def __init__(self, session: AgentSession, engine: str, on_turn) -> None:
+        self._on_turn = on_turn
+        self._stt = engine == "realtime"
+        self._parts: list[str] = []
+        self._late: asyncio.TimerHandle | None = None
+        session.on("conversation_item_added", self._item)
+        if self._stt:
+            session.on("user_input_transcribed", self._final)
+            session.on("error", self._error)
+
+    def _item(self, ev) -> None:
+        item = ev.item
+        if getattr(item, "type", None) != "message" or item.role != "user":
+            return
+        if not self._stt:
+            if item.text_content:
+                self._on_turn(item.text_content)
+        elif self._parts:
+            self._flush()
+        elif self._late is None:
+            self._late = asyncio.get_running_loop().call_later(self.LATE_SECONDS, self._fallback, item.text_content)
+
+    def _final(self, ev) -> None:
+        text = (getattr(ev, "transcript", "") or "").strip()
+        # Gemini still sends its own transcript through this event; only its events carry an item_id.
+        if not getattr(ev, "is_final", False) or not text or getattr(ev, "item_id", None):
+            return
+        self._parts.append(text)
+        if self._late is not None:  # Gemini's turn already arrived: this is its text
+            self._late.cancel()
+            self._late = None
+            self._flush()
+
+    def _fallback(self, text: str | None) -> None:
+        self._late = None
+        if text:
+            self._on_turn(text)
+
+    def _flush(self) -> None:
+        text = " ".join(self._parts)
+        self._parts.clear()
+        self._on_turn(text)
+
+    def _error(self, ev) -> None:
+        if "STT" in type(getattr(ev, "source", None)).__name__:
+            logger.warning("caller STT failed, using Gemini's transcript: %s", getattr(ev, "error", ev))
+            self._stt = False
 
 
 def log_latency(session: AgentSession, call_id: str) -> None:
@@ -682,19 +755,19 @@ async def pick_engine(call_id: str, receptionist: bool = False) -> str:
     return engine
 
 
-def track_transcript(session: AgentSession, call_id: str) -> None:
+def track_transcript(session: AgentSession, call_id: str, engine: str) -> None:
+    def _line(role: str, text: str) -> None:
+        # What each side said, to judge recognition and language from the logs.
+        logger.info("call %s %s: %s", call_id, role, text)
+        asyncio.create_task(report(call_id, transcript_role=role, transcript_text=text))
+
     @session.on("conversation_item_added")
     def _on_item(ev) -> None:
-        if getattr(ev.item, "type", None) != "message":  # e.g. agent handoffs
-            return
-        role = "agent" if ev.item.role == "assistant" else "friend"
-        text = ev.item.text_content
-        if text:
-            # What each side said, to judge recognition and language from the logs.
-            logger.info("call %s %s: %s", call_id, role, text)
-            asyncio.create_task(
-                report(call_id, transcript_role=role, transcript_text=text)
-            )
+        # Not handoffs; the caller's lines come from CallerTurns.
+        if getattr(ev.item, "type", None) == "message" and ev.item.role == "assistant" and ev.item.text_content:
+            _line("agent", ev.item.text_content)
+
+    CallerTurns(session, engine, lambda text: _line("friend", text))
 
 
 # If the agent says roughly the same thing this many times in a row it's stuck (looping on
@@ -1057,16 +1130,16 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
 
     agent = rc.make_agent(rc.language)
     rc.agent = agent
-    track_transcript(session, call_id)
+    track_transcript(session, call_id, rc.engine)
     log_latency(session, call_id)
     guard_repetition(session, ctx, call_id)
     rc.track_latency()
 
-    @session.on("conversation_item_added")
-    def _heard(ev) -> None:
-        if getattr(ev.item, "type", None) == "message" and ev.item.role == "user" and ev.item.text_content:
-            rc.heard_user(ev.item.text_content)
-            rc.check_emergency(ev.item.text_content)
+    def _heard(text: str) -> None:
+        rc.heard_user(text)
+        rc.check_emergency(text)
+
+    CallerTurns(session, rc.engine, _heard)
 
     @session.on("user_input_transcribed")
     def _partial(ev) -> None:
@@ -1154,7 +1227,7 @@ async def entrypoint(ctx: JobContext) -> None:
         opening_task=opening_task, fillers=engine == "pipeline",
     )
 
-    track_transcript(session, call_id)
+    track_transcript(session, call_id, engine)
     log_latency(session, call_id)
     guard_repetition(session, ctx, call_id)
 

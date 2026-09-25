@@ -434,3 +434,35 @@ async def test_calendar_reconciliation_reattaches_or_deletes_old_events(sessions
         await db.commit()
         assert appt.gcal_event_id == "managed"
         deleted.assert_awaited_once_with("calendar@example.invalid", "orphan")
+
+
+@pytest.mark.asyncio
+async def test_earlier_later_and_next_day_follow_the_last_offer(sessions, monkeypatch):
+    p = await seed(sessions)
+    async with sessions() as db:
+        p = await db.get(Practice, p.id)
+        p.hours = {"mon": [["09:00", "12:00"]], "tue": [["09:00", "12:00"]]}
+        await db.commit()
+    monkeypatch.setattr(receptionist, "utcnow", lambda: NOW)
+    monkeypatch.setattr(booking, "busy_intervals", AsyncMock(return_value=[]))
+
+    def ask(when, **extra):
+        return SimpleNamespace(when=when, service_id="check", staff=None, appointment_id=None,
+                               after=extra.get("after"), before=extra.get("before"))
+
+    async with sessions() as db:
+        call = Call(practice_id=p.id, persona="", scenario="")
+        db.add(call)
+        await db.commit()
+        first = await receptionist.tool_check_availability(db, call, ask("τη Δευτέρα"))
+        assert first["date"] == "2026-09-28" and first["free_times"][:3] == ["09:00", "09:15", "09:30"]
+        # "Later" without a time: after the third time offered, same day.
+        later = await receptionist.tool_check_availability(db, call, ask("αργότερα"))
+        assert later["date"] == "2026-09-28" and later["free_times"][0] == "09:45"
+        # The model passes the latest time it offered.
+        later = await receptionist.tool_check_availability(db, call, ask("πιο αργά", after="10:30"))
+        assert later["free_times"][0] == "10:45"
+        earlier = await receptionist.tool_check_availability(db, call, ask("νωρίτερα", before="10:00"))
+        assert earlier["free_times"][-1] == "09:45"
+        nxt = await receptionist.tool_check_availability(db, call, ask("την επόμενη μέρα"))
+        assert nxt["date"] == "2026-09-29" and nxt["free_times"][0] == "09:00"
