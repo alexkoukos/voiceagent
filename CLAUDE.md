@@ -4,7 +4,7 @@ See [README.md](README.md) for layout, setup and deploy, and the PRD for the spe
 
 ## Direction change (2026-09-25, not yet deployed)
 - Calls are now professional, not pranks: no reveal, never mentions Alexandros. It still says it's an AI if asked directly, and deletes the recording on request.
-- Only Greek (+30/+357) or English (everyone else); the agent never switches language mid-call. New soft male voice `Algieba`.
+- Only Greek (+30/+357) or English (everyone else); the agent never switches language mid-call. New soft male voice `Algieba`; receptionist practices default to Gemini `Zubenelgenubi` (2026-09-25).
 - Still in testing, so no up-front "this call is recorded" notice. Add one (or turn recording off) before real use: Greek law generally requires it.
 
 ## 2.0 receptionist (2026-09-25, feature implementation)
