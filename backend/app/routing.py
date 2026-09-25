@@ -36,12 +36,16 @@ EMERGENCY_SCRIPT = {
 
 INTENTS = ("book", "change", "cancel", "confirm", "question", "message", "human", "emergency", "unclear", "off_topic")
 
-# Said on the last off-topic / abusive turn before the agent hangs up.
+# Three strikes for off-topic / abusive turns: a warning, a last warning, then goodbye and hang up.
+STRIKE_LINES = {
+    "el": ("Μπορώ να βοηθήσω μόνο με ραντεβού και ερωτήσεις για την επιχείρηση. Τι χρειάζεστε;",
+           "Αν συνεχίσετε έτσι, θα κλείσω την κλήση. Θέλετε κάτι για ραντεβού;"),
+    "en": ("I can only help with appointments and questions about the business. What do you need?",
+           "If this continues, I'll end the call. Is there anything about an appointment?"),
+}
 END_LINE = {
-    "el": "Αυτή η γραμμή είναι μόνο για ραντεβού και ερωτήσεις για την επιχείρηση. Δεν μπορώ να βοηθήσω σε κάτι άλλο, "
-          "οπότε κλείνω την κλήση. Αν χρειαστείτε κάτι, καλέστε ξανά. Καλή συνέχεια.",
-    "en": "This line is only for appointments and questions about the business. I can't help with anything else, "
-          "so I'll end the call now. If you need something, please call again. Goodbye.",
+    "el": "Κλείνω την κλήση. Γεια σας.",
+    "en": "I'm ending the call now. Goodbye.",
 }
 BOOKING_INTENTS = {"book", "change", "cancel", "confirm"}
 
@@ -59,7 +63,7 @@ def rules_for(practice: Practice) -> dict:
         # Off by default: the call keeps its language (Greek, or English for foreign numbers).
         "language_switch": r.get("language_switch", False),
         # Off-topic or abusive requests allowed before the agent ends the call.
-        "off_topic_limit": int(r.get("off_topic_limit", 2)),
+        "off_topic_limit": int(r.get("off_topic_limit", 3)),
         "end_line": r.get("end_line") or {},
     }
 
@@ -162,17 +166,11 @@ async def route(
             out.update(path="end_call", say=rules["end_line"].get(key) or END_LINE[key])
             return out
         await log(db, call, "intent", intent, f"off-topic {n}/{limit}", "refuse")
-        if n >= limit - 1:
-            # Last refusal before ending: warn clearly that the call will end.
-            nxt = ("Say briefly and politely that this line is only for the business (appointments, questions about "
-                   "it, messages), and warn clearly that if there's nothing about the business you'll have to end the "
-                   "call. Then ask if there's anything about the business you can help with. Don't do what they asked, "
-                   "don't joke along, don't explain further.")
-        else:
-            nxt = ("Say briefly and politely that you can only help with this business (appointments, questions about "
-                   "it, messages), and ask what they need. Don't do what they asked, don't joke along, don't explain "
-                   "further.")
-        out.update(path="refuse", next=nxt)
+        key = "el" if lang == "el" else "en"
+        # The last strike before hanging up says the call will end if it happens again.
+        say = STRIKE_LINES[key][1 if n >= limit - 1 else 0]
+        out.update(path="refuse", say=say,
+                   next=f"Say exactly this and nothing else, then wait: {say} Don't answer what they asked.")
         return out
 
     if intent == "unclear":
