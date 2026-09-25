@@ -156,26 +156,10 @@ async def build_metadata(
         return prompt
 
     record = call.direction != "web"
-    greeting = default_greeting(practice, now=now, language=language, recording=record, hours_state=state,
-                                after_hours=rules["after_hours"])
+    greeting = default_greeting(practice, language=language)
     instruction = None
     if purpose:
         instruction = purpose["greeting_" + ("el" if language == "el" else "en")]
-    elif customer and customer.name:
-        first = upcoming[0] if upcoming else None
-        if language == "el":
-            instruction = (f"Πες αυτόν τον χαιρετισμό: «{greeting}». Μετά χαιρέτα τον πελάτη με το όνομά του "
-                           f"({customer.name}), φυσικά.")
-            if first:
-                d = booking.describe(practice, first, staff, language)
-                instruction += (f" Πες ότι βλέπεις το ραντεβού του {d['date_spoken']} στις {d['time']} "
-                                "και ρώτα αν παίρνει γι' αυτό, για αλλαγή ή επιβεβαίωση.")
-        else:
-            instruction = f"Say this greeting: \"{greeting}\". Then greet the caller by name ({customer.name})."
-            if first:
-                d = booking.describe(practice, first, staff, language)
-                instruction += (f" Say you can see their appointment on {d['date_spoken']} at {d['time']} and ask "
-                                "if they're calling about it, to change or confirm it.")
     meta = {
         "mode": "receptionist",
         "call_id": call.id,
