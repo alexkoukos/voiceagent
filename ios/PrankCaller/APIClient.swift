@@ -101,6 +101,10 @@ struct APIClient {
     func options() async throws -> ServerOptions { try await get("/options") }
     func friends() async throws -> [Friend] { try await get("/friends") }
     func addFriend(_ f: NewFriend) async throws -> Friend { try await send("POST", "/friends", body: f) }
+    func updateFriend(_ id: String, _ f: NewFriend) async throws -> Friend { try await send("PUT", "/friends/\(id)", body: f) }
+    func deleteFriend(_ id: String) async throws { _ = try await request("DELETE", "/friends/\(id)") }
+    /// Includes deleted friends, so past calls keep their names.
+    func allFriends() async throws -> [Friend] { try await get("/friends?include_deleted=true") }
     func templates() async throws -> [PromptTemplate] { try await get("/templates") }
     func addTemplate(_ t: NewTemplate) async throws -> PromptTemplate { try await send("POST", "/templates", body: t) }
     func deleteTemplate(_ id: String) async throws { _ = try await request("DELETE", "/templates/\(id)") }

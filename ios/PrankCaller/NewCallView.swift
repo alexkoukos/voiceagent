@@ -24,6 +24,8 @@ struct NewCallView: View {
     /// nil = automatic, from the friend's phone prefix.
     @State private var language: String?
     @State private var showAddFriend = false
+    @State private var editingFriend: Friend?
+    @State private var deletingFriend: Friend?
     @State private var showSettings = false
     @State private var liveCall: LiveCallRequest?
     @State private var errorMessage: String?
@@ -69,6 +71,18 @@ struct NewCallView: View {
                     friendId = friend.id
                 }
             }
+            .sheet(item: $editingFriend) { f in
+                AddFriendView(editing: f) { updated in
+                    if let i = friends.firstIndex(where: { $0.id == updated.id }) { friends[i] = updated }
+                }
+            }
+            .confirmationDialog("Διαγραφή φίλου;", isPresented: Binding(
+                get: { deletingFriend != nil }, set: { if !$0 { deletingFriend = nil } }
+            ), titleVisibility: .visible, presenting: deletingFriend) { f in
+                Button("Διαγραφή \(f.name)", role: .destructive) { Task { await deleteFriend(f) } }
+            } message: { _ in
+                Text("Οι παλιές κλήσεις μένουν στο ιστορικό.")
+            }
             .sheet(isPresented: $showSettings, onDismiss: { Task { await load() } }) { SettingsView() }
             .fullScreenCover(item: $liveCall) { req in
                 LiveCallView(callId: req.call.id, friendName: req.friendName, request: req.request)
@@ -106,6 +120,10 @@ struct NewCallView: View {
                     HStack(spacing: Space.s) {
                         ForEach(friends) { f in
                             FriendChip(name: f.name, selected: f.id == friendId) { friendId = f.id }
+                                .contextMenu {
+                                    Button { editingFriend = f } label: { Label("Επεξεργασία", systemImage: "pencil") }
+                                    Button(role: .destructive) { deletingFriend = f } label: { Label("Διαγραφή", systemImage: "trash") }
+                                }
                         }
                         Button { showAddFriend = true } label: {
                             Image(systemName: "plus")
@@ -245,6 +263,14 @@ struct NewCallView: View {
         } catch { errorMessage = friendlyMessage(error) }
     }
 
+    private func deleteFriend(_ f: Friend) async {
+        do {
+            try await api.deleteFriend(f.id)
+            friends.removeAll { $0.id == f.id }
+            if friendId == f.id { friendId = "" }
+        } catch { errorMessage = friendlyMessage(error) }
+    }
+
     private func saveTemplate() async {
         do {
             let firstLine = scenario.trimmed.split(separator: "\n").first.map(String.init) ?? scenario.trimmed
@@ -308,11 +334,20 @@ extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
 }
 
+/// Adds a friend, or edits one when `editing` is set.
 struct AddFriendView: View {
     @Environment(\.dismiss) private var dismiss
-    let onAdded: (Friend) -> Void
-    @State private var name = ""
-    @State private var phone = ""
+    var editing: Friend? = nil
+    let onSaved: (Friend) -> Void
+    @State private var name: String
+    @State private var phone: String
+
+    init(editing: Friend? = nil, onSaved: @escaping (Friend) -> Void) {
+        self.editing = editing
+        self.onSaved = onSaved
+        _name = State(initialValue: editing?.name ?? "")
+        _phone = State(initialValue: editing?.phoneNumber ?? "")
+    }
     @State private var errorMessage: String?
     @State private var saving = false
 
@@ -340,7 +375,7 @@ struct AddFriendView: View {
                 }
                 if let errorMessage { Text(errorMessage).foregroundStyle(Palette.danger) }
             }
-            .navigationTitle("Νέος φίλος")
+            .navigationTitle(editing == nil ? "Νέος φίλος" : "Επεξεργασία")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Άκυρο") { dismiss() } }
@@ -357,7 +392,13 @@ struct AddFriendView: View {
         saving = true
         defer { saving = false }
         do {
-            onAdded(try await APIClient().addFriend(NewFriend(name: name.trimmed, phoneNumber: normalizedPhone)))
+            let f = NewFriend(name: name.trimmed, phoneNumber: normalizedPhone)
+            let api = APIClient()
+            if let editing {
+                onSaved(try await api.updateFriend(editing.id, f))
+            } else {
+                onSaved(try await api.addFriend(f))
+            }
             dismiss()
         } catch { errorMessage = friendlyMessage(error) }
     }

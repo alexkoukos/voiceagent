@@ -48,7 +48,7 @@ struct HistoryView: View {
         guard !Settings.apiKey.isEmpty else { loaded = true; return }
         do {
             async let c = api.calls()
-            async let f = api.friends()
+            async let f = api.allFriends()
             let (cs, fs) = try await (c, f)
             calls = cs
             friends = Dictionary(fs.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
