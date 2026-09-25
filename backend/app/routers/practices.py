@@ -8,11 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import booking, events, metrics, notifications, receptionist, texts
+from app import booking, events, finalize, metrics, notifications, receptionist, texts
 from app.config import CONFIG_DIR
 from app.database import get_db
 from app.models import (
-    Appointment, Call, Device, Handoff, Message, Practice, RoutingEvent, Staff, TranscriptEntry, WaitlistEntry,
+    Appointment, Call, Device, Handoff, Message, Notification, Practice, RoutingEvent, Staff, TranscriptEntry,
+    TranscriptRole, WaitlistEntry,
 )
 from app.schemas import (
     AppointmentCreate, AppointmentMove, AppointmentOut, CallReview, DeviceIn, HandoffJoin, HandoffOut,
@@ -185,6 +186,55 @@ async def review_call(practice_id: str, call_id: str, payload: CallReview, db: A
     await db.commit()
     await db.refresh(call)
     return call
+
+
+@router.post("/{practice_id}/calls/{call_id}/retry-summary")
+async def retry_summary(practice_id: str, call_id: str, db: AsyncSession = Depends(get_db)):
+    """Operator recovery after the summary model failed during call finalization."""
+    call = await _call(db, practice_id, call_id)
+    if not call.finalized:
+        raise HTTPException(status_code=409, detail="Call has not been finalized")
+    entries = (await db.execute(select(TranscriptEntry).where(TranscriptEntry.call_id == call.id)
+                                .order_by(TranscriptEntry.created_at))).scalars()
+    transcript = "\n".join(f"{'Caller' if e.role == TranscriptRole.friend else 'Assistant'}: {e.text}"
+                           for e in entries)
+    summary = await finalize.summarize(transcript, call.language or "el")
+    if not summary:
+        raise HTTPException(status_code=503, detail="Summary model unavailable or transcript empty")
+    call.summary = summary
+    call.flags = [f for f in (call.flags or []) if f != "summary_fallback"]
+    await db.commit()
+    events.publish(call.id)
+    return {"summary": summary}
+
+
+@router.get("/{practice_id}/notifications")
+async def list_notifications(practice_id: str, status: str = "failed", db: AsyncSession = Depends(get_db)):
+    await _get(db, practice_id)
+    if status not in {"failed", "pending", "sent"}:
+        raise HTTPException(status_code=400, detail="Unsupported notification status")
+    rows = (await db.execute(select(Notification).where(
+        Notification.practice_id == practice_id, Notification.status == status,
+    ).order_by(Notification.created_at.desc()).limit(200))).scalars()
+    return [{"id": n.id, "kind": n.kind, "channel": n.channel, "recipient": n.recipient,
+             "attempts": n.attempts, "last_error": n.last_error, "call_id": n.call_id} for n in rows]
+
+
+@router.post("/{practice_id}/notifications/{notification_id}/retry")
+async def retry_notification(practice_id: str, notification_id: str, db: AsyncSession = Depends(get_db)):
+    await _get(db, practice_id)
+    item = await db.get(Notification, notification_id)
+    if item is None or item.practice_id != practice_id:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    if item.status != "failed":
+        raise HTTPException(status_code=409, detail="Only failed notifications can be retried")
+    item.status = "pending"
+    item.attempts = 0
+    item.last_error = None
+    item.next_attempt_at = datetime.utcnow()
+    await db.commit()
+    notifications.kick()
+    return {"status": "pending"}
 
 
 @router.get("/{practice_id}/metrics")

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -8,8 +8,8 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app import booking, finalize, gcal, metrics, notifications, receptionist, scheduler
-from app.models import Appointment, Call, CallStatus, Notification, Practice, WaitlistEntry
+from app import booking, finalize, gcal, metrics, notifications, receptionist, scheduler, storage
+from app.models import Appointment, Call, CallStatus, Notification, Practice, RecordingDeletion, WaitlistEntry
 
 ATH = ZoneInfo("Europe/Athens")
 DAY = date(2026, 9, 28)
@@ -263,6 +263,7 @@ async def test_calendar_rollback_returns_tool_error(sessions, monkeypatch, opera
             raise booking.BookingError("calendar_error")
 
         monkeypatch.setattr(booking, operation, failed_write)
+        monkeypatch.setattr(receptionist, "_confirmed", AsyncMock(return_value=True))
         args = SimpleNamespace(appointment_id=appt.id, date=DAY, time="10:00", service_id="check",
                                customer_name="Caller", customer_phone=None, staff=None)
         tool = getattr(receptionist, "tool_" + operation)
@@ -333,6 +334,7 @@ async def test_repeated_cancellation_offers_waitlist_slot_once(sessions):
     p = await seed(sessions, reminders={"waitlist": True})
     async with sessions() as db:
         appt = await book(db, p)
+        await book(db, p, start_time="09:30", customer_phone="test-0")
         for i in range(2):
             db.add(WaitlistEntry(practice_id=p.id, customer_name="Test", phone=f"test-{i}",
                                  service_id="check", date_from=DAY, date_to=DAY))
@@ -342,3 +344,93 @@ async def test_repeated_cancellation_offers_waitlist_slot_once(sessions):
         assert await receptionist.offer_freed_slot(db, p, appt) is None
         await db.commit()
         assert (await db.execute(select(func.count()).select_from(Call))).scalar_one() == 1
+
+
+@pytest.mark.asyncio
+async def test_waitlist_does_not_call_number_without_existing_appointment(sessions):
+    p = await seed(sessions, reminders={"waitlist": True})
+    async with sessions() as db:
+        appt = await book(db, p)
+        db.add(WaitlistEntry(practice_id=p.id, customer_name="New prospect", phone="+306900000001",
+                             service_id="check", date_from=DAY, date_to=DAY))
+        await db.commit()
+        assert await receptionist.offer_freed_slot(db, p, appt) is None
+
+
+@pytest.mark.asyncio
+async def test_recording_deletion_survives_provider_failure_and_restart(sessions, monkeypatch):
+    p = await seed(sessions)
+    monkeypatch.setattr(storage, "async_session", sessions)
+    deleted = []
+
+    def failing_delete(key):
+        raise OSError("bucket unavailable")
+
+    monkeypatch.setattr(storage, "delete_recording", failing_delete)
+    async with sessions() as db:
+        call = Call(practice_id=p.id, persona="", scenario="", status=CallStatus.completed,
+                    ended_at=datetime.utcnow() - timedelta(minutes=20))
+        db.add(call)
+        await db.flush()
+        await storage.queue_recording_deletion(db, "recordings/test.mp4", call.id)
+        await db.commit()
+    assert await storage.process_recording_deletions() == 0
+    async with sessions() as db:
+        item = await db.get(RecordingDeletion, "recordings/test.mp4")
+        assert item.attempts == 1 and item.last_error
+        item.next_attempt_at = datetime.utcnow() - timedelta(seconds=1)
+        await db.commit()
+
+    monkeypatch.setattr(storage, "delete_recording", deleted.append)
+    monkeypatch.setattr(storage, "recording_exists", lambda key: False)
+    assert await storage.process_recording_deletions() == 1
+    assert deleted == ["recordings/test.mp4"]
+    async with sessions() as db:
+        assert await db.get(RecordingDeletion, "recordings/test.mp4") is None
+
+
+@pytest.mark.asyncio
+async def test_summary_email_recovered_after_recipient_is_configured(sessions):
+    p = await seed(sessions, notifications={"emails": []})
+    async with sessions() as db:
+        call = Call(practice_id=p.id, persona="", scenario="", direction="inbound",
+                    status=CallStatus.completed, outcome="abandoned", finalized=True,
+                    summary=finalize.fallback_summary(SimpleNamespace(outcome="abandoned"), "el"),
+                    ended_at=datetime.utcnow())
+        db.add(call)
+        await db.commit()
+        p.notifications = {"emails": ["owner@example.invalid"]}
+        await scheduler.recover_summary_notifications(db, p)
+        await db.commit()
+        rows = (await db.execute(select(Notification).where(Notification.call_id == call.id,
+                                                         Notification.channel == "email"))).scalars().all()
+        assert len(rows) == 1 and rows[0].status == "pending"
+        await scheduler.recover_summary_notifications(db, p)
+        await db.commit()
+        assert (await db.execute(select(func.count()).select_from(Notification).where(
+            Notification.call_id == call.id, Notification.channel == "email"))).scalar_one() == 1
+
+
+@pytest.mark.asyncio
+async def test_calendar_reconciliation_reattaches_or_deletes_old_events(sessions, monkeypatch):
+    p = await seed(sessions)
+    async with sessions() as db:
+        appt = await book(db, p)
+        p.calendar_id = "calendar@example.invalid"
+        await db.commit()
+        created = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+
+        def remote(event_id, key):
+            return {"id": event_id, "created": created,
+                    "start": {"dateTime": appt.starts_at.isoformat()},
+                    "end": {"dateTime": appt.ends_at.isoformat()},
+                    "extendedProperties": {"private": {"voiceagent_key": key}}}
+
+        events = [remote("managed", f"{p.id}:{appt.id}"), remote("orphan", f"{p.id}:lost")]
+        monkeypatch.setattr(gcal, "owned_events", AsyncMock(return_value=events))
+        deleted = AsyncMock()
+        monkeypatch.setattr(gcal, "delete_event", deleted)
+        await scheduler.reconcile_calendar_events(db, p, datetime.now(timezone.utc))
+        await db.commit()
+        assert appt.gcal_event_id == "managed"
+        deleted.assert_awaited_once_with("calendar@example.invalid", "orphan")
