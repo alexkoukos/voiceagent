@@ -26,7 +26,7 @@ struct HistoryView: View {
             .listStyle(.insetGrouped)
             .overlay {
                 if loaded && calls.isEmpty && errorMessage == nil {
-                    ContentUnavailableView("Καμία φάρσα ακόμα", systemImage: "theatermasks",
+                    ContentUnavailableView("Καμία κλήση ακόμα", systemImage: "phone",
                                            description: Text("Οι κλήσεις σου θα εμφανίζονται εδώ, με ηχογράφηση και απομαγνητοφώνηση."))
                 }
             }
