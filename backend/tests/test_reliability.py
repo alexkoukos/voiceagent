@@ -466,3 +466,16 @@ async def test_earlier_later_and_next_day_follow_the_last_offer(sessions, monkey
         assert earlier["free_times"][-1] == "09:45"
         nxt = await receptionist.tool_check_availability(db, call, ask("την επόμενη μέρα"))
         assert nxt["date"] == "2026-09-29" and nxt["free_times"][0] == "09:00"
+
+
+@pytest.mark.asyncio
+async def test_stuck_dialing_call_stops_holding_a_line(sessions):
+    p = await seed(sessions)
+    async with sessions() as db:
+        old = datetime.utcnow() - timedelta(seconds=receptionist.DIALING_STALE_SECONDS + 5)
+        db.add(Call(practice_id=p.id, persona="", scenario="", status=CallStatus.dialing, created_at=old))
+        db.add(Call(practice_id=p.id, persona="", scenario="", status=CallStatus.active, created_at=old))
+        await db.commit()
+        assert await receptionist.active_calls(db, p.id) == 1
+        from app.dispatcher import active_count
+        assert await active_count(db) == 1

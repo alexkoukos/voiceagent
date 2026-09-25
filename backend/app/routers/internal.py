@@ -50,7 +50,8 @@ async def call_event(call_id: str, event: CallEvent, db: AsyncSession = Depends(
                 call_id=call.id, role=event.transcript_role, text=event.transcript_text
             )
         )
-    if event.status:
+    # A finished call stays finished (a late "failed" from a dying agent must not overwrite it).
+    if event.status and was_in_progress:
         call.status = event.status
         if event.status == CallStatus.active and call.started_at is None:
             call.started_at = datetime.utcnow()
