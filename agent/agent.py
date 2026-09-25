@@ -1196,7 +1196,14 @@ async def entrypoint(ctx: JobContext) -> None:
 
     metadata = json.loads(ctx.job.metadata or "{}")
     if metadata.get("mode") == "receptionist" or "call_id" not in metadata:
-        await run_receptionist(ctx, metadata)
+        try:
+            await run_receptionist(ctx, metadata)
+        except BaseException:
+            # E.g. the worker is shutting down for a deploy, or the caller left before joining:
+            # tell the backend so the call doesn't hold a line. Ignored if it already ended.
+            if metadata.get("call_id"):
+                await asyncio.shield(report(metadata["call_id"], status="failed", end_reason="error"))
+            raise
         return
     call_id = metadata["call_id"]
     friend_phone_number = metadata.get("friend_phone_number", "")

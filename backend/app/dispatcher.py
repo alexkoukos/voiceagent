@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -9,6 +9,7 @@ from app.models import Call, CallStatus, Friend
 from app.prompts import build_call_prompt
 
 STALE_GRACE_SECONDS = 180
+DIALING_STALE_SECONDS = 120
 
 
 async def active_count(db: AsyncSession) -> int:
@@ -19,7 +20,12 @@ async def active_count(db: AsyncSession) -> int:
     result = await db.execute(
         select(func.count())
         .select_from(Call)
-        .where(Call.status.in_([CallStatus.dialing, CallStatus.active]), Call.created_at > cutoff)
+        .where(or_(
+            and_(Call.status == CallStatus.active, Call.created_at > cutoff),
+            # A call still "dialing" after the ring window never started (e.g. its agent died).
+            and_(Call.status == CallStatus.dialing,
+                 Call.created_at > datetime.utcnow() - timedelta(seconds=DIALING_STALE_SECONDS)),
+        ))
     )
     return result.scalar_one()
 

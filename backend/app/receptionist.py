@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from livekit import api
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import booking, events, notifications, routing, texts
@@ -26,6 +26,7 @@ OUTCOME_PRIORITY = {
     "transferred": 5,
 }
 STALE_SECONDS = 180
+DIALING_STALE_SECONDS = 120
 
 
 class Busy(Exception):
@@ -61,10 +62,13 @@ async def practice_for_number(db: AsyncSession, dialed_number: str) -> Practice 
 
 
 async def active_calls(db: AsyncSession, practice_id: str | None = None) -> int:
-    cutoff = datetime.utcnow() - timedelta(seconds=get_settings().max_call_duration_seconds + STALE_SECONDS)
-    q = select(func.count()).select_from(Call).where(
-        Call.status.in_([CallStatus.dialing, CallStatus.active]), Call.created_at > cutoff
-    )
+    now = datetime.utcnow()
+    cutoff = now - timedelta(seconds=get_settings().max_call_duration_seconds + STALE_SECONDS)
+    q = select(func.count()).select_from(Call).where(or_(
+        and_(Call.status == CallStatus.active, Call.created_at > cutoff),
+        # Rings or browser joins take well under this; longer means the agent never started.
+        and_(Call.status == CallStatus.dialing, Call.created_at > now - timedelta(seconds=DIALING_STALE_SECONDS)),
+    ))
     if practice_id:
         q = q.where(Call.practice_id == practice_id)
     return (await db.execute(q)).scalar_one()
