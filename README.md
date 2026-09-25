@@ -1,6 +1,8 @@
-# AI Caller — Level 1
+# AI Caller — Voice Receptionist
 
-Personal tool: calls a friend from a Greek 210 landline number and runs a prank scenario in natural Greek. See [PRD AI Prank Caller (Level 1).md](<PRD AI Prank Caller (Level 1).md>) for the full spec.
+Greek and English voice receptionist built on the original outbound caller: inbound routing, staff calendars, booking changes, messages, notifications, and an iOS call log. The current specification is the local `AI Voice Receptionist 2.0 PRD.md`; the original [Level 1 PRD](<PRD AI Prank Caller (Level 1).md>) describes the legacy outbound flow.
+
+See [PRD_STATUS.md](PRD_STATUS.md) for the latest reliability improvements, verified behavior, and remaining acceptance work. Deployment notes below also include the original outbound setup.
 
 ## Layout
 
@@ -11,11 +13,20 @@ Personal tool: calls a friend from a Greek 210 landline number and runs a prank 
 
 ## Status
 
-Code-complete and committed, but never run against real LiveKit/Gemini/Telnyx/R2. What has been verified:
+Receptionist features are implemented, but pilot readiness still requires the live acceptance work in [PRD_STATUS.md](PRD_STATUS.md). Historical Level 1 verification included:
 
 - Backend: end-to-end on real Postgres (Docker), including migrations, auth, the agent-event endpoint, WebSocket push, and recording/transcript deletion (R2 and LiveKit stubbed).
 - Agent: imports and instantiates against the real `livekit-agents` 1.8.3 in its Docker image; the LiveKit request types it uses exist. The actual call flow is untested.
 - iOS: builds and launches in the simulator against a local backend (templates load, auth works). The call flow itself hasn't been driven from the app.
+
+For local backend regression tests (external providers are mocked):
+
+```bash
+uv run --python 3.12 --with-requirements backend/requirements.txt \
+  --with pytest --with pytest-asyncio pytest -q backend/tests -c backend/pytest.ini
+```
+
+To include concurrency and transaction tests, start the local Docker Postgres and set `TEST_DATABASE_URL=postgresql+asyncpg://user:password@localhost:5433/voiceagent` for that command. Each test creates and removes its own random schema; application tables are untouched. Without that variable, Postgres tests are explicitly skipped.
 
 ## Local setup
 

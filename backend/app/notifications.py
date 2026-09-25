@@ -1,8 +1,7 @@
 """Notification outbox (PRD Notifications).
 
 Everything is queued in the `notifications` table first and sent by a background worker
-with retries, so a provider outage never loses an event. Channels that aren't configured
-are marked "skipped" instead of piling up.
+with retries. Unconfigured channels remain pending until credentials are available.
 """
 
 import asyncio
@@ -13,7 +12,7 @@ from email.message import EmailMessage
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import push
@@ -31,7 +30,7 @@ class NotConfigured(Exception):
     pass
 
 
-def queue(
+async def queue(
     db: AsyncSession,
     *,
     practice_id: str | None,
@@ -43,14 +42,19 @@ def queue(
     call_id: str | None = None,
     data: dict | None = None,
     dedupe_key: str | None = None,
-) -> Notification:
-    """Adds to the session; the caller commits. Then call kick() to send right away."""
-    n = Notification(
+    status: str = "pending",
+) -> Notification | None:
+    """Insert in the caller's transaction, ignoring only an identical event's key.
+
+    A collision must never roll back the call outcome or other queued recipients.
+    The caller commits and calls kick(); None means the event was already queued.
+    """
+    statement = insert(Notification).values(
         practice_id=practice_id, kind=kind, channel=channel, recipient=recipient, subject=subject,
-        body=body, call_id=call_id, data=data or {}, dedupe_key=dedupe_key,
+        body=body, call_id=call_id, data=data or {}, dedupe_key=dedupe_key, status=status,
     )
-    db.add(n)
-    return n
+    statement = statement.on_conflict_do_nothing(index_elements=[Notification.dedupe_key])
+    return (await db.execute(statement.returning(Notification))).scalar_one_or_none()
 
 
 async def exists(db: AsyncSession, dedupe_key: str) -> bool:
@@ -85,14 +89,16 @@ async def queue_business(
         return
     if dedupe_key:
         # Marker row so the check above works even when the business has no email.
-        queue(db, practice_id=practice.id, kind=kind, channel="none", recipient="-", call_id=call_id,
-              dedupe_key=f"{dedupe_key}:sent").status = "skipped"
+        marker = await queue(db, practice_id=practice.id, kind=kind, channel="none", recipient="-", call_id=call_id,
+                             dedupe_key=f"{dedupe_key}:sent", status="skipped")
+        if marker is None:
+            return
     for i, email in enumerate(business_emails(practice)):
-        queue(db, practice_id=practice.id, kind=kind, channel="email", recipient=email, subject=subject,
+        await queue(db, practice_id=practice.id, kind=kind, channel="email", recipient=email, subject=subject,
               body=body, call_id=call_id, data=data, dedupe_key=f"{dedupe_key}:email:{i}" if dedupe_key else None)
     if urgent:
         for number in (practice.notifications or {}).get("urgent_sms", []):
-            queue(db, practice_id=practice.id, kind=kind, channel="sms", recipient=number,
+            await queue(db, practice_id=practice.id, kind=kind, channel="sms", recipient=number,
                   body=f"{subject}\n{body}"[:600], call_id=call_id)
         await queue_push(db, practice, kind=kind, title=subject, body=body[:180], call_id=call_id, data=data)
 
@@ -106,7 +112,7 @@ async def queue_push(
     if staff_id and any(d.staff_id == staff_id for d in devices):
         devices = [d for d in devices if d.staff_id == staff_id]
     for d in devices:
-        queue(db, practice_id=practice.id, kind=kind, channel="push", recipient=d.token, subject=title,
+        await queue(db, practice_id=practice.id, kind=kind, channel="push", recipient=d.token, subject=title,
               body=body, call_id=call_id, data={**(data or {}), "environment": d.environment})
 
 
@@ -157,32 +163,51 @@ async def send(n: Notification) -> None:
         raise NotConfigured(f"unknown channel {n.channel}")
 
 
-async def process_due(limit: int = 20) -> int:
-    """Sends due notifications once; returns how many were handled."""
+async def _process_one() -> int:
+    """Own one row until its send result is committed; other workers skip it."""
     async with async_session() as db:
-        rows = list((await db.execute(
+        n = (await db.execute(
             select(Notification)
             .where(Notification.status == "pending", Notification.next_attempt_at <= datetime.utcnow())
             .order_by(Notification.created_at)
-            .limit(limit)
+            .limit(1)
             .with_for_update(skip_locked=True)
-        )).scalars())
-        for n in rows:
+        )).scalar_one_or_none()
+        if n is None:
+            return 0
+        try:
+            await send(n)
             n.attempts += 1
-            try:
-                await send(n)
-                n.status, n.sent_at, n.last_error = "sent", datetime.utcnow(), None
-            except NotConfigured as e:
-                n.status, n.last_error = "skipped", str(e)
-            except Exception as e:
-                n.last_error = f"{type(e).__name__}: {e}"[:1000]
-                if n.attempts >= MAX_ATTEMPTS:
-                    n.status = "failed"
-                    logger.error("notification %s gave up: %s", n.id, n.last_error)
-                else:
-                    n.next_attempt_at = datetime.utcnow() + timedelta(seconds=min(3600, 10 * 2 ** n.attempts))
+            n.status, n.sent_at, n.last_error = "sent", datetime.utcnow(), None
+        except NotConfigured as e:
+            # Missing credentials are recoverable and do not consume send attempts.
+            n.last_error = str(e)
+            n.next_attempt_at = datetime.utcnow() + timedelta(seconds=60)
+        except Exception as e:
+            n.attempts += 1
+            n.last_error = f"{type(e).__name__}: {e}"[:1000]
+            if n.attempts >= MAX_ATTEMPTS:
+                n.status = "failed"
+                logger.error("notification %s gave up: %s", n.id, n.last_error)
+            else:
+                n.next_attempt_at = datetime.utcnow() + timedelta(seconds=min(3600, 10 * 2 ** n.attempts))
         await db.commit()
-        return len(rows)
+        return 1
+
+
+async def process_due(limit: int = 20) -> int:
+    """Bounded parallel delivery so a slow SMTP send doesn't block SMS or push."""
+    slots = asyncio.Semaphore(5)
+
+    async def process():
+        async with slots:
+            return await _process_one()
+
+    results = await asyncio.gather(*(process() for _ in range(limit)), return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
+    return sum(results)
 
 
 async def run_worker() -> None:
@@ -197,11 +222,3 @@ async def run_worker() -> None:
             await asyncio.wait_for(_wake.wait(), timeout=5)
         except asyncio.TimeoutError:
             pass
-
-
-async def commit_ignoring_duplicates(db: AsyncSession) -> None:
-    """Commit where a dedupe_key collision just means "already queued"."""
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()

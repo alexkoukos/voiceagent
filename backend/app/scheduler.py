@@ -119,7 +119,16 @@ async def stale(db) -> None:
         call.ended_at = now
         if call.started_at:
             call.duration_seconds = int((now - call.started_at).total_seconds())
-        finalize.schedule(call.id)
+
+
+async def recover_finalizations(db) -> None:
+    """Retry completed calls left unfinished by a crash or failed transaction."""
+    ids = (await db.execute(select(Call.id).where(
+        Call.practice_id.is_not(None), Call.finalized.is_(False),
+        Call.status.in_([CallStatus.completed, CallStatus.failed]),
+    ).order_by(Call.ended_at).limit(100))).scalars()
+    for call_id in ids:
+        finalize.schedule(call_id)
 
 
 _last_retention: date | None = None
@@ -139,12 +148,16 @@ async def tick(now: datetime | None = None) -> None:
             rem = practice.reminders or {}
             if rem.get("enabled") and _at(local, rem.get("time", "18:00")):
                 await queue_reminders(db, practice, local)
-        if _last_retention != now.date():
+        retained = _last_retention != now.date()
+        if retained:
             for practice in practices:
                 await retention(db, practice)
-            _last_retention = now.date()
         await stale(db)
-        await notifications.commit_ignoring_duplicates(db)
+        await db.commit()
+        if retained:
+            _last_retention = now.date()
+        # Finalizers use their own sessions and must see committed terminal state.
+        await recover_finalizations(db)
         from app.dispatcher import start_next_queued
         await start_next_queued(db)
     notifications.kick()

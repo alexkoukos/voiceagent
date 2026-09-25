@@ -269,7 +269,7 @@ async def _sms(db, practice, kind, appt) -> None:
     if not appt.customer_phone or (practice.notifications or {}).get("customer_sms") is False:
         return
     staff = await booking.staff_of(db, practice.id)
-    notifications.queue(
+    await notifications.queue(
         db, practice_id=practice.id, kind=f"{kind}_customer", channel="sms", recipient=appt.customer_phone,
         body=texts.customer_sms(practice, kind, booking.describe(practice, appt, staff, practice.language), practice.language),
     )
