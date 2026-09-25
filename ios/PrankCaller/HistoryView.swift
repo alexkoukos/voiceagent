@@ -4,48 +4,41 @@ import AVKit
 struct HistoryView: View {
     private let api = APIClient()
     @State private var calls: [Call] = []
+    @State private var friends: [String: String] = [:]
+    @State private var loaded = false
     @State private var errorMessage: String?
     @State private var liveCall: Call?
 
-    private var active: [Call] { calls.filter(\.isInProgress) }
-    private var past: [Call] { calls.filter { !$0.isInProgress } }
+    private func name(_ call: Call) -> String { friends[call.friendId] ?? "Φίλος" }
 
     var body: some View {
         NavigationStack {
             List {
-                if !active.isEmpty {
-                    Section("Active calls") {
-                        ForEach(active) { call in
-                            Button { liveCall = call } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(call.scenario).lineLimit(1)
-                                    Text(call.status.capitalized).font(.caption).foregroundStyle(.orange)
-                                }
-                            }
-                        }
+                if let errorMessage { ErrorBanner(text: errorMessage).listRowSeparator(.hidden) }
+                ForEach(calls) { call in
+                    if call.isInProgress {
+                        Button { liveCall = call } label: { CallRow(call: call, friendName: name(call)) }
+                    } else {
+                        NavigationLink(value: call.id) { CallRow(call: call, friendName: name(call)) }
                     }
                 }
-                Section(active.isEmpty ? "" : "Past calls") {
-                    ForEach(past) { call in
-                        NavigationLink(value: call.id) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(call.scenario).lineLimit(1)
-                                Text("\(call.status) · \(call.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
             }
-            .overlay { if calls.isEmpty { ContentUnavailableView("No calls yet", systemImage: "phone") } }
-            .navigationTitle("History")
-            .navigationDestination(for: String.self) { CallDetailView(callId: $0) }
-            .fullScreenCover(item: $liveCall) { LiveCallView(callId: $0.id) }
+            .listStyle(.insetGrouped)
+            .overlay {
+                if loaded && calls.isEmpty && errorMessage == nil {
+                    ContentUnavailableView("Καμία φάρσα ακόμα", systemImage: "theatermasks",
+                                           description: Text("Οι κλήσεις σου θα εμφανίζονται εδώ, με ηχογράφηση και απομαγνητοφώνηση."))
+                }
+            }
+            .navigationTitle("Ιστορικό")
+            .navigationDestination(for: String.self) { id in
+                CallDetailView(callId: id, friendName: calls.first { $0.id == id }.map(name) ?? "Φίλος")
+            }
+            .fullScreenCover(item: $liveCall) { LiveCallView(callId: $0.id, friendName: name($0), request: nil) }
             .task {
                 while !Task.isCancelled {
                     await load()
-                    try? await Task.sleep(for: .seconds(3))
+                    try? await Task.sleep(for: .seconds(5))
                 }
             }
             .refreshable { await load() }
@@ -53,62 +46,152 @@ struct HistoryView: View {
     }
 
     private func load() async {
-        do { calls = try await api.calls(); errorMessage = nil } catch { errorMessage = error.localizedDescription }
+        guard !Settings.apiKey.isEmpty else { loaded = true; return }
+        do {
+            async let c = api.calls()
+            async let f = api.friends()
+            let (cs, fs) = try await (c, f)
+            calls = cs
+            friends = Dictionary(fs.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+            errorMessage = nil
+        } catch { errorMessage = friendlyMessage(error) }
+        loaded = true
+    }
+}
+
+/// One history row: who, which prank, how it went and when.
+struct CallRow: View {
+    let call: Call
+    let friendName: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(friendName).font(.body.weight(.semibold)).foregroundStyle(.primary)
+                Spacer()
+                Text(call.createdAt, format: .relative(presentation: .named))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Text(call.persona).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: Space.s) {
+                StatusBadge(call: call).font(.footnote)
+                if call.recordingUrl != nil {
+                    Image(systemName: "waveform").font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityLabel("Έχει ηχογράφηση")
+                }
+            }
+        }
+        .padding(.vertical, Space.xs)
     }
 }
 
 struct CallDetailView: View {
     let callId: String
+    let friendName: String
     @State private var call: Call?
     @State private var player: AVPlayer?
+    @State private var playing = false
+    @State private var loadingAudio = false
     @State private var errorMessage: String?
     @State private var confirmDelete = false
 
     var body: some View {
-        VStack {
-            if let call {
-                if call.recordingUrl != nil {
-                    if let player {
-                        VideoPlayer(player: player).frame(height: 80)
+        ScrollView {
+            VStack(alignment: .leading, spacing: Space.xl) {
+                if let call {
+                    VStack(alignment: .leading, spacing: Space.s) {
+                        StatusBadge(call: call)
+                        Text(call.persona).foregroundStyle(.secondary)
+                        if let d = call.durationSeconds {
+                            Text("Διάρκεια \(Duration.seconds(d).formatted(.time(pattern: .minuteSecond)))")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
                     }
-                    HStack {
-                        Button { Task { await play() } } label: { Label(player == nil ? "Load recording" : "Restart", systemImage: "play.fill") }
-                        Spacer()
-                        Button("Delete recording", role: .destructive) { confirmDelete = true }
+                    if call.recordingUrl != nil { recordingCard }
+                    if let entries = call.transcriptEntries, !entries.isEmpty {
+                        VStack(alignment: .leading, spacing: Space.m) {
+                            SectionTitle("Τι ειπώθηκε")
+                            ForEach(entries) { TranscriptBubble(entry: $0, friendName: friendName) }
+                        }
                     }
-                    .padding(.horizontal)
-                } else {
-                    Text("No recording").foregroundStyle(.secondary)
+                } else if errorMessage == nil {
+                    ProgressView().frame(maxWidth: .infinity).padding(Space.xxxl)
                 }
-                TranscriptList(entries: call.transcriptEntries ?? [])
+                if let errorMessage { ErrorBanner(text: errorMessage) }
             }
-            if let errorMessage { Text(errorMessage).foregroundStyle(.red).padding() }
+            .padding(Space.l)
         }
-        .navigationTitle(call?.scenario ?? "Call")
+        .background(Palette.background)
+        .navigationTitle(friendName)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
-        .confirmationDialog("Delete this recording permanently?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) { Task { await deleteRecording() } }
+        .onDisappear { player?.pause() }
+        .confirmationDialog("Να διαγραφεί οριστικά η ηχογράφηση και η απομαγνητοφώνηση;",
+                            isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Διαγραφή", role: .destructive) { Task { await deleteRecording() } }
+            Button("Άκυρο", role: .cancel) {}
         }
+    }
+
+    private var recordingCard: some View {
+        HStack(spacing: Space.l) {
+            Button { Task { await togglePlay() } } label: {
+                Image(systemName: playing ? "pause.fill" : "play.fill")
+                    .font(.title2)
+                    .frame(width: 56, height: 56)
+                    .foregroundStyle(.white)
+                    .background(Palette.accent, in: Circle())
+            }
+            .accessibilityLabel(playing ? "Παύση" : "Αναπαραγωγή")
+            .disabled(loadingAudio)
+            VStack(alignment: .leading, spacing: Space.xs) {
+                Text("Ηχογράφηση").font(.body.weight(.semibold))
+                Text(loadingAudio ? "Φορτώνει…" : "Πάτα για ακρόαση").font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(role: .destructive) { confirmDelete = true } label: { Image(systemName: "trash") }
+                .frame(width: 44, height: 44)
+                .accessibilityLabel("Διαγραφή ηχογράφησης")
+        }
+        .padding(Space.l)
+        .background(Palette.card, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 
     private func load() async {
-        do { call = try await APIClient().call(callId) } catch { errorMessage = error.localizedDescription }
+        do { call = try await APIClient().call(callId) } catch { errorMessage = friendlyMessage(error) }
     }
 
-    private func play() async {
+    private func togglePlay() async {
+        if let player {
+            if playing { player.pause() } else {
+                if player.currentItem?.currentTime() == player.currentItem?.duration { await player.seek(to: .zero) }
+                player.play()
+            }
+            playing.toggle()
+            return
+        }
+        loadingAudio = true
+        defer { loadingAudio = false }
         do {
             let url = try await APIClient().recordingURL(callId)
-            player = AVPlayer(url: url)
-            player?.play()
-        } catch { errorMessage = error.localizedDescription }
+            try? AVAudioSession.sharedInstance().setCategory(.playback)
+            let p = AVPlayer(url: url)
+            NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
+                                                   object: p.currentItem, queue: .main) { _ in playing = false }
+            player = p
+            p.play()
+            playing = true
+            errorMessage = nil
+        } catch { errorMessage = friendlyMessage(error) }
     }
 
     private func deleteRecording() async {
         do {
+            player?.pause()
             try await APIClient().deleteRecording(callId)
             player = nil
+            playing = false
             await load()
-        } catch { errorMessage = error.localizedDescription }
+        } catch { errorMessage = friendlyMessage(error) }
     }
 }

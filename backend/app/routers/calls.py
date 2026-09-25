@@ -13,7 +13,7 @@ from app.dispatcher import active_count, start_call, start_next_queued
 from app.livekit_dispatch import end_call
 from app.models import Call, CallStatus, Friend, TranscriptEntry
 from app.schemas import CallCreate, CallDetailOut, CallOut
-from app.storage import delete_recording_later, presigned_recording_url
+from app.storage import delete_recording_later, presigned_recording_url, recording_exists
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -83,6 +83,8 @@ async def get_recording(call_id: str, db: AsyncSession = Depends(get_db)):
     call = await db.get(Call, call_id)
     if call is None or not call.recording_url:
         raise HTTPException(status_code=404, detail="No recording")
+    if not await run_in_threadpool(recording_exists, call.recording_url):
+        raise HTTPException(status_code=409, detail="Recording is still uploading")
     url = await run_in_threadpool(presigned_recording_url, call.recording_url)
     return {"url": url, "expires_in": 600}
 

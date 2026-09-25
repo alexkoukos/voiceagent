@@ -25,10 +25,14 @@ class Settings(BaseSettings):
     own_caller_number: str = ""
     telnyx_public_key: str = ""
 
-    r2_account_id: str = ""
-    r2_access_key_id: str = ""
-    r2_secret_access_key: str = ""
-    r2_bucket_name: str = "voiceagent-recordings"
+    # S3-compatible recording storage (a Railway bucket, Cloudflare R2, ...).
+    # Named like the variables Railway buckets expose, so they can be referenced directly.
+    aws_endpoint_url: str = ""
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_s3_bucket_name: str = ""
+    aws_default_region: str = "auto"
+    aws_s3_url_style: str = "virtual-host"
 
     max_call_duration_seconds: int = 300
     max_concurrent_calls: int = 1

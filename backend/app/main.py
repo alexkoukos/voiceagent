@@ -7,7 +7,7 @@ from app.routers import calls, friends, internal, templates, webhooks
 _docs = get_settings().enable_docs
 
 app = FastAPI(
-    title="AI Prank Caller",
+    title="AI Caller",
     docs_url="/docs" if _docs else None,
     redoc_url=None,
     openapi_url="/openapi.json" if _docs else None,
