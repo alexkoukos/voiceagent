@@ -62,6 +62,7 @@ class Call(Base):
     reveal: Mapped[str] = mapped_column(Text, default="")
     voice: Mapped[str] = mapped_column(String, default="default")
     max_duration_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    from_own_number: Mapped[bool] = mapped_column(Boolean, default=False)
 
     status: Mapped[CallStatus] = mapped_column(
         Enum(CallStatus), default=CallStatus.pending
