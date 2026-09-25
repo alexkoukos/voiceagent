@@ -10,7 +10,7 @@ struct PrankCallerApp: App {
                 HistoryView()
                     .tabItem { Label("Ιστορικό", systemImage: "clock") }
             }
-            .tint(Palette.accent)
+            .tint(Palette.ink)
         }
     }
 }

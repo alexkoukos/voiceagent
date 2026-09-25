@@ -91,7 +91,7 @@ struct NewCallView: View {
                 .padding(.top, Space.s)
         }
         .padding(Space.xl)
-        .background(Palette.card, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .glass()
     }
 
     private var friendSection: some View {
@@ -103,7 +103,7 @@ struct NewCallView: View {
                         .frame(maxWidth: .infinity, minHeight: 52)
                 }
                 .buttonStyle(.bordered)
-                .tint(Palette.accent)
+                .tint(Palette.ink)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Space.s) {
@@ -114,12 +114,13 @@ struct NewCallView: View {
                             Image(systemName: "plus")
                                 .font(.body.weight(.semibold))
                                 .frame(width: 44, height: 44)
-                                .background(Palette.card, in: Circle())
+                                .glassCapsule()
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Νέος φίλος")
                     }
                 }
+                .scrollClipDisabled()
                 .redacted(reason: loaded ? [] : .placeholder)
             }
         }
@@ -135,7 +136,7 @@ struct NewCallView: View {
                 .redacted(reason: .placeholder)
             } else {
                 ForEach(templates) { t in
-                    PrankCard(title: t.title, subtitle: t.scenario, selected: prankId == t.id) { select(t) }
+                    PrankCard(title: t.displayTitle, subtitle: t.scenario, selected: prankId == t.id) { select(t) }
                 }
                 PrankCard(title: "Δική μου φάρσα", subtitle: "Γράψε εσύ ποιος παίρνει και τι θα πει.",
                           selected: isCustom) { prankId = Self.customId }
@@ -154,11 +155,11 @@ struct NewCallView: View {
                 Label("Αποθήκευση για επόμενη φορά", systemImage: "bookmark")
             }
             .disabled(persona.trimmed.isEmpty || scenario.trimmed.isEmpty)
-            .tint(Palette.accent)
-            if let notice { Text(notice).font(.footnote).foregroundStyle(Palette.success) }
+            .tint(Palette.ink)
+            if let notice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
         }
         .padding(Space.l)
-        .background(Palette.card, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .glass()
     }
 
     private var optionsSection: some View {
@@ -171,7 +172,7 @@ struct NewCallView: View {
                 Stepper("Μέγιστη διάρκεια: \(maxMinutes) λεπτά", value: $maxMinutes, in: 1...5)
                 if ownNumberAvailable {
                     Toggle("Κλήση από το δικό μου νούμερο", isOn: $fromOwnNumber)
-                        .tint(Palette.accent)
+                        .tint(Palette.ink)
                 }
             }
             .padding(.top, Space.m)
@@ -182,7 +183,7 @@ struct NewCallView: View {
         }
         .tint(.secondary)
         .padding(Space.l)
-        .background(Palette.card, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .glass()
     }
 
     private var callBar: some View {

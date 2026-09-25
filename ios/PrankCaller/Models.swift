@@ -13,6 +13,11 @@ struct PromptTemplate: Codable, Identifiable, Hashable {
     let scenario: String
     let context: String
     let reveal: String
+
+    /// The title without a leading emoji: the UI is monochrome.
+    var displayTitle: String {
+        String(title.drop { !$0.isLetter && !$0.isNumber }).trimmingCharacters(in: .whitespaces)
+    }
 }
 
 struct TranscriptEntry: Codable, Identifiable {
@@ -76,14 +81,6 @@ struct Call: Codable, Identifiable {
         }
     }
 
-    var statusColor: Color {
-        switch status {
-        case "active", "completed": return Palette.success
-        case "pending", "dialing", "queued": return Palette.waiting
-        case "cancelled": return .secondary
-        default: return Palette.danger
-        }
-    }
 }
 
 struct NewCall: Encodable {

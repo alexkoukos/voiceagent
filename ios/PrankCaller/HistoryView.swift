@@ -139,8 +139,8 @@ struct CallDetailView: View {
                 Image(systemName: playing ? "pause.fill" : "play.fill")
                     .font(.title2)
                     .frame(width: 56, height: 56)
-                    .foregroundStyle(.white)
-                    .background(Palette.accent, in: Circle())
+                    .foregroundStyle(Palette.onInk)
+                    .background(Palette.ink, in: Circle())
             }
             .accessibilityLabel(playing ? "Παύση" : "Αναπαραγωγή")
             .disabled(loadingAudio)
@@ -154,7 +154,7 @@ struct CallDetailView: View {
                 .accessibilityLabel("Διαγραφή ηχογράφησης")
         }
         .padding(Space.l)
-        .background(Palette.card, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .glass()
     }
 
     private func load() async {
