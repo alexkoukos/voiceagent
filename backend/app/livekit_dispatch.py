@@ -11,6 +11,7 @@ import json
 from livekit import api
 
 from app.config import get_settings
+from app.languages import english_name
 
 
 async def dispatch_call(
@@ -21,6 +22,7 @@ async def dispatch_call(
     voice: str,
     max_duration_seconds: int,
     from_own_number: bool = False,
+    language: str = "el",
 ) -> None:
     settings = get_settings()
     room_name = f"call-{call_id}"
@@ -38,6 +40,8 @@ async def dispatch_call(
             "max_duration_seconds": max_duration_seconds,
             "sip_trunk_id": settings.sip_trunk_id,
             "outbound_number": outbound_number,
+            "language": language,
+            "language_name": english_name(language),
         }
     )
 

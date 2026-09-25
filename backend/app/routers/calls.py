@@ -9,6 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from app import events
 from app.database import get_db
 from app.config import get_settings
+from app.languages import language_for_phone
 from app.dispatcher import active_count, start_call, start_next_queued
 from app.livekit_dispatch import end_call
 from app.models import Call, CallStatus, Friend, TranscriptEntry
@@ -36,6 +37,7 @@ async def create_call(payload: CallCreate, db: AsyncSession = Depends(get_db)):
         voice=payload.voice,
         max_duration_seconds=min(payload.max_duration_seconds, settings.max_call_duration_seconds),
         from_own_number=payload.from_own_number,
+        language=payload.language or language_for_phone(friend.phone_number),
         status=CallStatus.queued,
     )
     db.add(call)

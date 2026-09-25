@@ -2,6 +2,7 @@ from fastapi import Depends, FastAPI
 
 from app.auth import require_app_token
 from app.config import get_settings
+from app.languages import LANGUAGES
 from app.routers import calls, friends, internal, templates, webhooks
 
 _docs = get_settings().enable_docs
@@ -28,4 +29,7 @@ async def health():
 @app.get("/options", dependencies=[Depends(require_app_token)])
 async def options():
     """What the app may offer; never exposes the numbers themselves."""
-    return {"own_number_available": bool(get_settings().own_caller_number)}
+    return {
+        "own_number_available": bool(get_settings().own_caller_number),
+        "languages": [{"code": c, "name": n} for c, (n, _) in LANGUAGES.items()],
+    }
