@@ -98,6 +98,8 @@ async def finalize(call_id: str) -> None:
                 # Reminder / waitlist calls: only when something changed.
                 "outbound": call.outcome in ("booked", "rescheduled", "cancelled", "message_taken"),
             }.get(call.direction, False)
+            if "off_topic" in (call.flags or []) and call.outcome in ("info_given", "abandoned", None):
+                wants = False  # a troll call isn't worth an email; it's still in the call log
             if wants and call.outcome != "abandoned":
                 appt = await db.get(Appointment, call.appointment_id) if call.appointment_id else None
                 staff = await booking.staff_of(db, practice.id)
