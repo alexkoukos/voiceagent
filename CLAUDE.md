@@ -17,7 +17,7 @@ See [README.md](README.md) for layout, setup and deploy, and the PRD for the spe
 
 **Next**
 1. Test call on the current setup; read the `friend:`/`agent:` log lines.
-2. If Gemini still mishears: test OpenAI `gpt-realtime-2.1` / `-mini` on recordings (needs `OPENAI_API_KEY`; ~$0.15–0.25 / ~$0.05–0.08 per 3-min call).
+2. If Gemini still mishears: OpenAI engine is built but untested. Add `OPENAI_API_KEY` to Railway `agent`, set `AGENT_ENGINE=openai` (model `OPENAI_REALTIME_MODEL`, default `gpt-realtime-2.1`; `gpt-realtime-2.1-mini` is ~1/3 the price). Without a key it falls back to Gemini. Best first: test it on a downloaded recording. Cost ~$0.15–0.25 / ~$0.05–0.08 per 3-min call.
 3. Move the agent to LiveKit Cloud hosting, or give it more memory.
 
 ## Checkpoint (2026-09-24)
