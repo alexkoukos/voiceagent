@@ -97,6 +97,19 @@ Set `APP_API_TOKEN` and `INTERNAL_API_TOKEN` in `.env`; the app needs the same `
 - **Friend numbers** must be in international format (`+306...`).
 - Two example templates ("Wrong order", "Fake call from the university") are seeded by migration 0002.
 
+## Voice engine
+
+The agent has two engines, picked with `AGENT_ENGINE`:
+
+- **`pipeline`** (default): ElevenLabs Scribe v2 realtime hears the friend (90+ languages, follows them if they switch), `gemini-3.5-flash-lite` answers (`LLM_MODEL`), ElevenLabs Flash v2.5 speaks. LiveKit's multilingual turn detector decides when the friend has finished, the reply is prepared before they fully stop, a short filler («Ε…», «Κοίτα…») covers any reply that takes longer than 0.5 s, and the opening line is written and voiced (expressive `eleven_v3`) while the phone is still ringing. Needs `ELEVEN_API_KEY` with the `text_to_speech`, `speech_to_text` and `voices_read` permissions; without it the agent falls back to `realtime`.
+- **`realtime`**: Gemini Live (`GEMINI_MODEL`) does everything. Simpler, but slower to notice the friend has finished (about 2 s from end of speech to reply in tests) and its transcription is weaker.
+
+Both engines clean the phone audio with LiveKit's telephony noise cancellation. The call language starts from the friend's phone prefix (`backend/app/languages.py`) and can be changed per call in the app.
+
+Every reply logs a `latency:` line (pipeline engine) with the end-of-turn, LLM and voice timings.
+
+To try the agent without phoning anyone, run a local worker under another name (`AGENT_NAME=prank-caller-test python agent.py dev`) and dispatch a job whose metadata has `"test_no_dial": true`; the agent then talks to whoever joins the room.
+
 ## Known limits
 
 - Gemini's Greek quality over phone audio, latency, and the 210 caller ID on Greek mobiles are unmeasured (PRD open questions).

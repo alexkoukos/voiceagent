@@ -3,10 +3,11 @@ import SwiftUI
 /// Main screen: pick a friend, pick a prank, call. Everything else is tucked away.
 struct NewCallView: View {
     private let api = APIClient()
+    // Stable keys; the agent maps each to an ElevenLabs (or Gemini) voice.
     static let voices: [(id: String, label: String)] = [
-        ("default", "Γυναικεία, ήρεμη (Kore)"), ("Aoede", "Γυναικεία, ανάλαφρη (Aoede)"),
-        ("Puck", "Αντρική, κεφάτη (Puck)"), ("Charon", "Αντρική, ήρεμη (Charon)"),
-        ("Fenrir", "Αντρική, ενθουσιώδης (Fenrir)"), ("Algenib", "Αντρική, τραχιά (Algenib)"),
+        ("default", "Γυναικεία, ήρεμη"), ("Aoede", "Γυναικεία, ανάλαφρη"),
+        ("Puck", "Αντρική, κεφάτη"), ("Charon", "Αντρική, ήρεμη"),
+        ("Fenrir", "Αντρική, ενθουσιώδης"), ("Algenib", "Αντρική, τραχιά"),
     ]
     private static let customId = "custom"
 
@@ -23,6 +24,9 @@ struct NewCallView: View {
     @State private var maxMinutes = 3
     @State private var fromOwnNumber = false
     @State private var ownNumberAvailable = false
+    @State private var languages: [LanguageOption] = []
+    /// nil = automatic, from the friend's phone prefix.
+    @State private var language: String?
     @State private var showAddFriend = false
     @State private var showSettings = false
     @State private var liveCall: LiveCallRequest?
@@ -169,6 +173,13 @@ struct NewCallView: View {
                     ForEach(Self.voices, id: \.id) { Text($0.label).tag($0.id) }
                 }
                 .pickerStyle(.menu)
+                if !languages.isEmpty {
+                    Picker("Γλώσσα", selection: $language) {
+                        Text("Αυτόματα (\(languageName(selectedFriend?.language)))").tag(String?.none)
+                        ForEach(languages) { Text($0.name).tag(Optional($0.code)) }
+                    }
+                    .pickerStyle(.menu)
+                }
                 Stepper("Μέγιστη διάρκεια: \(maxMinutes) λεπτά", value: $maxMinutes, in: 1...5)
                 if ownNumberAvailable {
                     Toggle("Κλήση από το δικό μου νούμερο", isOn: $fromOwnNumber)
@@ -200,6 +211,10 @@ struct NewCallView: View {
 
     // MARK: Actions
 
+    private func languageName(_ code: String?) -> String {
+        languages.first { $0.code == code }?.name ?? "Ελληνικά"
+    }
+
     private func select(_ t: PromptTemplate) {
         prankId = t.id
         persona = t.persona; scenario = t.scenario; context = t.context; reveal = t.reveal
@@ -213,7 +228,9 @@ struct NewCallView: View {
             async let t = api.templates()
             async let o = api.options()
             (friends, templates) = try await (f, t)
-            ownNumberAvailable = (try? await o)?.ownNumberAvailable ?? false
+            let options = try? await o
+            ownNumberAvailable = options?.ownNumberAvailable ?? false
+            languages = options?.languages ?? []
             if !ownNumberAvailable { fromOwnNumber = false }
             if friendId.isEmpty, friends.count == 1 { friendId = friends[0].id }
             errorMessage = nil
@@ -227,7 +244,8 @@ struct NewCallView: View {
         defer { starting = false }
         let request = NewCall(friendId: friend.id, persona: persona.trimmed, scenario: scenario.trimmed,
                               context: context.trimmed, reveal: reveal.trimmed, voice: voice,
-                              maxDurationSeconds: maxMinutes * 60, fromOwnNumber: fromOwnNumber)
+                              maxDurationSeconds: maxMinutes * 60, fromOwnNumber: fromOwnNumber,
+                              language: language)
         do {
             errorMessage = nil
             let call = try await api.startCall(request)

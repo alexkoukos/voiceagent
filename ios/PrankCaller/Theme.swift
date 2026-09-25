@@ -18,12 +18,13 @@ enum Radius {
 }
 
 enum Palette {
-    /// Black in light mode, white in dark mode.
-    static let ink = Color.primary
+    /// Black in light mode, white in dark mode. A fixed color, not `Color.primary`,
+    /// because Liquid Glass renders `.primary` content as a lighter, vibrant grey.
+    static let ink = Color(.label)
     /// The color that sits on top of `ink` (white on black, black on white).
     static let onInk = Color(.systemBackground)
     /// Faint ink wash for selected cards.
-    static let inkSoft = Color.primary.opacity(0.06)
+    static let inkSoft = Color(.label).opacity(0.06)
     static let background = Color(.systemGroupedBackground)
     /// Only for ending a call and deleting, following iOS conventions.
     static let danger = Color.red
