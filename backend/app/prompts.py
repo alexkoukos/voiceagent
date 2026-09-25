@@ -136,30 +136,11 @@ def build_receptionist_prompt(
     return out
 
 
-def default_greeting(
-    practice, *, now: datetime, language: str, recording: bool = True, hours_state: str = "open",
-    after_hours: dict | None = None,
-) -> str:
-    """Opening line; says the caller is talking to an AI and that the call is recorded (G1).
-    A greeting set on the practice replaces it."""
+def default_greeting(practice, *, language: str) -> str:
+    """Opening line: only that it's the digital assistant and how it can help (the owner's
+    choice, 2026-09-25). A greeting set on the practice replaces it."""
     if practice.greeting.strip():
         return practice.greeting.strip()
-    hour = now.astimezone(ZoneInfo(practice.timezone)).hour
-    after_hours = after_hours or {"booking": True, "message": True}
     if language == "el":
-        hello = "καλημέρα σας" if hour < 12 else "καλησπέρα σας"
-        text = f"{practice.name}, {hello}. Είμαι ο ψηφιακός βοηθός"
-        text += " και η κλήση καταγράφεται." if recording else "."
-        if hours_state != "open":
-            now_ = "κάνουμε διάλειμμα" if hours_state == "break" else "είμαστε κλειστά"
-            offer = " ή ".join(x for x, ok in (("να κλείσω ραντεβού", after_hours["booking"]),
-                                               ("να κρατήσω μήνυμα", after_hours["message"])) if ok)
-            text += f" Αυτή την ώρα {now_}" + (f", αλλά μπορώ {offer}." if offer else ".")
-        return text + " Πείτε μου."
-    text = f"Hello, {practice.name}. I'm the digital assistant"
-    text += " and this call is recorded." if recording else "."
-    if hours_state != "open":
-        offer = " or ".join(x for x, ok in (("book an appointment", after_hours["booking"]),
-                                            ("take a message", after_hours["message"])) if ok)
-        text += " We're closed right now" + (f", but I can {offer}." if offer else ".")
-    return text + " How can I help?"
+        return "Είμαι ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω;"
+    return "I'm a digital assistant, how can I help you?"
