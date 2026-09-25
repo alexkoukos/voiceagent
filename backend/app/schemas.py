@@ -2,7 +2,9 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+
+from app.languages import LANGUAGES, language_for_phone
 
 from app.models import CallStatus, TranscriptRole
 
@@ -44,6 +46,12 @@ class FriendOut(BaseModel):
     name: str
     phone_number: str
 
+    @computed_field
+    @property
+    def language(self) -> str:
+        """Language a call to this friend starts in, from the phone prefix."""
+        return language_for_phone(self.phone_number)
+
 
 class CallCreate(BaseModel):
     friend_id: str
@@ -55,6 +63,15 @@ class CallCreate(BaseModel):
     max_duration_seconds: int = Field(default=300, gt=0)
     # Show the owner's verified number (OWN_CALLER_NUMBER) instead of the trunk number.
     from_own_number: bool = False
+    # Starting language; defaults to the friend's phone prefix.
+    language: str | None = None
+
+    @field_validator("language")
+    @classmethod
+    def _known_language(cls, v):
+        if v is not None and v not in LANGUAGES:
+            raise ValueError("unsupported language")
+        return v
 
 
 class CallEvent(BaseModel):
@@ -84,6 +101,7 @@ class CallOut(BaseModel):
     scenario: str
     voice: str
     from_own_number: bool
+    language: str | None
     recording_url: str | None
     duration_seconds: int | None
     end_reason: str | None

@@ -1,5 +1,4 @@
 import SwiftUI
-import AVKit
 
 struct HistoryView: View {
     private let api = APIClient()
@@ -89,9 +88,7 @@ struct CallDetailView: View {
     let callId: String
     let friendName: String
     @State private var call: Call?
-    @State private var player: AVPlayer?
-    @State private var playing = false
-    @State private var loadingAudio = false
+    @State private var player: RecordingPlayer?
     @State private var errorMessage: String?
     @State private var confirmDelete = false
 
@@ -107,7 +104,9 @@ struct CallDetailView: View {
                                 .font(.subheadline).foregroundStyle(.secondary)
                         }
                     }
-                    if call.recordingUrl != nil { recordingCard }
+                    if call.recordingUrl != nil, let player {
+                        AudioPlayerView(player: player) { confirmDelete = true }
+                    }
                     if let entries = call.transcriptEntries, !entries.isEmpty {
                         VStack(alignment: .leading, spacing: Space.m) {
                             SectionTitle("Τι ειπώθηκε")
@@ -125,7 +124,7 @@ struct CallDetailView: View {
         .navigationTitle(friendName)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
-        .onDisappear { player?.pause() }
+        .onDisappear { player?.tearDown() }
         .confirmationDialog("Να διαγραφεί οριστικά η ηχογράφηση και η απομαγνητοφώνηση;",
                             isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Διαγραφή", role: .destructive) { Task { await deleteRecording() } }
@@ -133,64 +132,21 @@ struct CallDetailView: View {
         }
     }
 
-    private var recordingCard: some View {
-        HStack(spacing: Space.l) {
-            Button { Task { await togglePlay() } } label: {
-                Image(systemName: playing ? "pause.fill" : "play.fill")
-                    .font(.title2)
-                    .frame(width: 56, height: 56)
-                    .foregroundStyle(Palette.onInk)
-                    .background(Palette.ink, in: Circle())
-            }
-            .accessibilityLabel(playing ? "Παύση" : "Αναπαραγωγή")
-            .disabled(loadingAudio)
-            VStack(alignment: .leading, spacing: Space.xs) {
-                Text("Ηχογράφηση").font(.body.weight(.semibold))
-                Text(loadingAudio ? "Φορτώνει…" : "Πάτα για ακρόαση").font(.subheadline).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button(role: .destructive) { confirmDelete = true } label: { Image(systemName: "trash") }
-                .frame(width: 44, height: 44)
-                .accessibilityLabel("Διαγραφή ηχογράφησης")
-        }
-        .padding(Space.l)
-        .glass()
-    }
-
     private func load() async {
-        do { call = try await APIClient().call(callId) } catch { errorMessage = friendlyMessage(error) }
-    }
-
-    private func togglePlay() async {
-        if let player {
-            if playing { player.pause() } else {
-                if player.currentItem?.currentTime() == player.currentItem?.duration { await player.seek(to: .zero) }
-                player.play()
-            }
-            playing.toggle()
-            return
-        }
-        loadingAudio = true
-        defer { loadingAudio = false }
         do {
-            let url = try await APIClient().recordingURL(callId)
-            try? AVAudioSession.sharedInstance().setCategory(.playback)
-            let p = AVPlayer(url: url)
-            NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
-                                                   object: p.currentItem, queue: .main) { _ in playing = false }
-            player = p
-            p.play()
-            playing = true
-            errorMessage = nil
+            call = try await APIClient().call(callId)
+            if call?.recordingUrl != nil, player == nil {
+                let id = callId
+                player = RecordingPlayer { try await APIClient().recordingURL(id) }
+            }
         } catch { errorMessage = friendlyMessage(error) }
     }
 
     private func deleteRecording() async {
         do {
-            player?.pause()
+            player?.tearDown()
             try await APIClient().deleteRecording(callId)
             player = nil
-            playing = false
             await load()
         } catch { errorMessage = friendlyMessage(error) }
     }

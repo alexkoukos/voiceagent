@@ -32,6 +32,7 @@ async def start_call(db: AsyncSession, call: Call, friend: Friend) -> None:
         context=call.context,
         reveal=call.reveal,
         max_duration_seconds=call.max_duration_seconds,
+        language=call.language or "el",
     )
     try:
         await dispatch_call(
@@ -41,6 +42,7 @@ async def start_call(db: AsyncSession, call: Call, friend: Friend) -> None:
             voice=call.voice,
             max_duration_seconds=call.max_duration_seconds,
             from_own_number=call.from_own_number,
+            language=call.language or "el",
         )
         call.status = CallStatus.dialing
     except Exception:

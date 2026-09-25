@@ -4,6 +4,8 @@ struct Friend: Codable, Identifiable, Hashable {
     let id: String
     let name: String
     let phoneNumber: String
+    /// Language a call to this friend starts in, from the phone prefix.
+    let language: String?
 }
 
 struct PromptTemplate: Codable, Identifiable, Hashable {
@@ -94,10 +96,19 @@ struct NewCall: Encodable {
     let voice: String
     let maxDurationSeconds: Int
     let fromOwnNumber: Bool
+    /// nil = the friend's language, from their phone prefix.
+    let language: String?
 }
 
 struct ServerOptions: Decodable {
     let ownNumberAvailable: Bool
+    let languages: [LanguageOption]?
+}
+
+struct LanguageOption: Decodable, Hashable, Identifiable {
+    let code: String
+    let name: String
+    var id: String { code }
 }
 
 struct NewFriend: Encodable {

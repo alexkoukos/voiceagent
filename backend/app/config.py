@@ -57,5 +57,7 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def load_master_prompt() -> str:
-    return MASTER_PROMPT_PATH.read_text(encoding="utf-8")
+def load_master_prompt(language: str = "el") -> str:
+    """Greek calls use the Greek master prompt; every other language the English one."""
+    path = MASTER_PROMPT_PATH if language == "el" else CONFIG_DIR / "master_prompt.en.md"
+    return path.read_text(encoding="utf-8")

@@ -65,6 +65,8 @@ class Call(Base):
     voice: Mapped[str] = mapped_column(String, default="default")
     max_duration_seconds: Mapped[int] = mapped_column(Integer, default=300)
     from_own_number: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Language the call starts in (e.g. "el"); the agent follows the friend if they switch.
+    language: Mapped[str | None] = mapped_column(String, nullable=True)
 
     status: Mapped[CallStatus] = mapped_column(
         Enum(CallStatus), default=CallStatus.pending
