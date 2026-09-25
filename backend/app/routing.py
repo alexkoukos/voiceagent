@@ -48,7 +48,8 @@ def rules_for(practice: Practice) -> dict:
         "handoff": {"enabled": True, "mode": "app", "timeout_seconds": 20, "ask_twice": True,
                     "after_hours": False, **(r.get("handoff") or {})},
         "after_hours": {"booking": True, "message": True, **(r.get("after_hours") or {})},
-        "language_switch": r.get("language_switch", True),
+        # Off by default: the call keeps its language (Greek, or English for foreign numbers).
+        "language_switch": r.get("language_switch", False),
     }
 
 
