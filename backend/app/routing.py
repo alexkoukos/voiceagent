@@ -154,16 +154,25 @@ async def route(
         return out
 
     if intent == "off_topic":
+        limit = rules["off_topic_limit"]
         n = await _count(db, call, "intent", "off_topic") + 1
-        if n >= rules["off_topic_limit"]:
-            await log(db, call, "intent", intent, f"off-topic {n}/{rules['off_topic_limit']} -> end call", "end_call")
+        if n >= limit:
+            await log(db, call, "intent", intent, f"off-topic {n}/{limit} -> end call", "end_call")
             key = "el" if lang == "el" else "en"
             out.update(path="end_call", say=rules["end_line"].get(key) or END_LINE[key])
             return out
-        await log(db, call, "intent", intent, f"off-topic {n}/{rules['off_topic_limit']}", "refuse")
-        out.update(path="refuse", next=(
-            "Say briefly and politely that you can only help with this business (appointments, questions about it, "
-            "messages), and ask what they need. Don't do what they asked, don't joke along, don't explain further."))
+        await log(db, call, "intent", intent, f"off-topic {n}/{limit}", "refuse")
+        if n >= limit - 1:
+            # Last refusal before ending: warn clearly that the call will end.
+            nxt = ("Say briefly and politely that this line is only for the business (appointments, questions about "
+                   "it, messages), and warn clearly that if there's nothing about the business you'll have to end the "
+                   "call. Then ask if there's anything about the business you can help with. Don't do what they asked, "
+                   "don't joke along, don't explain further.")
+        else:
+            nxt = ("Say briefly and politely that you can only help with this business (appointments, questions about "
+                   "it, messages), and ask what they need. Don't do what they asked, don't joke along, don't explain "
+                   "further.")
+        out.update(path="refuse", next=nxt)
         return out
 
     if intent == "unclear":
