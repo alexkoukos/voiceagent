@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from app.booking import WEEKDAY_EL, WEEKDAY_EN, WEEKDAY_KEYS, say_date
@@ -54,6 +54,8 @@ RECEPTIONIST_LABELS = {
         "opens": "Ανοίγει ξανά", "staff": "Προσωπικό (όνομα, ρόλος, υπηρεσίες)", "all": "όλες",
         "departments": "Τμήματα", "known": "Γνωστός πελάτης", "appts": "Επόμενα ραντεβού του",
         "purpose": "## Σκοπός αυτής της κλήσης",
+        "closures": "Κλειστά και άδειες (μην κλείνεις ραντεβού αυτές τις μέρες)", "whole": "όλη η επιχείρηση",
+        "until": "έως",
         "roles": {"doctor": "γιατρός", "secretary": "γραμματεία", "owner": "ιδιοκτήτης", "staff": "προσωπικό"},
     },
     "other": {
@@ -65,6 +67,8 @@ RECEPTIONIST_LABELS = {
         "opens": "Opens again", "staff": "Staff (name, role, services)", "all": "all",
         "departments": "Departments", "known": "Known customer", "appts": "Their upcoming appointments",
         "purpose": "## Purpose of this call",
+        "closures": "Closures and leave (no bookings on these days)", "whole": "whole business",
+        "until": "to",
         "roles": {"doctor": "doctor", "secretary": "reception", "owner": "owner", "staff": "staff"},
     },
 }
@@ -114,6 +118,17 @@ def build_receptionist_prompt(
             )
         parts.append(known)
     parts.append(f"{lb['hours']}:\n" + "\n".join(hours))
+    names = {p.id: p.name for p in staff or []}
+    closures = [
+        f"- {say_date(date.fromisoformat(c['from']), language)} {lb['until']} "
+        f"{say_date(date.fromisoformat(c['to']), language)}: "
+        + (names.get(c.get("staff_id"), "?") if c.get("staff_id") else lb["whole"])
+        + (f" ({c['reason']})" if c.get("reason") else "")
+        for c in sorted((practice.rules or {}).get("closures") or [], key=lambda c: c["from"])
+        if c["to"] >= local.date().isoformat()
+    ]
+    if closures:
+        parts.append(f"{lb['closures']}:\n" + "\n".join(closures))
     parts.append(f"{lb['services']}:\n" + "\n".join(services))
     if staff:
         rows = []

@@ -1,7 +1,9 @@
 """Founder-side setup and the receptionist call log (manual onboarding, PRD scope)."""
 
 import json
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
@@ -16,7 +18,7 @@ from app.models import (
     TranscriptRole, WaitlistEntry,
 )
 from app.schemas import (
-    AppointmentCreate, AppointmentMove, AppointmentOut, CallReview, DeviceIn, HandoffJoin, HandoffOut,
+    AppointmentCreate, AppointmentMove, AppointmentOut, CallReview, ClosureIn, ClosureOut, DeviceIn, HandoffJoin, HandoffOut,
     MessageOut, MessageUpdate, PracticeIn, PracticeOut, ReceptionistCallDetail, ReceptionistCallOut, StaffIn,
     StaffOut, WaitlistOut,
 )
@@ -377,6 +379,88 @@ async def cancel_appointment(practice_id: str, appointment_id: str, db: AsyncSes
     from app.dispatcher import start_next_queued
     await start_next_queued(db)
     return appt
+
+
+# --- closures and leave (OP3) ---
+
+
+async def _to_rebook(db: AsyncSession, practice: Practice, closure: dict) -> list[Appointment]:
+    tz = ZoneInfo(practice.timezone)
+    start = datetime.combine(datetime.fromisoformat(closure["from"]).date(), time(0), tz)
+    end = datetime.combine(datetime.fromisoformat(closure["to"]).date() + timedelta(days=1), time(0), tz)
+    q = select(Appointment).where(
+        Appointment.practice_id == practice.id, Appointment.status == "booked",
+        Appointment.starts_at >= start, Appointment.starts_at < end,
+    )
+    if closure.get("staff_id"):
+        q = q.where(Appointment.staff_id == closure["staff_id"])
+    return list((await db.execute(q.order_by(Appointment.starts_at))).scalars())
+
+
+async def _closure_out(db: AsyncSession, practice: Practice, c: dict) -> ClosureOut:
+    return ClosureOut(
+        id=c["id"], date_from=c["from"], date_to=c["to"], staff_id=c.get("staff_id"), reason=c.get("reason"),
+        to_rebook=[AppointmentOut.model_validate(a) for a in await _to_rebook(db, practice, c)],
+    )
+
+
+@router.get("/{practice_id}/closures", response_model=list[ClosureOut])
+async def list_closures(practice_id: str, db: AsyncSession = Depends(get_db)):
+    practice = await _get(db, practice_id)
+    closures = sorted(booking.rules_for(practice)["closures"] or [], key=lambda c: c["from"])
+    return [await _closure_out(db, practice, c) for c in closures]
+
+
+@router.post("/{practice_id}/closures", response_model=ClosureOut)
+async def add_closure(practice_id: str, payload: ClosureIn, db: AsyncSession = Depends(get_db)):
+    """The agent stops offering these days at once; appointments already in the range are
+    returned in `to_rebook` and emailed to the business."""
+    practice = await _get(db, practice_id)
+    person = None
+    if payload.staff_id:
+        person = await db.get(Staff, payload.staff_id)
+        if person is None or person.practice_id != practice.id:
+            raise HTTPException(status_code=404, detail="Staff not found")
+    closure = {"id": uuid.uuid4().hex, "from": payload.date_from.isoformat(), "to": payload.date_to.isoformat()}
+    if person:
+        closure["staff_id"] = person.id
+    if payload.reason:
+        closure["reason"] = payload.reason
+    rules = dict(practice.rules or {})
+    rules["closures"] = [*(rules.get("closures") or []), closure]
+    practice.rules = rules
+    await db.flush()
+    out = await _closure_out(db, practice, closure)
+    if out.to_rebook:
+        staff = await booking.staff_of(db, practice.id)
+        lang = practice.language
+        who = person.name if person else practice.name
+        span = f"{booking.say_date(payload.date_from, lang)} – {booking.say_date(payload.date_to, lang)}"
+        lines = []
+        for a in await _to_rebook(db, practice, closure):
+            d = booking.describe(practice, a, staff, lang)
+            lines.append(f"- {d['date_spoken']} {d['time']}, {a.customer_name} {a.customer_phone or ''}, {d['service']}")
+        subject = (f"{len(lines)} ραντεβού για αλλαγή: {who} κλειστά {span}" if lang == "el"
+                   else f"{len(lines)} appointments to rebook: {who} closed {span}")
+        await notifications.queue_business(db, practice, kind="closure_rebook", subject=subject,
+                                           body="\n".join(lines), dedupe_key=f"closure:{closure['id']}")
+    await db.commit()
+    notifications.kick()
+    events.publish(f"practice:{practice.id}")
+    return out
+
+
+@router.delete("/{practice_id}/closures/{closure_id}", status_code=204)
+async def delete_closure(practice_id: str, closure_id: str, db: AsyncSession = Depends(get_db)):
+    practice = await _get(db, practice_id)
+    rules = dict(practice.rules or {})
+    kept = [c for c in rules.get("closures") or [] if c["id"] != closure_id]
+    if len(kept) == len(rules.get("closures") or []):
+        raise HTTPException(status_code=404, detail="Closure not found")
+    rules["closures"] = kept
+    practice.rules = rules
+    await db.commit()
+    events.publish(f"practice:{practice.id}")
 
 
 @router.get("/{practice_id}/waitlist", response_model=list[WaitlistOut])
