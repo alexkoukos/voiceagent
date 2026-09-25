@@ -1,7 +1,8 @@
+import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models import CallStatus, TranscriptRole
 
@@ -13,9 +14,27 @@ LONG_TEXT = 2000
 Voice = Literal["default", "Puck", "Charon", "Fenrir", "Kore", "Aoede"]
 
 
+def normalize_phone(value: str) -> str:
+    """'+30 690 762-6384' / '0030 (690) 7626384' -> '+306907626384'."""
+    cleaned = re.sub(r"[\s\-(). ]", "", value)
+    if cleaned.startswith("00"):
+        cleaned = "+" + cleaned[2:]
+    return cleaned
+
+
 class FriendCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     phone_number: str = Field(pattern=r"^\+\d{8,15}$")
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, v):
+        return v.strip() if isinstance(v, str) else v
+
+    @field_validator("phone_number", mode="before")
+    @classmethod
+    def _normalize_phone(cls, v):
+        return normalize_phone(v) if isinstance(v, str) else v
 
 
 class FriendOut(BaseModel):
