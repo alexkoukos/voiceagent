@@ -70,6 +70,8 @@ class Call(Base):
     recording_url: Mapped[str | None] = mapped_column(String, nullable=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     delete_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set when a call doesn't connect: no_answer, declined, unreachable or error.
+    end_reason: Mapped[str | None] = mapped_column(String, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     started_at: Mapped[datetime | None] = mapped_column(nullable=True)

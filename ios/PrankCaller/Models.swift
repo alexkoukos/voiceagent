@@ -1,4 +1,4 @@
-import Foundation
+import SwiftUI
 
 struct Friend: Codable, Identifiable, Hashable {
     let id: String
@@ -32,12 +32,58 @@ struct Call: Codable, Identifiable {
     let fromOwnNumber: Bool
     let recordingUrl: String?
     let durationSeconds: Int?
+    let endReason: String?
     let createdAt: Date
     let startedAt: Date?
     let endedAt: Date?
     var transcriptEntries: [TranscriptEntry]?
 
     var isInProgress: Bool { ["pending", "queued", "dialing", "active"].contains(status) }
+    /// The call ended without ever connecting (no answer, declined, ...), so it can be retried.
+    var canRetry: Bool { status == "failed" }
+
+    var statusText: String {
+        switch status {
+        case "pending", "dialing": return "Καλεί…"
+        case "queued": return "Σε αναμονή για γραμμή"
+        case "active": return "Σε εξέλιξη"
+        case "completed": return "Ολοκληρώθηκε"
+        case "cancelled": return "Ακυρώθηκε"
+        case "failed":
+            switch endReason {
+            case "no_answer": return "Δεν απάντησε"
+            case "declined": return "Απέρριψε την κλήση"
+            case "unreachable": return "Ο αριθμός δεν είναι διαθέσιμος"
+            default: return "Η κλήση απέτυχε"
+            }
+        default: return status
+        }
+    }
+
+    var statusIcon: String {
+        switch status {
+        case "pending", "dialing": return "phone.arrow.up.right"
+        case "queued": return "hourglass"
+        case "active": return "waveform"
+        case "completed": return "checkmark.circle.fill"
+        case "cancelled": return "xmark.circle"
+        default:
+            switch endReason {
+            case "no_answer": return "phone.badge.clock"
+            case "declined": return "phone.down.fill"
+            default: return "exclamationmark.triangle.fill"
+            }
+        }
+    }
+
+    var statusColor: Color {
+        switch status {
+        case "active", "completed": return Palette.success
+        case "pending", "dialing", "queued": return Palette.waiting
+        case "cancelled": return .secondary
+        default: return Palette.danger
+        }
+    }
 }
 
 struct NewCall: Encodable {

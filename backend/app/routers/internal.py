@@ -50,6 +50,8 @@ async def call_event(call_id: str, event: CallEvent, db: AsyncSession = Depends(
             call.ended_at = datetime.utcnow()
             if call.started_at:
                 call.duration_seconds = int((call.ended_at - call.started_at).total_seconds())
+    if event.end_reason:
+        call.end_reason = event.end_reason
     if event.recording_url:
         if call.delete_requested:
             delete_recording_later(event.recording_url)

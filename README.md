@@ -1,4 +1,4 @@
-# AI Prank Caller — Level 1
+# AI Caller — Level 1
 
 Personal tool: calls a friend from a Greek 210 landline number and runs a prank scenario in natural Greek. See [PRD AI Prank Caller (Level 1).md](<PRD AI Prank Caller (Level 1).md>) for the full spec.
 
@@ -41,15 +41,15 @@ python agent.py dev
 
 One Railway project with three services, all from this GitHub repo:
 
-1. **Postgres:** New → Database → PostgreSQL.
+1. **Postgres:** New → Database → PostgreSQL. **Recordings:** `railway bucket create recordings --region ams`.
 2. **backend:** New → GitHub repo → set **Root Directory** to `backend` (it builds the Dockerfile; migrations run on boot). In Settings, set the health check path to `/health`. Under Networking, generate a public domain. Variables:
    - `DATABASE_URL=${{Postgres.DATABASE_URL}}`
    - `APP_API_TOKEN`, `INTERNAL_API_TOKEN`, `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `SIP_TRUNK_ID`, `SIP_OUTBOUND_NUMBER`, `TELNYX_PUBLIC_KEY` (copy from `.env`)
-   - `R2_*` once you have them
+   - Recording storage, referencing the bucket: `AWS_ENDPOINT_URL=${{recordings.ENDPOINT}}`, `AWS_S3_BUCKET_NAME=${{recordings.BUCKET}}`, `AWS_ACCESS_KEY_ID=${{recordings.ACCESS_KEY_ID}}`, `AWS_SECRET_ACCESS_KEY=${{recordings.SECRET_ACCESS_KEY}}`, `AWS_DEFAULT_REGION=auto`, `AWS_S3_URL_STYLE=virtual-host`
 3. **agent:** New → same repo → **Root Directory** `agent`. No public domain needed. Variables:
    - `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `GEMINI_API_KEY`, `INTERNAL_API_TOKEN`, `SIP_TRUNK_ID`
    - `BACKEND_PUBLIC_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}`
-   - `R2_*` once you have them
+   - The same six `AWS_*` storage variables as the backend
 
 Railway no longer reads `railway.toml`, so these settings live on the services themselves. Keep the backend at one replica. Point the Telnyx webhook at `https://<backend domain>/webhooks/telnyx` and the app's Settings tab at the backend domain.
 
@@ -64,13 +64,13 @@ Fly.io configs are in `backend/fly.toml` and `agent/fly.toml`; both services hav
 cd backend && fly launch --no-deploy --copy-config
 fly postgres create && fly postgres attach <pg-app>   # sets DATABASE_URL
 fly secrets set APP_API_TOKEN=... INTERNAL_API_TOKEN=... LIVEKIT_URL=... LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=... \
-  SIP_TRUNK_ID=... SIP_OUTBOUND_NUMBER=... R2_ACCOUNT_ID=... R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=... R2_BUCKET_NAME=...
+  SIP_TRUNK_ID=... SIP_OUTBOUND_NUMBER=... AWS_ENDPOINT_URL=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_S3_BUCKET_NAME=...
 fly deploy
 
 # agent worker (no public port)
 cd ../agent && fly launch --no-deploy --copy-config
 fly secrets set LIVEKIT_URL=... LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=... GEMINI_API_KEY=... INTERNAL_API_TOKEN=... \
-  BACKEND_PUBLIC_URL=https://<backend-app>.fly.dev SIP_TRUNK_ID=... R2_ACCOUNT_ID=... R2_ACCESS_KEY_ID=... R2_SECRET_ACCESS_KEY=... R2_BUCKET_NAME=...
+  BACKEND_PUBLIC_URL=https://<backend-app>.fly.dev SIP_TRUNK_ID=... AWS_ENDPOINT_URL=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_S3_BUCKET_NAME=...
 fly deploy
 ```
 

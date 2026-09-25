@@ -4,9 +4,27 @@ enum APIError: LocalizedError {
     case badStatus(Int, String)
     var errorDescription: String? {
         switch self {
-        case .badStatus(let code, let body): return "Server returned \(code): \(body)"
+        case .badStatus(401, _): return "Λάθος κλειδί. Έλεγξε τις Ρυθμίσεις (⚙︎)."
+        case .badStatus(409, _): return "Η ηχογράφηση ανεβαίνει ακόμα. Δοκίμασε ξανά σε λίγα δευτερόλεπτα."
+        case .badStatus(404, _): return "Δεν βρέθηκε. Μπορεί να έχει διαγραφεί."
+        case .badStatus(422, _): return "Κάποιο πεδίο δεν είναι σωστό. Έλεγξε τι έγραψες."
+        case .badStatus(let code, _): return "Κάτι πήγε στραβά στον server (\(code)). Δοκίμασε ξανά."
         }
     }
+}
+
+/// Turns any error into a short Greek message for the user.
+func friendlyMessage(_ error: Error) -> String {
+    if let e = error as? APIError { return e.errorDescription ?? "Κάτι πήγε στραβά." }
+    if let e = error as? URLError {
+        switch e.code {
+        case .notConnectedToInternet, .networkConnectionLost: return "Δεν υπάρχει σύνδεση στο internet."
+        case .badURL, .unsupportedURL, .cannotFindHost: return "Η διεύθυνση του server δεν είναι σωστή. Έλεγξε τις Ρυθμίσεις (⚙︎)."
+        case .timedOut: return "Ο server αργεί να απαντήσει. Δοκίμασε ξανά."
+        default: return "Δεν ήταν δυνατή η σύνδεση με τον server."
+        }
+    }
+    return "Κάτι πήγε στραβά. Δοκίμασε ξανά."
 }
 
 enum Settings {
@@ -19,11 +37,15 @@ enum Settings {
             }
             return Keychain.get("apiKey") ?? ""
         }
-        set { Keychain.set(newValue, for: "apiKey") }
+        set { Keychain.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), for: "apiKey") }
     }
     static var baseURL: String {
         get { UserDefaults.standard.string(forKey: "baseURL") ?? "http://localhost:8000" }
-        set { UserDefaults.standard.set(newValue, forKey: "baseURL") }
+        set {
+            var url = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            while url.hasSuffix("/") { url.removeLast() }
+            UserDefaults.standard.set(url, forKey: "baseURL")
+        }
     }
 }
 

@@ -6,12 +6,11 @@ struct PrankCallerApp: App {
         WindowGroup {
             TabView {
                 NewCallView()
-                    .tabItem { Label("New call", systemImage: "phone.arrow.up.right") }
+                    .tabItem { Label("Φάρσα", systemImage: "phone.fill") }
                 HistoryView()
-                    .tabItem { Label("History", systemImage: "clock") }
-                SettingsView()
-                    .tabItem { Label("Settings", systemImage: "gear") }
+                    .tabItem { Label("Ιστορικό", systemImage: "clock") }
             }
+            .tint(Palette.accent)
         }
     }
 }
