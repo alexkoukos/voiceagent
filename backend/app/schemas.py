@@ -14,7 +14,7 @@ from app.models import CallStatus, TranscriptRole
 SHORT_TEXT = 200
 LONG_TEXT = 2000
 
-Voice = Literal["default", "Puck", "Charon", "Fenrir", "Algenib", "Algieba", "Kore", "Aoede"]
+Voice = Literal["default", "Puck", "Charon", "Fenrir", "Algenib", "Algieba", "Zubenelgenubi", "Kore", "Aoede"]
 
 
 def normalize_phone(value: str) -> str:
@@ -191,7 +191,7 @@ class PracticeIn(BaseModel):
     slug: str | None = Field(default=None, pattern=r"^[a-z0-9\-]{6,64}$")
     timezone: str = "Europe/Athens"
     language: Literal["el", "en"] = "el"
-    voice: Voice = "Algieba"
+    voice: Voice = "Zubenelgenubi"
     greeting: str = Field(default="", max_length=LONG_TEXT)
     phone_numbers: list[str] = []
     # "mon".."sun" -> [["09:00", "14:00"], ["17:00", "21:00"]]
