@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Main screen: pick a friend, pick a prank, call. Everything else is tucked away.
+/// Main screen: pick a friend, describe the call (or start from a preset), call.
 struct NewCallView: View {
     private let api = APIClient()
     // Stable keys; the agent maps each to an ElevenLabs (or Gemini) voice.
@@ -9,18 +9,14 @@ struct NewCallView: View {
         ("Puck", "Αντρική, κεφάτη"), ("Charon", "Αντρική, ήρεμη"),
         ("Fenrir", "Αντρική, ενθουσιώδης"), ("Algenib", "Αντρική, τραχιά"),
     ]
-    private static let customId = "custom"
-
     @State private var friends: [Friend] = []
     @State private var templates: [PromptTemplate] = []
     @State private var loaded = false
     @State private var friendId = ""
     @State private var prankId = ""
-    @State private var persona = ""
+    /// The whole call in the user's words; a preset just fills it in.
     @State private var scenario = ""
-    @State private var context = ""
-    @State private var reveal = ""
-    @State private var voice = "default"
+    @State private var voice = "Puck"
     @State private var maxMinutes = 3
     @State private var fromOwnNumber = false
     @State private var ownNumberAvailable = false
@@ -35,12 +31,9 @@ struct NewCallView: View {
     @State private var starting = false
 
     private var needsSetup: Bool { Settings.apiKey.isEmpty }
-    private var isCustom: Bool { prankId == Self.customId }
     private var selectedFriend: Friend? { friends.first { $0.id == friendId } }
     private var canCall: Bool {
-        guard selectedFriend != nil, !starting else { return false }
-        if isCustom { return !persona.trimmed.isEmpty && !scenario.trimmed.isEmpty }
-        return templates.contains { $0.id == prankId }
+        selectedFriend != nil && !starting && !scenario.trimmed.isEmpty
     }
 
     var body: some View {
@@ -132,38 +125,36 @@ struct NewCallView: View {
 
     private var prankSection: some View {
         VStack(alignment: .leading, spacing: Space.m) {
-            SectionTitle("Ποιο σενάριο;")
-            if !loaded {
-                ForEach(0..<3, id: \.self) { _ in
-                    PrankCard(title: "Σενάριο που φορτώνει", subtitle: "Περιγραφή του σεναρίου που φορτώνει", selected: false) {}
+            SectionTitle("Τι θα γίνει;")
+            if !templates.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Space.s) {
+                        ForEach(templates) { t in
+                            FriendChip(name: t.displayTitle, selected: prankId == t.id) { select(t) }
+                        }
+                    }
                 }
-                .redacted(reason: .placeholder)
-            } else {
-                ForEach(templates) { t in
-                    PrankCard(title: t.displayTitle, subtitle: t.scenario, selected: prankId == t.id) { select(t) }
+                .scrollClipDisabled()
+            }
+            VStack(alignment: .leading, spacing: Space.m) {
+                TextField("Γράψε ποιος παίρνει και τι θα γίνει, π.χ. «Είσαι υπάλληλος της ΔΕΗ και του λες ότι θα του κόψουν το ρεύμα γιατί το ψυγείο του καταναλώνει όσο ένα χωριό.»",
+                          text: $scenario, axis: .vertical)
+                    .lineLimit(5...14)
+                    .onChange(of: scenario) { _, text in
+                        // Edited away from the preset: it's the user's own call now.
+                        if let t = templates.first(where: { $0.id == prankId }), t.scenario != text { prankId = "" }
+                    }
+                Button { Task { await saveTemplate() } } label: {
+                    Label("Αποθήκευση ως σενάριο", systemImage: "bookmark")
                 }
-                PrankCard(title: "Δικό μου σενάριο", subtitle: "Γράψε εσύ ποιος παίρνει και τι θα πει.",
-                          selected: isCustom) { prankId = Self.customId }
-                if isCustom { customFields }
+                .disabled(scenario.trimmed.isEmpty || !prankId.isEmpty)
+                .tint(Palette.ink)
+                if let notice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
             }
+            .padding(Space.l)
+            .glass()
+            .redacted(reason: loaded ? [] : .placeholder)
         }
-    }
-
-    private var customFields: some View {
-        VStack(alignment: .leading, spacing: Space.m) {
-            Field("Ποιος παίρνει;", text: $persona, hint: "π.χ. υπάλληλος της ΔΕΗ")
-            Field("Τι θα γίνει στην κλήση;", text: $scenario, hint: "π.χ. του λες ότι θα του κόψουν το ρεύμα για…")
-            Field("Τι ξέρει ο AI για τον φίλο; (προαιρετικό)", text: $context, hint: "π.χ. είναι Ολυμπιακός, λέει συνέχεια «ρε φίλε»")
-            Field("Πότε να πει ότι είναι AI; (προαιρετικό)", text: $reveal, hint: "π.χ. μόλις θυμώσει")
-            Button { Task { await saveTemplate() } } label: {
-                Label("Αποθήκευση για επόμενη φορά", systemImage: "bookmark")
-            }
-            .disabled(persona.trimmed.isEmpty || scenario.trimmed.isEmpty)
-            .tint(Palette.ink)
-            if let notice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
-        }
-        .padding(Space.l)
-        .glass()
     }
 
     private var optionsSection: some View {
@@ -199,7 +190,7 @@ struct NewCallView: View {
 
     private var callBar: some View {
         Button { Task { await startCall() } } label: {
-            Label(starting ? "Ξεκινάει…" : (selectedFriend.map { "Κάλεσε · \($0.name)" } ?? "Διάλεξε φίλο και σενάριο"),
+            Label(starting ? "Ξεκινάει…" : (selectedFriend.map { "Κάλεσε · \($0.name)" } ?? "Διάλεξε φίλο και γράψε τι θα γίνει"),
                   systemImage: "phone.fill")
         }
         .buttonStyle(PrimaryButtonStyle())
@@ -217,7 +208,8 @@ struct NewCallView: View {
 
     private func select(_ t: PromptTemplate) {
         prankId = t.id
-        persona = t.persona; scenario = t.scenario; context = t.context; reveal = t.reveal
+        scenario = t.scenario
+        notice = nil
         if let v = t.voice, Self.voices.contains(where: { $0.id == v }) { voice = v }
     }
 
@@ -242,8 +234,8 @@ struct NewCallView: View {
         guard let friend = selectedFriend else { return }
         starting = true
         defer { starting = false }
-        let request = NewCall(friendId: friend.id, persona: persona.trimmed, scenario: scenario.trimmed,
-                              context: context.trimmed, reveal: reveal.trimmed, voice: voice,
+        let request = NewCall(friendId: friend.id, persona: "", scenario: scenario.trimmed,
+                              context: "", reveal: "", voice: voice,
                               maxDurationSeconds: maxMinutes * 60, fromOwnNumber: fromOwnNumber,
                               language: language)
         do {
@@ -255,9 +247,10 @@ struct NewCallView: View {
 
     private func saveTemplate() async {
         do {
+            let firstLine = scenario.trimmed.split(separator: "\n").first.map(String.init) ?? scenario.trimmed
             let t = try await api.addTemplate(NewTemplate(
-                title: String(scenario.trimmed.prefix(40)), persona: persona.trimmed,
-                scenario: scenario.trimmed, context: context.trimmed, reveal: reveal.trimmed))
+                title: String(firstLine.prefix(40)), persona: "",
+                scenario: scenario.trimmed, context: "", reveal: "", voice: voice))
             templates.append(t)
             prankId = t.id
             notice = "Αποθηκεύτηκε στα σενάριά σου."

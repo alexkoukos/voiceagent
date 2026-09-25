@@ -55,7 +55,8 @@ class FriendOut(BaseModel):
 
 class CallCreate(BaseModel):
     friend_id: str
-    persona: str = Field(min_length=1, max_length=LONG_TEXT)
+    # The call's free-text description is `scenario`; persona is only sent by older app builds.
+    persona: str = Field(default="", max_length=LONG_TEXT)
     scenario: str = Field(min_length=1, max_length=LONG_TEXT)
     context: str = Field(default="", max_length=LONG_TEXT)
     reveal: str = Field(default="", max_length=LONG_TEXT)
@@ -116,7 +117,8 @@ class CallDetailOut(CallOut):
 
 class PromptTemplateCreate(BaseModel):
     title: str = Field(min_length=1, max_length=SHORT_TEXT)
-    persona: str = Field(min_length=1, max_length=LONG_TEXT)
+    # The call's free-text description is `scenario`; persona is only sent by older app builds.
+    persona: str = Field(default="", max_length=LONG_TEXT)
     scenario: str = Field(min_length=1, max_length=LONG_TEXT)
     context: str = Field(default="", max_length=LONG_TEXT)
     reveal: str = Field(default="", max_length=LONG_TEXT)
