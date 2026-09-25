@@ -59,6 +59,8 @@ REALTIME_SILENCE_MS = int(os.environ.get("REALTIME_SILENCE_MS", "500"))
 FILLER_DELAY_SECONDS = 0.5
 # If the callee stays silent after answering, open the conversation after this long.
 GREETING_WAIT_SECONDS = 4
+# Noise filter on the friend's audio before any model hears it; "off" to compare recognition without it.
+NOISE_CANCELLATION = os.environ.get("NOISE_CANCELLATION", "on") != "off"
 # If the callee spoke but no reply has started this long after, open the conversation anyway.
 OPENING_FALLBACK_SECONDS = 5
 
@@ -413,6 +415,8 @@ async def entrypoint(ctx: JobContext) -> None:
         role = "agent" if ev.item.role == "assistant" else "friend"
         text = ev.item.text_content
         if text:
+            # What each side said, to judge recognition and language from the logs.
+            logger.info("call %s %s: %s", call_id, role, text)
             asyncio.create_task(
                 report(call_id, transcript_role=role, transcript_text=text)
             )
@@ -467,7 +471,9 @@ async def entrypoint(ctx: JobContext) -> None:
         room=ctx.room,
         # Clean phone-line noise before transcription and turn detection hear it.
         room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(noise_cancellation=noise_cancellation.BVCTelephony()),
+            audio_input=room_io.AudioInputOptions(
+                noise_cancellation=noise_cancellation.BVCTelephony() if NOISE_CANCELLATION else None,
+            ),
         ),
     )
     try:
