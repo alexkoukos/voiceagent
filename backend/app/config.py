@@ -34,8 +34,38 @@ class Settings(BaseSettings):
     aws_default_region: str = "auto"
     aws_s3_url_style: str = "virtual-host"
 
+    # Service account key (the whole JSON) for practices' Google Calendars; empty keeps
+    # appointments only in our database.
+    google_service_account_json: str = ""
+
+    # Notifications. Email over SMTP (any provider); SMS through Telnyx Messaging;
+    # push through APNs (needs a paid Apple developer account). Unset channels are skipped.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    email_from: str = ""
+    telnyx_api_key: str = ""
+    # Sender for SMS: a Telnyx number or a registered alphanumeric sender id.
+    sms_from: str = ""
+    apns_key_p8: str = ""
+    apns_key_id: str = ""
+    apns_team_id: str = ""
+    apns_topic: str = "com.alekos.prankcaller"
+
+    # Call summaries (a cheap text model, after hang-up).
+    summary_model: str = "gemini-3.5-flash-lite"
+    # Cost estimate per call, EUR per minute.
+    cost_model_eur_per_min: float = 0.03
+    cost_telephony_eur_per_min: float = 0.01
+    # Background jobs: notification sender, digests, reminders, retention.
+    scheduler_enabled: bool = True
+
     max_call_duration_seconds: int = 300
     max_concurrent_calls: int = 1
+
+    # Agent the backend dispatches receptionist web calls to; "prank-caller-test" for a local worker.
+    agent_name: str = "prank-caller"
 
     internal_api_token: str = ""
     app_api_token: str = ""
@@ -55,6 +85,11 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def load_receptionist_prompt(language: str = "el") -> str:
+    name = "receptionist_prompt.md" if language == "el" else "receptionist_prompt.en.md"
+    return (CONFIG_DIR / name).read_text(encoding="utf-8")
 
 
 def load_master_prompt(language: str = "el") -> str:
