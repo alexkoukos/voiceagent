@@ -14,6 +14,7 @@ import logging
 import os
 
 import httpx
+from google.protobuf.duration_pb2 import Duration
 from livekit import api
 from livekit.agents import (
     Agent,
@@ -30,6 +31,10 @@ logger = logging.getLogger("prank-caller")
 
 BACKEND_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://localhost:8000")
 AGENT_TOKEN = os.environ.get("INTERNAL_API_TOKEN", "")
+# How long the friend's phone rings before we give up (the library default is 30s).
+RINGING_TIMEOUT_SECONDS = int(os.environ.get("RINGING_TIMEOUT_SECONDS", "45"))
+# If the callee stays silent after answering, open the conversation after this long.
+GREETING_WAIT_SECONDS = 4
 
 
 async def report(call_id: str, **event) -> None:
@@ -117,18 +122,23 @@ async def entrypoint(ctx: JobContext) -> None:
                     participant_identity=f"friend-{call_id}",
                     participant_name="Friend",
                     wait_until_answered=True,
+                    ringing_timeout=Duration(seconds=RINGING_TIMEOUT_SECONDS),
                 )
             )
-        except Exception:
-            logger.exception("call %s: dial failed", call_id)
+        except Exception as e:
+            sip_status = (getattr(e, "metadata", None) or {}).get("sip_status_code")
+            logger.exception("call %s: dial failed (sip status %s)", call_id, sip_status)
             await report(call_id, status="failed")
             return
 
         recording_key = None
-        try:
-            recording_key = await start_recording(lk, ctx.room.name, call_id)
-        except Exception:
-            logger.exception("call %s: recording failed to start", call_id)
+        if not os.environ.get("R2_ACCOUNT_ID"):
+            logger.warning("call %s: R2 not configured, not recording", call_id)
+        else:
+            try:
+                recording_key = await start_recording(lk, ctx.room.name, call_id)
+            except Exception:
+                logger.exception("call %s: recording failed to start", call_id)
     finally:
         await lk.aclose()
 
@@ -175,11 +185,23 @@ async def entrypoint(ctx: JobContext) -> None:
 
     ctx.add_shutdown_callback(_finish)
 
+    # Let the callee speak first ("Εμπρός;") like a real caller would. This also
+    # lets the model hear a voicemail greeting before it says anything.
+    callee_spoke = asyncio.Event()
+
+    @session.on("user_state_changed")
+    def _on_user_state(ev) -> None:
+        if ev.new_state == "speaking":
+            callee_spoke.set()
+
     cap_task = asyncio.create_task(_enforce_duration_cap())
     await session.start(agent=PrankCallerAgent(instructions=prompt, call_id=call_id), room=ctx.room)
-    await session.generate_reply(
-        instructions="Greet the friend naturally and open the scenario."
-    )
+    try:
+        await asyncio.wait_for(callee_spoke.wait(), timeout=GREETING_WAIT_SECONDS)
+    except asyncio.TimeoutError:
+        await session.generate_reply(
+            instructions="Greet the friend naturally and open the scenario."
+        )
 
 
 if __name__ == "__main__":
