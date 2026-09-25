@@ -23,13 +23,12 @@ import httpx
 from google.genai import types as genai_types
 from google.protobuf.duration_pb2 import Duration
 from livekit import api
-from livekit.agents import inference
+from livekit.agents import inference, room_io
 from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
     JobProcess,
-    RoomInputOptions,
     StopResponse,
     WorkerOptions,
     cli,
@@ -373,7 +372,9 @@ async def entrypoint(ctx: JobContext) -> None:
             return
 
         recording_key = None
-        if not storage_configured():
+        if test_no_dial:
+            logger.info("call %s: test mode, not recording", call_id)
+        elif not storage_configured():
             logger.warning("call %s: recording storage not configured, not recording", call_id)
         else:
             try:
@@ -450,7 +451,9 @@ async def entrypoint(ctx: JobContext) -> None:
         agent=agent,
         room=ctx.room,
         # Clean phone-line noise before transcription and turn detection hear it.
-        room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVCTelephony()),
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(noise_cancellation=noise_cancellation.BVCTelephony()),
+        ),
     )
     try:
         await asyncio.wait_for(callee_spoke.wait(), timeout=GREETING_WAIT_SECONDS)
