@@ -17,3 +17,4 @@ ios/build/
 
 # Business plan and pricing: kept local (the repo is public)
 AI Voice Receptionist 2.0 PRD.md
+agent/scripted_calls_result.json
