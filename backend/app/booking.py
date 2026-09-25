@@ -70,17 +70,33 @@ _PART_STEMS = (
 )
 
 
+# "Earlier" / "later" than the times just offered.
+_EARLIER_STEMS = ("νωριτερ", "νωρισ", "earlier", "sooner")
+_LATER_STEMS = ("αργοτερ", "αργα", "later")
+
+
 @dataclass
 class ResolvedDate:
     day: date | None
     part_of_day: str | None
 
 
-def resolve_date(phrase: str, today: date) -> ResolvedDate:
+def relative_time(phrase: str) -> str | None:
+    """'πιο νωρίς', 'νωρίτερα', 'earlier' -> 'earlier'; 'αργότερα', 'πιο αργά', 'later' -> 'later'."""
+    words = re.findall(r"\w+", _plain(phrase))
+    if any(w.startswith(_EARLIER_STEMS) for w in words):
+        return "earlier"
+    if any(w.startswith(_LATER_STEMS) for w in words):
+        return "later"
+    return None
+
+
+def resolve_date(phrase: str, today: date, last_day: date | None = None) -> ResolvedDate:
     """'αύριο', 'μεθαύριο', 'την Τρίτη', 'την άλλη Τρίτη', 'την άλλη εβδομάδα', '15/10',
     '15 Οκτωβρίου', 'tomorrow', 'next Friday', '2026-10-15' -> a date (Europe/Athens 'today'
-    is passed in). A bare weekday means its next occurrence after today. Returns day=None
-    when nothing in the phrase is a date."""
+    is passed in). A bare weekday means its next occurrence after today. `last_day` is the day
+    offered earlier in the call: 'νωρίτερα', 'την επόμενη μέρα' etc. are relative to it.
+    Returns day=None when nothing in the phrase is a date."""
     p = _plain(phrase)
     words = re.findall(r"[\w/.\-]+", p)
     part = next((part for w in words for stem, part in _PART_STEMS if w.startswith(stem)), None)
@@ -123,6 +139,12 @@ def resolve_date(phrase: str, today: date) -> ResolvedDate:
         return ResolvedDate(today + timedelta(days=ahead), part)
     if next_week and any(w.startswith(("εβδομαδ", "βδομαδ", "week")) for w in words):
         return ResolvedDate(monday_next_week, part)
+    if last_day is not None:
+        # "την επόμενη (μέρα)", "την άλλη μέρα", "next day": the day after the one offered.
+        if next_week:
+            return ResolvedDate(last_day + timedelta(days=1), part)
+        # "νωρίτερα", "πιο αργά", "το απόγευμα": still the day offered.
+        return ResolvedDate(last_day, part)
     return ResolvedDate(None, part)
 
 
@@ -365,9 +387,14 @@ async def check_availability(
     staff_ids: list[str] | None = None,
     language: str | None = None,
     exclude_id: str | None = None,
+    after: time | None = None,
+    before: time | None = None,
+    last_offer: dict | None = None,
 ) -> dict:
     """What the agent's check_availability tool returns. `when` is the caller's own words;
-    `staff_name` is who they asked for ("με τον Γιώργο"), empty for anyone free."""
+    `staff_name` is who they asked for ("με τον Γιώργο"), empty for anyone free.
+    `after`/`before` keep only times strictly after/before them. `last_offer` is the previous
+    result in this call ({"date", "free_times"}): "νωρίτερα"/"αργότερα" are relative to it."""
     tz = ZoneInfo(practice.timezone)
     language = language or practice.language
     service = find_service(practice, service_id)
@@ -384,14 +411,27 @@ async def check_availability(
         return {"error": "nobody_does_this_service", "service_id": service["id"]}
 
     today = now.astimezone(tz).date()
-    resolved = resolve_date(when, today)
+    last_day = date.fromisoformat(last_offer["date"]) if last_offer and last_offer.get("date") else None
+    resolved = resolve_date(when, today, last_day)
+    offered = (last_offer or {}).get("free_times") or []
+    if after is None and before is None and offered and resolved.day == last_day:
+        # The model didn't say relative to what: the agent offers the first two or three times.
+        relative = relative_time(when)
+        if relative == "earlier":
+            before = _hhmm(offered[0])
+        elif relative == "later":
+            after = _hhmm(offered[min(2, len(offered) - 1)])
     if resolved.day is None:
         return {"error": "no_date", "hint": "Ask the caller which day they want."}
     if resolved.day < today:
         return {"error": "date_in_past", "date": resolved.day.isoformat()}
 
     slots = list(await availability(db, practice, resolved.day, service, now, resources, exclude_id))
-    matching = [s for s in slots if in_part_of_day(s, resolved.part_of_day)]
+    def in_window(s: datetime) -> bool:
+        t = s.timetz().replace(tzinfo=None)
+        return (after is None or t > after) and (before is None or t < before)
+
+    matching = [s for s in slots if in_part_of_day(s, resolved.part_of_day) and in_window(s)]
     out = {
         "date": resolved.day.isoformat(),
         "date_spoken": say_date(resolved.day, language),
@@ -400,6 +440,10 @@ async def check_availability(
         "part_of_day": resolved.part_of_day,
         "free_times": [s.strftime("%H:%M") for s in matching][:12],
     }
+    if after:
+        out["after"] = after.strftime("%H:%M")
+    if before:
+        out["before"] = before.strftime("%H:%M")
     if person:
         out["staff"] = person.name
     if not matching:

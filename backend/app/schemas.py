@@ -277,6 +277,9 @@ class CheckAvailability(BaseModel):
     staff: str | None = Field(default=None, max_length=SHORT_TEXT)
     # When moving an appointment: its own slot doesn't count as busy.
     appointment_id: str | None = None
+    # "νωρίτερα" / "αργότερα": only times strictly after / before this HH:MM.
+    after: str | None = Field(default=None, pattern=r"^([01]?\d|2[0-3]):[0-5]\d$")
+    before: str | None = Field(default=None, pattern=r"^([01]?\d|2[0-3]):[0-5]\d$")
 
 
 class BookAppointment(BaseModel):
