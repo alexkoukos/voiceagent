@@ -3,8 +3,9 @@
 import random
 
 FILLERS: dict[str, list[str]] = {
-    "el": ["Ε…", "Κοίτα…", "Μισό…", "Χμ…", "Ναι, ναι…", "Άκου…"],
-    "en": ["Uh…", "Well…", "Hmm…", "Look…", "Right…", "So…"],
+    # Polite, for professional calls (plural of politeness, no "Άκου" / "Κοίτα").
+    "el": ["Μάλιστα…", "Ένα λεπτό…", "Λοιπόν…", "Βεβαίως…", "Ναι…"],
+    "en": ["Sure…", "One moment…", "Right…", "Okay…", "Let me see…"],
     "de": ["Äh…", "Also…", "Hm…", "Schau mal…", "Na ja…"],
     "fr": ["Euh…", "Bon…", "Écoute…", "Hmm…", "Alors…"],
     "es": ["Eh…", "Bueno…", "Mira…", "Pues…", "Hmm…"],
