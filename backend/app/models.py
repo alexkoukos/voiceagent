@@ -256,6 +256,45 @@ class RecordingDeletion(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 
+class ConfigVersion(Base):
+    """One change to a practice's hours, services, rules or knowledge base (OP2).
+
+    `changes` holds only the fields that changed. A published version also stores the
+    full `snapshot` after it, so rolling back is one step. Services, prices and FAQ changes
+    from a doctor's link wait as `pending` until the founder approves them.
+    """
+
+    __tablename__ = "config_versions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
+    # published, pending, rejected
+    status: Mapped[str] = mapped_column(String, default="published")
+    # app, link, rollback, baseline
+    source: Mapped[str] = mapped_column(String, default="app")
+    author: Mapped[str] = mapped_column(String, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    changes: Mapped[dict] = mapped_column(JSON, default=dict)
+    snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class AdminLink(Base):
+    """A magic link that lets the business change hours, closures, prices and FAQ from a
+    browser (OP2). Only the SHA-256 of the token is stored."""
+
+    __tablename__ = "admin_links"
+
+    token_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
+    staff_id: Mapped[str | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
 class Message(Base):
     """A message taken for the business (C3)."""
 
