@@ -262,9 +262,10 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str) -> Ag
                 # Understands when someone has finished a sentence, in any language,
                 # instead of waiting for a fixed silence. Runs on LiveKit Cloud, so the
                 # worker doesn't load a local model (that process ran out of memory on Railway).
-                # version="v1" must be explicit: outside LiveKit Cloud hosting the default is the
-                # local v1-mini model, which doesn't know Greek, so every turn waited max_delay.
-                turn_detection=inference.TurnDetector(version="v1", local_fallback=False),
+                # Outside LiveKit Cloud hosting this resolves to the local v1-mini model, which
+                # doesn't know Greek, so Greek turns end on max_delay. version="v1" (cloud) got
+                # the job process OOM-killed on Railway on 2026-09-25; don't retry it blindly.
+                turn_detection=inference.TurnDetector(local_fallback=False),
                 endpointing={"mode": "dynamic", "min_delay": 0.2, "max_delay": 1.5},
                 # Start writing and voicing the reply before the friend has fully finished.
                 preemptive_generation={"enabled": True, "preemptive_tts": True},
