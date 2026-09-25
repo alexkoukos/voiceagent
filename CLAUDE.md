@@ -1,10 +1,35 @@
-# AI Prank Caller — Claude notes
+# AI Caller — Claude notes
 
 See [README.md](README.md) for layout, setup and deploy, and the PRD for the spec.
 
+## Checkpoint (2026-09-25, end of session)
+
+**Live on Railway now**
+- Agent: `AGENT_ENGINE=realtime` (Gemini `gemini-3.8-live`), `REALTIME_SILENCE_MS=400`, `NUM_IDLE_PROCESSES=0`, `NOISE_CANCELLATION=off`. Each turn is logged as `call <id> friend|agent: <text>`: read those first after a test call.
+- Backend: master prompt cut to speaking style + safety, with a strict "only the call's language" rule (dropping it made Gemini drift into Spanish/Chinese). The app sends one free-text description in `scenario`; persona/context/reveal are optional (older builds still work). Migrations 0009 (fold presets into one text) and 0010 (delete built-in presets) are deployed; only user-saved presets remain. Not confirmed on live data.
+- iOS (installed on the iPhone 2026-09-25): one textbox, preset chips that fill it, "Αποθήκευση ως σενάριο". Default voice is male (`Puck`).
+
+**What we learned**
+- Agent jobs were OOM-killed (exit -9) on Railway: idle worker ~530 MB, and every extra process is ~400 MB. `NUM_IDLE_PROCESSES=0` fixed it for the one call since (adds ~2 s before dialing). The real fix is more memory, or hosting the agent on LiveKit Cloud (which also enables the cloud turn detector).
+- Pipeline engine problems: Scribe needs `server_vad` (manual commit never finalises mid-call) and `language_code` (otherwise Greek comes back as Cyrillic "Ukrainian"). Even then it garbles Greek phone speech ("σακούλα" for "σ' ακούω"). The local turn detector has no Greek, so every turn waited `max_delay`. Replies took ~1.5–2.5 s.
+- Recognition test on a real recording (streamed 4x speed): Scribe v2 was mostly right with key errors; Gemini 3.5 Transcribe Live and 3.8 Live's input transcript were garbage (no language hint given in the test). On a real call, Gemini 3.8 Live understood Greek fine until the language drift. Recordings are mixed mono-in-stereo (both voices on both channels).
+- Call from my number (Greek number shown on a US trunk) fails. Likely Greek anti-spoofing blocks international calls that show a +30 number. Needs a Greek route (the 210 number). Leave the toggle off.
+
+**Next**
+1. Test call on the current setup; read the `friend:`/`agent:` log lines.
+2. If Gemini still mishears: test OpenAI `gpt-realtime-2.1` / `-mini` on recordings (needs `OPENAI_API_KEY`; ~$0.15–0.25 / ~$0.05–0.08 per 3-min call).
+3. Move the agent to LiveKit Cloud hosting, or give it more memory.
+
 ## Checkpoint (2026-09-24)
 
-Code-complete through M6, latest commit `c094926`. Nothing has run against real LiveKit / Gemini / Telnyx / R2.
+Code-complete through M6. First real call worked end to end (2026-09-24) on a **US Telnyx number** (the LiveKit outbound trunk is set to TCP): dial → answer → Gemini speaks Greek → transcript → hang-up.
+- Recordings go to the Railway bucket `recordings` (S3-compatible, `AWS_*` variables referencing `${{recordings.*}}`); verified with a real egress on 2026-09-25.
+- Calls that don't connect get `end_reason` (no_answer / declined / unreachable / error); the app shows it in Greek with a retry button.
+- The app is Greek-only and named "AI Caller" on the home screen; internal ids (`com.alekos.prankcaller`, agent `prank-caller`) are unchanged on purpose.
+- iOS installs from the CLI: `xcodebuild ... DEVELOPMENT_TEAM=<personal team> -allowProvisioningUpdates` then `xcrun devicectl device install app`. Free team: the app expires after 7 days.
+- The user's own mobile never rings (408 after the ring window); another Greek mobile does. Cause unknown — likely the carrier or a spam filter on that line, not our code.
+- LiveKit has a duplicate, unused outbound trunk.
+- Never put phone numbers, trunk IDs or keys in committed files: the repo is public.
 
 **Done and verified**
 - Backend on real Postgres (Docker): migrations, auth, agent-event endpoint, WebSocket push, delete-on-request (R2/LiveKit stubbed).
@@ -14,11 +39,26 @@ Code-complete through M6, latest commit `c094926`. Nothing has run against real 
 
 **Not done / blocked**
 - M1: 210 number on Telnyx + SIP trunk into LiveKit. Needs the user in Greece.
-- `.env` exists locally (git-ignored, copied from `.env.example`) but keys are not filled in.
-- Agent call flow (SIP dial, Gemini Greek, hang-up tool, hard cap) is untested.
+- `.env` is filled for LiveKit, Gemini, Telnyx and the SIP trunk; R2 keys are missing.
+- Voicemail hang-up and the callee-speaks-first greeting are written but not yet tested on a real call; the hard duration cap is untested.
 - iOS call flow has not been driven from the app.
-- Not deployed to Fly.io (M5).
+- Deployed on Railway (project `zonal-enjoyment`): services `backend` (root `backend`, health `/health`), `agent` (root `agent`) and `Postgres`. Backend at `https://backend-production-c085.up.railway.app`. Railway ignores `railway.toml` now; service settings are set on the services (via dashboard or GraphQL API). Don't run the local agent at the same time — both would take jobs.
 - Open questions: Gemini Greek quality over phone audio, latency, 210 caller ID on Greek mobiles.
+
+**Voice pipeline (2026-09-25)**
+- Agent has two engines (`AGENT_ENGINE`): `pipeline` (ElevenLabs Scribe v2 realtime -> gemini-3.5-flash-lite -> ElevenLabs Flash v2.5, LiveKit Cloud turn detector, fillers, opening line pre-rendered with eleven_v3 during the ring) and `realtime` (Gemini Live). Railway ran `pipeline` from 2026-09-25 but Scribe mangled Greek phone audio; since 2026-09-25 it runs `realtime` again (`REALTIME_SILENCE_MS=400`) (new ElevenLabs key with `text_to_speech` + `speech_to_text`; `voices_read` isn't needed). Not yet tested on a real call; fall back with `AGENT_ENGINE=realtime`.
+- The agent runs in Railway EU West (LiveKit region "Germany 2"); backend + Postgres stay in US West together.
+- Don't use `livekit-plugins-turn-detector` on Railway: its local model process gets OOM-killed and takes the worker down. Use `inference.TurnDetector(local_fallback=False)`. Off LiveKit Cloud hosting it resolves to the local v1-mini model, which has no Greek, so Greek turns end on `max_delay`. Forcing `version="v1"` (cloud) got every call OOM-killed (exit -9) on 2026-09-25.
+- Test without phoning: local worker with `AGENT_NAME=prank-caller-test`, dispatch with metadata `test_no_dial: true` (skips dial and recording). Realtime engine measured ~2 s from end of speech to reply.
+- Call language comes from the friend's phone prefix (`backend/app/languages.py`); non-Greek calls use `config/master_prompt.en.md`.
+
+**Call from my number**
+- `OWN_CALLER_NUMBER` (the owner's Telnyx-verified number) is set on Railway and added to the LiveKit trunk's numbers. The app shows a "Call from my number" toggle when `/options` says it's available. Not yet tested on a real call.
+
+**Security state**
+- All routes except `/health` need `x-api-key` (app) or `x-agent-token` (agent); `/docs` and `/openapi.json` are off unless `ENABLE_DOCS=true`; the Telnyx webhook rejects unsigned requests and returns 503 when no key is set.
+- iOS keeps the API key in the Keychain (this device only).
+- The LiveKit secret and the Railway workspace token were pasted in chat on 2026-09-24: rotate both.
 
 ## Working notes
 - Python 3.14 breaks venv/ensurepip here; run backend code with `uv run --python 3.12 --with-requirements backend/requirements.txt ...`.
