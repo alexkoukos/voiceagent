@@ -2,6 +2,21 @@
 
 See [README.md](README.md) for layout, setup and deploy, and the PRD for the spec.
 
+## Direction change (2026-09-25, not yet deployed)
+- Calls are now professional, not pranks: no reveal, never mentions Alexandros. It still says it's an AI if asked directly, and deletes the recording on request.
+- Only Greek (+30/+357) or English (everyone else); the agent never switches language mid-call. New soft male voice `Algieba`.
+- Still in testing, so no up-front "this call is recorded" notice. Add one (or turn recording off) before real use: Greek law generally requires it.
+
+## 2.0 receptionist (2026-09-25, all PRD items built; not committed or deployed)
+Spec: `AI Voice Receptionist 2.0 PRD.md`. Migrations 0012 + 0013. Nothing has run with a real voice yet.
+- **Backend modules:** `booking.py` (dates, slots, per-staff calendars, book/reschedule/cancel under an advisory lock, idempotent per call+slot+service+staff), `routing.py` (R1-R9 from `practices.routing_rules`, every decision in `routing_events`), `receptionist.py` (call start, metadata, all agent tools, reminder/waitlist calls), `notifications.py` (outbox + worker: SMTP email, Telnyx SMS, APNs push; unset channels -> `skipped`), `finalize.py` (outcome, Gemini summary, cost, one email per call), `scheduler.py` (20:00 digest, monthly report, reminders, retention, stale calls), `metrics.py`, `gcal.py`, `texts.py`.
+- **Setup:** `GET /verticals/<id>` gives a template (`config/verticals/*.json`); POST it to `/practices` with name, numbers, `notifications.emails`; staff via `/practices/<id>/staff`. Emergency rule is on for health verticals.
+- **Agent** (`run_receptionist`, `ReceptionistCall`): inbound SIP (no metadata), web demo, outbound reminder/waitlist (`dial_number`). Tools: route_call, check_availability, book/find/reschedule/cancel/confirm_appointment, take_message, transfer_to_human (in-app join waits `timeout_seconds`, or SIP transfer), add_to_waitlist, stop_recording. Emergency phrases are matched in code on the caller's words. A language switch hands over to a new agent with a model pinned to that language. Busy practice (G8) -> one line and hang up.
+- **Web:** `/demo/<slug>` page, `/demo/<slug>/widget.js` "Call us" button (W3).
+- **Tests:** `backend/tests` (12 unit tests); e2e against local Postgres covered staff routing, anyone-free, find-before-change, ask-twice handoff, clarify-then-message, language switch, waitlist offer on cancel, reminders, digest/monthly dedupe, metrics. `agent/scripts/scripted_calls.py` + `scenarios.el.json` = W4 harness (needs a deployed backend + worker, ELEVEN_API_KEY, APP_API_TOKEN).
+- **iOS:** new "Γραμματεία" tab (calls with outcome filters, detail with summary/routing/transcript/recording/review, messages, appointments, metrics, handoff join/listen via LiveKit Swift SDK). Push code is in, but a free Apple team can't get push: the app falls back to live updates while open. DEBUG launch arg `-startTab 2`.
+- **Needs from the user:** SMTP + Telnyx SMS credentials, Google service account, Greek DID, run `backend/scripts/setup_inbound.py`, a lawyer for the DPA (G2).
+
 ## Checkpoint (2026-09-25, end of session)
 
 **Live on Railway now**
@@ -17,7 +32,7 @@ See [README.md](README.md) for layout, setup and deploy, and the PRD for the spe
 
 **Next**
 1. Test call on the current setup; read the `friend:`/`agent:` log lines.
-2. If Gemini still mishears: OpenAI engine is built but untested. Add `OPENAI_API_KEY` to Railway `agent`, set `AGENT_ENGINE=openai` (model `OPENAI_REALTIME_MODEL`, default `gpt-realtime-2.1`; `gpt-realtime-2.1-mini` is ~1/3 the price). Without a key it falls back to Gemini. Best first: test it on a downloaded recording. Cost ~$0.15–0.25 / ~$0.05–0.08 per 3-min call.
+2. OpenAI engine (`AGENT_ENGINE=openai`): the user tested it (2026-09-25) and its Greek was as bad as Gemini's. Decision: stay on Gemini. The code stays but is off. English works well on both; Greek is weak in the models themselves, not our setup.
 3. Move the agent to LiveKit Cloud hosting, or give it more memory.
 
 ## Checkpoint (2026-09-24)

@@ -1,0 +1,67 @@
+{
+  "label": "Κουρεία, κομμωτήρια",
+  "wave": 1,
+  "hours": {
+    "tue": [
+      [
+        "09:00",
+        "21:00"
+      ]
+    ],
+    "wed": [
+      [
+        "09:00",
+        "21:00"
+      ]
+    ],
+    "thu": [
+      [
+        "09:00",
+        "21:00"
+      ]
+    ],
+    "fri": [
+      [
+        "09:00",
+        "21:00"
+      ]
+    ],
+    "sat": [
+      [
+        "09:00",
+        "17:00"
+      ]
+    ]
+  },
+  "services": [
+    {
+      "id": "haircut",
+      "name": "Κούρεμα",
+      "duration_minutes": 30
+    },
+    {
+      "id": "beard",
+      "name": "Γένια",
+      "duration_minutes": 15
+    },
+    {
+      "id": "haircut_beard",
+      "name": "Κούρεμα και γένια",
+      "duration_minutes": 45
+    }
+  ],
+  "routing_rules": {
+    "handoff": {
+      "ask_twice": true
+    }
+  },
+  "rules": {
+    "slot_step_minutes": 15,
+    "min_notice_minutes": 30
+  },
+  "knowledge_base": {
+    "Διεύθυνση": "",
+    "Τιμές": "",
+    "Walk-in": "Δεχόμαστε και χωρίς ραντεβού αν υπάρχει κενό."
+  }
+}

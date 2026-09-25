@@ -8,6 +8,7 @@ struct NewCallView: View {
         ("default", "Γυναικεία, ήρεμη"), ("Aoede", "Γυναικεία, ανάλαφρη"),
         ("Puck", "Αντρική, κεφάτη"), ("Charon", "Αντρική, ήρεμη"),
         ("Fenrir", "Αντρική, ενθουσιώδης"), ("Algenib", "Αντρική, τραχιά"),
+        ("Algieba", "Αντρική, απαλή"),
     ]
     @State private var friends: [Friend] = []
     @State private var templates: [PromptTemplate] = []
@@ -31,6 +32,8 @@ struct NewCallView: View {
     @State private var errorMessage: String?
     @State private var notice: String?
     @State private var starting = false
+    /// Typing the scenario: the keyboard can be closed, and the call bar steps aside.
+    @FocusState private var editingScenario: Bool
 
     private var needsSetup: Bool { Settings.apiKey.isEmpty }
     private var selectedFriend: Friend? { friends.first { $0.id == friendId } }
@@ -53,7 +56,10 @@ struct NewCallView: View {
                 }
                 .padding(Space.l)
                 .padding(.bottom, Space.xxxl)
+                .contentShape(Rectangle())
+                .onTapGesture { editingScenario = false }
             }
+            .scrollDismissesKeyboard(.interactively)
             .background(Palette.background)
             .navigationTitle("Νέα κλήση")
             .toolbar {
@@ -62,7 +68,13 @@ struct NewCallView: View {
                         .accessibilityLabel("Ρυθμίσεις")
                 }
             }
-            .safeAreaInset(edge: .bottom) { if !needsSetup { callBar } }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Τέλος") { editingScenario = false }.bold()
+                }
+            }
+            .safeAreaInset(edge: .bottom) { if !needsSetup && !editingScenario { callBar } }
             .task { await load() }
             .refreshable { await load() }
             .sheet(isPresented: $showAddFriend) {
@@ -158,6 +170,7 @@ struct NewCallView: View {
                 TextField("Γράψε ποιος παίρνει και τι θα γίνει, π.χ. «Είσαι υπάλληλος της ΔΕΗ και του λες ότι θα του κόψουν το ρεύμα γιατί το ψυγείο του καταναλώνει όσο ένα χωριό.»",
                           text: $scenario, axis: .vertical)
                     .lineLimit(5...14)
+                    .focused($editingScenario)
                     .onChange(of: scenario) { _, text in
                         // Edited away from the preset: it's the user's own call now.
                         if let t = templates.first(where: { $0.id == prankId }), t.scenario != text { prankId = "" }
