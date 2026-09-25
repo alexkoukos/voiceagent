@@ -38,7 +38,7 @@ struct SettingsView: View {
                     .disabled(testing)
                 }
                 Section {
-                    NavigationLink("Οι φάρσες μου") { TemplatesView() }
+                    NavigationLink("Τα σενάριά μου") { TemplatesView() }
                 }
             }
             .navigationTitle("Ρυθμίσεις")
@@ -93,9 +93,9 @@ struct TemplatesView: View {
             if let errorMessage { ErrorBanner(text: errorMessage) }
         }
         .overlay {
-            if templates.isEmpty { ContentUnavailableView("Καμία φάρσα", systemImage: "theatermasks") }
+            if templates.isEmpty { ContentUnavailableView("Κανένα σενάριο", systemImage: "text.bubble") }
         }
-        .navigationTitle("Οι φάρσες μου")
+        .navigationTitle("Τα σενάριά μου")
         .toolbar { EditButton() }
         .task {
             do { templates = try await APIClient().templates() } catch { errorMessage = friendlyMessage(error) }

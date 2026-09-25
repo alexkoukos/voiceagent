@@ -47,6 +47,8 @@ class PromptTemplate(Base):
     scenario: Mapped[str] = mapped_column(Text, nullable=False)
     context: Mapped[str] = mapped_column(Text, default="")
     reveal: Mapped[str] = mapped_column(Text, default="")
+    # Voice the app switches to when this preset is picked; None keeps the user's choice.
+    voice: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 

@@ -13,6 +13,8 @@ struct PromptTemplate: Codable, Identifiable, Hashable {
     let scenario: String
     let context: String
     let reveal: String
+    /// Voice this preset prefers (e.g. a rough one for the grumpy caller); nil keeps the user's choice.
+    let voice: String?
 
     /// The title without a leading emoji: the UI is monochrome.
     var displayTitle: String {
