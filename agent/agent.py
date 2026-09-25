@@ -73,6 +73,10 @@ REALTIME_SILENCE_MS = int(os.environ.get("REALTIME_SILENCE_MS", "500"))
 FILLER_DELAY_SECONDS = 0.5
 # At most one filler within this many seconds.
 FILLER_GAP_SECONDS = 4
+# Pipeline engine: pause that ends a transcribed segment, and the least wait after the caller
+# stops before replying. Lower is snappier but splits normal-speed speech into fragments.
+SCRIBE_SILENCE_SECS = float(os.environ.get("SCRIBE_SILENCE_SECS", "0.5"))
+ENDPOINT_MIN_DELAY = float(os.environ.get("ENDPOINT_MIN_DELAY", "0.5"))
 # If the callee stays silent after answering, open the conversation after this long.
 GREETING_WAIT_SECONDS = 4
 # Noise filter on the friend's audio before any model hears it; "off" to compare recognition without it.
@@ -284,14 +288,19 @@ class ReceptionistAgent(PrankCallerAgent):
         """Call first, as soon as you know what the caller wants, and again if it changes.
 
         Args:
-            intent: One of book, change, cancel, confirm, question, message, human, emergency, unclear.
+            intent: One of book, change, cancel, confirm, question, message, human, emergency, unclear, off_topic (not about the business, or trolling).
             staff: Who they asked for, in their words ("με τον Γιώργο", "τον γιατρό"); empty if nobody.
             department: The department they named, if any.
         """
         # The call's language is fixed (Greek, or English for foreign numbers): no switching.
-        return await self._tool("route_call", {
+        result = await self._rc.tool("route_call", {
             "intent": intent, "staff": staff or None, "department": department or None,
         })
+        if result.get("path") == "end_call":
+            # Third off-topic / abusive turn: the backend decided to end the call.
+            self._rc.spawn(self._rc.end_with(result.get("say", "")))
+            return json.dumps({"path": "end_call", "next": "The call is ending. Say nothing more."})
+        return json.dumps(result, ensure_ascii=False)
 
     @function_tool
     async def check_availability(self, when: str, service_id: str = "", staff: str = "", appointment_id: str = "") -> str:
@@ -459,7 +468,11 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
                 # doesn't know Greek, so Greek turns end on max_delay. version="v1" (cloud) got
                 # the job process OOM-killed on Railway on 2026-09-25; don't retry it blindly.
                 turn_detection=inference.TurnDetector(local_fallback=False),
-                endpointing={"mode": "dynamic", "min_delay": 0.2, "max_delay": 1.5},
+                endpointing={"mode": "dynamic", "min_delay": ENDPOINT_MIN_DELAY, "max_delay": 1.5},
+                # A cough or a one-word "ναι" mid-reply shouldn't cut the agent off; if it was
+                # a false alarm, carry on where it stopped.
+                interruption={"min_duration": 0.6, "min_words": 2, "resume_false_interruption": True,
+                              "false_interruption_timeout": 1.5},
                 # Start writing and voicing the reply before the friend has fully finished.
                 preemptive_generation={"enabled": True, "preemptive_tts": True},
             ),
@@ -476,7 +489,8 @@ def scribe_stt(language: str, keyterms: list[str] | None = None):
         # ElevenLabs decides when a sentence is finished. The plugin's default ("manual")
         # waits for a commit the session never sends, so no final transcript ever arrived
         # and the agent stayed silent for the whole call.
-        server_vad={"vad_silence_threshold_secs": 0.3},
+        # 0.3 s cut normal-speed sentences into fragments at every short pause.
+        server_vad={"vad_silence_threshold_secs": SCRIBE_SILENCE_SECS},
     )
 
 
@@ -593,13 +607,13 @@ def track_transcript(session: AgentSession, call_id: str) -> None:
             )
 
 
-def room_options() -> room_io.RoomOptions:
-    # Clean phone-line noise before transcription and turn detection hear it.
-    return room_io.RoomOptions(
-        audio_input=room_io.AudioInputOptions(
-            noise_cancellation=noise_cancellation.BVCTelephony() if NOISE_CANCELLATION else None,
-        ),
-    )
+def room_options(web: bool = False) -> room_io.RoomOptions:
+    # Clean noise before transcription and turn detection hear it: the telephony model for
+    # 8 kHz phone lines, the full-band one for browser (web demo) microphones.
+    nc = None
+    if NOISE_CANCELLATION:
+        nc = noise_cancellation.BVC() if web else noise_cancellation.BVCTelephony()
+    return room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=nc))
 
 
 class ReceptionistCall:
@@ -645,6 +659,21 @@ class ReceptionistCall:
             language=language, language_name="Greek" if language == "el" else "English",
             fillers=self.engine == "pipeline", **(parts or {}),
         )
+
+    async def end_with(self, line: str) -> None:
+        """Say one closing line (not interruptible), then hang up."""
+        await asyncio.sleep(0.3)
+        try:
+            if self.engine == "pipeline":
+                handle = self.session.say(line, allow_interruptions=False)
+            else:
+                quote = "Πες ακριβώς αυτό" if self.language == "el" else "Say exactly this"
+                handle = self.session.generate_reply(instructions=f"{quote}: {line}", allow_interruptions=False)
+            await handle.wait_for_playout()
+        except Exception:
+            logger.exception("call %s: closing line failed", self.call_id)
+        await asyncio.sleep(0.5)
+        await self.ctx.room.disconnect()
 
     # --- emergency (R5): a deterministic phrase match on what the caller said ---
 
@@ -902,7 +931,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
         await report(call_id, _retries=5, **event)
 
     ctx.add_shutdown_callback(_finish)
-    await session.start(agent=agent, room=ctx.room, room_options=room_options())
+    await session.start(agent=agent, room=ctx.room, room_options=room_options(web=metadata.get("direction") == "web"))
     if dialing:
         # Let the customer say "Εμπρός;" first (and hear a voicemail greeting before speaking).
         spoke = asyncio.Event()
