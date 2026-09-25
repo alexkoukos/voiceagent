@@ -432,9 +432,17 @@ async def tool_check_availability(db: AsyncSession, call: Call, args) -> dict:
     exclude = args.appointment_id if getattr(args, "appointment_id", None) else None
     if exclude and exclude not in await _found_ids(db, call):
         return {"error": "call find_appointments first"}
+    # The previous offer in this call: "νωρίτερα", "την επόμενη μέρα" are relative to it.
+    last = (await db.execute(select(RoutingEvent).where(
+        RoutingEvent.call_id == call.id, RoutingEvent.kind == "offer",
+    ).order_by(RoutingEvent.created_at.desc()).limit(1))).scalar_one_or_none()
+    last_offer = json.loads(last.value)["result"] if last else None
     result = await booking.check_availability(
         db, practice, args.when, args.service_id, utcnow(), staff_name=args.staff,
         staff_ids=await _department_staff(db, practice, call), language=_lang(call, practice), exclude_id=exclude,
+        after=booking._hhmm(args.after) if args.after else None,
+        before=booking._hhmm(args.before) if args.before else None,
+        last_offer=last_offer,
     )
     if not result.get("error"):
         # Persist exactly what the backend offered so a later write cannot use an
