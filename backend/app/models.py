@@ -34,6 +34,8 @@ class Friend(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     phone_number: Mapped[str] = mapped_column(String, nullable=False)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    # Set on delete; the row stays so past calls still show the name.
+    deleted_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     calls: Mapped[list["Call"]] = relationship(back_populates="friend")
 
