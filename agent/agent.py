@@ -71,6 +71,8 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
 REALTIME_SILENCE_MS = int(os.environ.get("REALTIME_SILENCE_MS", "500"))
 # Say a filler word if the reply hasn't started this long after the friend stops talking.
 FILLER_DELAY_SECONDS = 0.5
+# At most one filler within this many seconds.
+FILLER_GAP_SECONDS = 4
 # If the callee stays silent after answering, open the conversation after this long.
 GREETING_WAIT_SECONDS = 4
 # Noise filter on the friend's audio before any model hears it; "off" to compare recognition without it.
@@ -192,6 +194,7 @@ class PrankCallerAgent(Agent):
         self._opening_task = opening_task
         self._opened = False
         self._fillers = FillerPicker() if fillers else None
+        self._last_filler_at = 0.0
 
     @function_tool
     async def delete_recording(self) -> str:
@@ -246,7 +249,10 @@ class PrankCallerAgent(Agent):
         first = asyncio.ensure_future(it.__anext__())
         try:
             done, _ = await asyncio.wait({first}, timeout=FILLER_DELAY_SECONDS)
-            if not done:
+            # One filler per turn: a reply started early and then restarted must not add a second.
+            now = asyncio.get_event_loop().time()
+            if not done and now - self._last_filler_at > FILLER_GAP_SECONDS:
+                self._last_filler_at = now
                 yield self._fillers.pick(self.language) + " "
             try:
                 yield await first
