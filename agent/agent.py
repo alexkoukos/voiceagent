@@ -52,9 +52,16 @@ async def report(call_id: str, **event) -> None:
         logger.exception("failed to report event %s for call %s", list(event), call_id)
 
 
+# S3-compatible recording storage, named like the variables a Railway bucket exposes.
+STORAGE_VARS = ("AWS_ENDPOINT_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_BUCKET_NAME")
+
+
+def storage_configured() -> bool:
+    return all(os.environ.get(v) for v in STORAGE_VARS)
+
+
 async def start_recording(lk: api.LiveKitAPI, room_name: str, call_id: str) -> str:
     key = f"recordings/{call_id}.mp4"
-    account = os.environ["R2_ACCOUNT_ID"]
     await lk.egress.start_room_composite_egress(
         api.RoomCompositeEgressRequest(
             room_name=room_name,
@@ -64,18 +71,30 @@ async def start_recording(lk: api.LiveKitAPI, room_name: str, call_id: str) -> s
                     file_type=api.EncodedFileType.MP4,
                     filepath=key,
                     s3=api.S3Upload(
-                        access_key=os.environ["R2_ACCESS_KEY_ID"],
-                        secret=os.environ["R2_SECRET_ACCESS_KEY"],
-                        bucket=os.environ["R2_BUCKET_NAME"],
-                        endpoint=f"https://{account}.r2.cloudflarestorage.com",
-                        region="auto",
-                        force_path_style=True,
+                        access_key=os.environ["AWS_ACCESS_KEY_ID"],
+                        secret=os.environ["AWS_SECRET_ACCESS_KEY"],
+                        bucket=os.environ["AWS_S3_BUCKET_NAME"],
+                        endpoint=os.environ["AWS_ENDPOINT_URL"],
+                        region=os.environ.get("AWS_DEFAULT_REGION", "auto"),
+                        force_path_style=os.environ.get("AWS_S3_URL_STYLE") == "path",
                     ),
                 )
             ],
         )
     )
     return key
+
+
+def dial_failure_reason(e: Exception) -> str:
+    """Map a failed dial to what the app shows: no_answer, declined, unreachable or error."""
+    code = getattr(e, "sip_status_code", None)
+    if code in (486, 600, 603):  # busy / declined
+        return "declined"
+    if code in (404, 410, 484, 604):  # number doesn't exist
+        return "unreachable"
+    if code in (408, 480, 487) or getattr(e, "status", None) == 408 or "timed out" in str(e):
+        return "no_answer"
+    return "error"
 
 
 class PrankCallerAgent(Agent):
@@ -129,14 +148,24 @@ async def entrypoint(ctx: JobContext) -> None:
                 )
             )
         except Exception as e:
-            sip_status = (getattr(e, "metadata", None) or {}).get("sip_status_code")
-            logger.exception("call %s: dial failed (sip status %s)", call_id, sip_status)
-            await report(call_id, status="failed")
+            reason = dial_failure_reason(e)
+            if reason == "error":
+                logger.exception("call %s: dial failed", call_id)
+            else:
+                # Expected outcomes of calling a phone, not bugs: one line, no traceback.
+                logger.warning("call %s: not connected (%s): %s", call_id, reason, e)
+            await report(call_id, status="failed", end_reason=reason)
+            # Close the room so the job exits instead of idling until LiveKit times it out.
+            try:
+                await lk.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
+            except Exception:
+                logger.warning("call %s: could not delete room after failed dial", call_id)
+            ctx.shutdown(reason=f"dial {reason}")
             return
 
         recording_key = None
-        if not os.environ.get("R2_ACCOUNT_ID"):
-            logger.warning("call %s: R2 not configured, not recording", call_id)
+        if not storage_configured():
+            logger.warning("call %s: recording storage not configured, not recording", call_id)
         else:
             try:
                 recording_key = await start_recording(lk, ctx.room.name, call_id)

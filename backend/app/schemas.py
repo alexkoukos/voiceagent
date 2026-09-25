@@ -63,6 +63,7 @@ class CallEvent(BaseModel):
     transcript_text: str | None = None
     recording_url: str | None = None
     delete_recording: bool = False
+    end_reason: Literal["no_answer", "declined", "unreachable", "error"] | None = None
 
 
 class TranscriptEntryOut(BaseModel):
@@ -85,6 +86,7 @@ class CallOut(BaseModel):
     from_own_number: bool
     recording_url: str | None
     duration_seconds: int | None
+    end_reason: str | None
     created_at: datetime
     started_at: datetime | None
     ended_at: datetime | None
