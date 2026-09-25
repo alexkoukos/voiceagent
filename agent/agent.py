@@ -180,6 +180,8 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=google.beta.realtime.RealtimeModel(
             model=GEMINI_MODEL,
             voice=voice if voice != "default" else DEFAULT_VOICE,
+            # Greek speech and transcription, instead of letting the model guess the language.
+            language="el-GR",
             api_key=os.environ.get("GEMINI_API_KEY"),
         ),
     )
@@ -199,7 +201,7 @@ async def entrypoint(ctx: JobContext) -> None:
         warn_at = max(max_duration_seconds - 25, max_duration_seconds * 0.75)
         await asyncio.sleep(warn_at)
         session.generate_reply(
-            instructions="Time is almost up. Do the reveal now, mention the recording, say goodbye and hang up."
+            instructions="Ο χρόνος τελειώνει. Κάνε τώρα την αποκάλυψη, πες για την ηχογράφηση, αποχαιρέτα και κλείσε."
         )
         await asyncio.sleep(max_duration_seconds - warn_at)
         logger.info("call %s: hard duration cap reached, disconnecting", call_id)
@@ -233,7 +235,7 @@ async def entrypoint(ctx: JobContext) -> None:
         await asyncio.wait_for(callee_spoke.wait(), timeout=GREETING_WAIT_SECONDS)
     except asyncio.TimeoutError:
         await session.generate_reply(
-            instructions="Greet the friend naturally and open the scenario."
+            instructions="Χαιρέτα τον φίλο με φυσικό τρόπο, όπως στο τηλέφωνο, και ξεκίνα τη φάρσα."
         )
 
 
