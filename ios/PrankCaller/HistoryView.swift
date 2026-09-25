@@ -71,7 +71,7 @@ struct CallRow: View {
                 Text(call.createdAt, format: .relative(presentation: .named))
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            Text(call.persona).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            Text(call.summary).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             HStack(spacing: Space.s) {
                 StatusBadge(call: call).font(.footnote)
                 if call.recordingUrl != nil {
@@ -98,7 +98,7 @@ struct CallDetailView: View {
                 if let call {
                     VStack(alignment: .leading, spacing: Space.s) {
                         StatusBadge(call: call)
-                        Text(call.persona).foregroundStyle(.secondary)
+                        Text(call.summary).foregroundStyle(.secondary)
                         if let d = call.durationSeconds {
                             Text("Διάρκεια \(Duration.seconds(d).formatted(.time(pattern: .minuteSecond)))")
                                 .font(.subheadline).foregroundStyle(.secondary)

@@ -48,6 +48,8 @@ struct Call: Codable, Identifiable {
     var transcriptEntries: [TranscriptEntry]?
 
     var isInProgress: Bool { ["pending", "queued", "dialing", "active"].contains(status) }
+    /// One line for lists: the role for older calls, the start of the description for new ones.
+    var summary: String { persona.isEmpty ? scenario : persona }
     /// The call ended without ever connecting (no answer, declined, ...), so it can be retried.
     var canRetry: Bool { status == "failed" }
 
@@ -122,6 +124,8 @@ struct NewTemplate: Encodable {
     let scenario: String
     let context: String
     let reveal: String
+    /// Voice the app switches to when this preset is picked.
+    var voice: String? = nil
 }
 
 struct RecordingLink: Decodable {
