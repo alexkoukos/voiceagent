@@ -33,6 +33,9 @@ BACKEND_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://localhost:8000")
 AGENT_TOKEN = os.environ.get("INTERNAL_API_TOKEN", "")
 # How long the friend's phone rings before we give up (the library default is 30s).
 RINGING_TIMEOUT_SECONDS = int(os.environ.get("RINGING_TIMEOUT_SECONDS", "45"))
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
+# Used when the app sends voice "default".
+DEFAULT_VOICE = "Kore"
 # If the callee stays silent after answering, open the conversation after this long.
 GREETING_WAIT_SECONDS = 4
 
@@ -146,7 +149,8 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session = AgentSession(
         llm=google.beta.realtime.RealtimeModel(
-            voice=voice if voice != "default" else "Puck",
+            model=GEMINI_MODEL,
+            voice=voice if voice != "default" else DEFAULT_VOICE,
             api_key=os.environ.get("GEMINI_API_KEY"),
         ),
     )

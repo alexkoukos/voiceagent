@@ -100,5 +100,5 @@ Set `APP_API_TOKEN` and `INTERNAL_API_TOKEN` in `.env`; the app needs the same `
 ## Known limits
 
 - Gemini's Greek quality over phone audio, latency, and the 210 caller ID on Greek mobiles are unmeasured (PRD open questions).
-- Voice choice is one of five Gemini voices, labelled male/female in the app.
+- Talks through Gemini Live `gemini-3.8-live` (override with `GEMINI_MODEL`). Voice is one of five Gemini voices, labelled male/female in the app; "default" is Kore.
 - Live push keeps subscribers in memory, so it needs a single backend instance.

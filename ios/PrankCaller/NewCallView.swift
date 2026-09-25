@@ -3,7 +3,7 @@ import SwiftUI
 struct NewCallView: View {
     private let api = APIClient()
     static let voices: [(id: String, label: String)] = [
-        ("default", "Default (Puck, male)"), ("Puck", "Male, upbeat (Puck)"), ("Charon", "Male, calm (Charon)"),
+        ("default", "Default (Kore, female)"), ("Puck", "Male, upbeat (Puck)"), ("Charon", "Male, calm (Charon)"),
         ("Fenrir", "Male, excitable (Fenrir)"), ("Kore", "Female, firm (Kore)"), ("Aoede", "Female, breezy (Aoede)"),
     ]
 
