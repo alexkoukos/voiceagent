@@ -479,3 +479,21 @@ async def test_stuck_dialing_call_stops_holding_a_line(sessions):
         assert await receptionist.active_calls(db, p.id) == 1
         from app.dispatcher import active_count
         assert await active_count(db) == 1
+
+
+@pytest.mark.asyncio
+async def test_off_topic_three_strikes(sessions):
+    from app import routing
+    p = await seed(sessions, language="el")
+    async with sessions() as db:
+        call = Call(practice_id=p.id, persona="", scenario="")
+        db.add(call)
+        await db.commit()
+        strikes = []
+        for _ in range(3):
+            strikes.append(await routing.route(db, p, call, intent="off_topic", now=NOW))
+            await db.commit()
+        assert [s["path"] for s in strikes] == ["refuse", "refuse", "end_call"]
+        assert strikes[0]["say"] == routing.STRIKE_LINES["el"][0]
+        assert "θα κλείσω την κλήση" in strikes[1]["say"]
+        assert strikes[2]["say"] == routing.END_LINE["el"]

@@ -322,7 +322,7 @@ class ReceptionistAgent(PrankCallerAgent):
         """Call first, as soon as you know what the caller wants, and again if it changes.
 
         Args:
-            intent: One of book, change, cancel, confirm, question, message, human, emergency, unclear, off_topic (not about the business, or trolling).
+            intent: One of book, change, cancel, confirm, question, message, human, emergency, unclear, off_topic (not about the business, insults, nonsense or trolling: call it at once, before saying anything).
                 book = they need a visit or treatment ("θέλω ραντεβού", "να φτιάξω/αλλάξω ένα δόντι", "με πονάει").
                 change = only an appointment they ALREADY have ("να αλλάξω το ραντεβού μου", "να το μεταφέρω").
             staff: Who they asked for, in their words ("με τον Γιώργο", "τον γιατρό"); empty if nobody.
@@ -337,7 +337,7 @@ class ReceptionistAgent(PrankCallerAgent):
         if result.get("switch_language"):
             self._rc.spawn(self._rc.switch_language(result["switch_language"]))
         if result.get("path") == "end_call":
-            # Last allowed off-topic / abusive turn (2nd by default): the backend decided to end the call.
+            # Third off-topic / abusive turn (off_topic_limit): the backend decided to end the call.
             await context.wait_for_playout()
             self._rc.spawn(self._rc.end_with(result.get("say", "")))
             return json.dumps({"path": "end_call", "next": "The call is ending. Say nothing more."})
