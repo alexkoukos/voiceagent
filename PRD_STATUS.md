@@ -28,12 +28,20 @@ Calendar behavior follows Google's [Events list API](https://developers.google.c
 - `GET/POST /practices/<id>/closures`, `DELETE /practices/<id>/closures/<closure_id>`. A new closure returns the booked appointments inside it (`to_rebook`) and emails them to the business once.
 - Tests: `backend/tests/test_closures.py` (slot blocking, next opening, agent output, endpoint). 50 tests pass. Not deployed; no real call yet. OP3's "the doctor says it by phone or SMS" belongs to OP2 and is not built.
 
+## Changes after go-live (OP2, part), 2026-09-25
+
+- Migration 0015: `config_versions` (published, pending, rejected; changed fields plus a full snapshot) and `admin_links` (SHA-256 of the token, expiry, revoke).
+- Every change to hours, services, rules or the knowledge base is a version: the app's practice update, closures, the doctor's link and rollbacks. The first change also stores a baseline, so it can be undone too. A full practice update keeps closures.
+- Founder API: `GET /practices/<id>/versions[?status=pending]`, `POST .../versions/<vid>/approve|reject|rollback`, `POST /practices/<id>/links` (optional `staff_id`, `hours`), `DELETE /practices/<id>/links`.
+- Magic link page `/manage/<token>` (public, no-store, noindex): hours and closures apply after a confirm dialog; services, prices and FAQ go to the approval queue. A staff link only sets that person's leave.
+- Tests: `backend/tests/test_config_changes.py`. Checked in a local server and headless Chromium at 390 px. Not yet built: OP2 by phone (caller ID + PIN) and by SMS.
+
 ## Remaining engineering work
 
 Items 1 to 3 and G9 of the earlier list were addressed in `95694eb` (offer + readback state via `prepare_action`, deterministic Google event IDs, durable `recording_deletions` queue, fallback summaries, and the G9 check on waitlist calls). Still open:
 
 1. **R7 language switching** stays off on purpose: the agent never switches language mid-call (owner's decision).
-2. **P0 features with no code yet:** onboarding imports and config versions (O1 to O6, with draft/publish/rollback), OP1 failover (needs Telnyx), and OP2 changes after go-live by phone PIN, SMS or magic link.
+2. **P0 features with no code yet:** onboarding imports and config versions (O1 to O6, with draft/publish/rollback), OP1 failover (needs Telnyx), and OP2 changes by phone PIN or SMS (the magic link is built).
 3. **P1 features with no code yet:** OP8 patient data export/delete, OP10 monthly cost cap and spam blocking, OP7 offboarding export.
 
 ## Remaining acceptance and onboarding work
