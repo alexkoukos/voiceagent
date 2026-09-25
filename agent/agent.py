@@ -421,13 +421,13 @@ class ReceptionistAgent(PrankCallerAgent):
 
 def prewarm(proc: JobProcess) -> None:
     # Loaded once per worker process, not per call; only the pipeline engine needs it.
-    if ENGINE == "pipeline":
+    if "pipeline" in (ENGINE, RECEPTIONIST_ENGINE):
         proc.userdata["vad"] = silero.VAD.load()
 
 
 def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> AgentSession:
     if engine == "pipeline":
-        stt = scribe_stt(language, ((GREEK_VOCABULARY if language == "el" else []) + list(vocabulary or []))[:100])
+        stt = scribe_stt(language, [w for w in (GREEK_VOCABULARY if language == "el" else []) + list(vocabulary or []) if len(w) < 50][:100])
         tts = elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
         # Open the connections now, while the phone rings, not on the first reply.
         for part in (stt, tts):
@@ -484,7 +484,7 @@ GREEK_VOCABULARY = [
 def language_parts(engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> dict:
     """The parts of a session that are pinned to one language. A receptionist call that
     switches language (R7) hands over to a new agent built with these."""
-    words = ((GREEK_VOCABULARY if language == "el" else []) + list(vocabulary or []))[:100]
+    words = [w for w in (GREEK_VOCABULARY if language == "el" else []) + list(vocabulary or []) if len(w) < 50][:100]
     if engine == "pipeline":
         return {"stt": scribe_stt(language, words)}
     if engine == "openai":
@@ -546,8 +546,14 @@ def log_latency(session: AgentSession, call_id: str) -> None:
                         f" ({parts})" if parts else "")
 
 
-def pick_engine(call_id: str) -> str:
-    engine = ENGINE
+# Receptionist calls listen with ElevenLabs Scribe pinned to the call's language: on casual
+# Greek with slang and swearing it was near perfect where Gemini Live's own ear mixed in
+# Italian/Spanish (tested 2026-09-25). "realtime" goes back to Gemini Live.
+RECEPTIONIST_ENGINE = os.environ.get("RECEPTIONIST_ENGINE", "pipeline")
+
+
+def pick_engine(call_id: str, receptionist: bool = False) -> str:
+    engine = RECEPTIONIST_ENGINE if receptionist else ENGINE
     if engine == "pipeline" and not os.environ.get("ELEVEN_API_KEY"):
         logger.warning("call %s: ELEVEN_API_KEY missing, using the realtime engine", call_id)
         engine = "realtime"
@@ -789,7 +795,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
                 r = await client.post(f"{BACKEND_URL}/internal/inbound", headers={"x-agent-token": AGENT_TOKEN},
                                       json={"dialed_number": dialed, "caller_number": caller_number})
             if r.status_code == 429:
-                await say_busy_and_leave(ctx, pick_engine("busy"), r.json())
+                await say_busy_and_leave(ctx, pick_engine("busy", receptionist=True), r.json())
                 return
             r.raise_for_status()
             metadata = r.json()
@@ -799,7 +805,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
             ctx.shutdown(reason="no practice")
             return
 
-    rc = ReceptionistCall(ctx, metadata, pick_engine(metadata["call_id"]))
+    rc = ReceptionistCall(ctx, metadata, pick_engine(metadata["call_id"], receptionist=True))
     call_id = rc.call_id
     max_duration_seconds = metadata.get("max_duration_seconds", 300)
     logger.info("call %s: receptionist (%s, %s), engine %s, language %s",
