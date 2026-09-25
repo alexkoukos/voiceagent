@@ -16,6 +16,8 @@ struct NewCallView: View {
     @State private var reveal = ""
     @State private var voice = "default"
     @State private var maxMinutes = 3
+    @State private var fromOwnNumber = false
+    @State private var ownNumberAvailable = false
     @State private var showAddFriend = false
     @State private var activeCall: Call?
     @State private var errorMessage: String?
@@ -58,6 +60,9 @@ struct NewCallView: View {
                         ForEach(Self.voices, id: \.id) { Text($0.label).tag($0.id) }
                     }
                     Stepper("Max duration: \(maxMinutes) min", value: $maxMinutes, in: 1...5)
+                    if ownNumberAvailable {
+                        Toggle("Call from my number", isOn: $fromOwnNumber)
+                    }
                 }
                 if let errorMessage {
                     Section { Text(errorMessage).foregroundStyle(.red) }
@@ -91,6 +96,8 @@ struct NewCallView: View {
         do {
             friends = try await api.friends()
             templates = try await api.templates()
+            ownNumberAvailable = try await api.options().ownNumberAvailable
+            if !ownNumberAvailable { fromOwnNumber = false }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -102,7 +109,7 @@ struct NewCallView: View {
             activeCall = try await api.startCall(NewCall(
                 friendId: friendId, persona: persona, scenario: scenario,
                 context: context, reveal: reveal, voice: voice,
-                maxDurationSeconds: maxMinutes * 60))
+                maxDurationSeconds: maxMinutes * 60, fromOwnNumber: fromOwnNumber))
         } catch { errorMessage = error.localizedDescription }
     }
 

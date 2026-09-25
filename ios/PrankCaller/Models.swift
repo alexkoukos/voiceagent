@@ -29,6 +29,7 @@ struct Call: Codable, Identifiable {
     let persona: String
     let scenario: String
     let voice: String
+    let fromOwnNumber: Bool
     let recordingUrl: String?
     let durationSeconds: Int?
     let createdAt: Date
@@ -47,6 +48,11 @@ struct NewCall: Encodable {
     let reveal: String
     let voice: String
     let maxDurationSeconds: Int
+    let fromOwnNumber: Bool
+}
+
+struct ServerOptions: Decodable {
+    let ownNumberAvailable: Bool
 }
 
 struct NewFriend: Encodable {

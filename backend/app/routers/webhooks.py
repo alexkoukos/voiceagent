@@ -29,13 +29,15 @@ def _verify(public_key_b64: str, signature_b64: str, timestamp: str, body: bytes
 async def telnyx_webhook(request: Request):
     body = await request.body()
     public_key = get_settings().telnyx_public_key
-    if public_key:
-        _verify(
-            public_key,
-            request.headers.get("telnyx-signature-ed25519", ""),
-            request.headers.get("telnyx-timestamp", ""),
-            body,
-        )
+    if not public_key:
+        # Fail closed: without the key we can't tell Telnyx from anyone else.
+        raise HTTPException(status_code=503, detail="Telnyx webhook not configured")
+    _verify(
+        public_key,
+        request.headers.get("telnyx-signature-ed25519", ""),
+        request.headers.get("telnyx-timestamp", ""),
+        body,
+    )
     payload = await request.json()
     data = payload.get("data", {})
     logger.info("telnyx event %s: %s", data.get("event_type"), data.get("payload"))
