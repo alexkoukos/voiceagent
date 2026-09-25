@@ -59,6 +59,8 @@ REALTIME_SILENCE_MS = int(os.environ.get("REALTIME_SILENCE_MS", "500"))
 FILLER_DELAY_SECONDS = 0.5
 # If the callee stays silent after answering, open the conversation after this long.
 GREETING_WAIT_SECONDS = 4
+# If the callee spoke but no reply has started this long after, open the conversation anyway.
+OPENING_FALLBACK_SECONDS = 5
 
 
 async def report(call_id: str, **event) -> None:
@@ -228,7 +230,17 @@ def prewarm(proc: JobProcess) -> None:
 
 def build_session(ctx: JobContext, engine: str, voice: str, language: str) -> AgentSession:
     if engine == "pipeline":
-        stt = elevenlabs.STT(model="scribe_v2_realtime", include_language_detection=True)
+        stt = elevenlabs.STT(
+            model="scribe_v2_realtime",
+            # Without a language hint Scribe hears Greek phone audio as Ukrainian (Cyrillic text).
+            # Detection stays on so a friend who switches language is still followed.
+            language_code=language,
+            include_language_detection=True,
+            # ElevenLabs decides when a sentence is finished. The plugin's default ("manual")
+            # waits for a commit the session never sends, so no final transcript ever arrived
+            # and the agent stayed silent for the whole call.
+            server_vad={"vad_silence_threshold_secs": 0.5},
+        )
         tts = elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
         # Open the connections now, while the phone rings, not on the first reply.
         for part in (stt, tts):
@@ -459,6 +471,11 @@ async def entrypoint(ctx: JobContext) -> None:
         await asyncio.wait_for(callee_spoke.wait(), timeout=GREETING_WAIT_SECONDS)
     except asyncio.TimeoutError:
         await agent.open_after_silence()
+        return
+    # Safety net: if the friend's "Εμπρός;" never becomes a finished turn, open anyway
+    # instead of leaving them in silence.
+    await asyncio.sleep(OPENING_FALLBACK_SECONDS)
+    await agent.open_after_silence()
 
 
 if __name__ == "__main__":
