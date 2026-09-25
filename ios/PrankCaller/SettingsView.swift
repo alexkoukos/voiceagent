@@ -31,7 +31,7 @@ struct SettingsView: View {
                                 Label(result.text, systemImage: result.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
                                     .labelStyle(.titleAndIcon)
                                     .font(.footnote)
-                                    .foregroundStyle(result.ok ? Palette.success : Palette.danger)
+                                    .foregroundStyle(result.ok ? Color.primary : Palette.danger)
                             }
                         }
                     }
@@ -76,7 +76,7 @@ struct TemplatesView: View {
         List {
             ForEach(templates) { t in
                 VStack(alignment: .leading, spacing: Space.xs) {
-                    Text(t.title).font(.body.weight(.semibold))
+                    Text(t.displayTitle).font(.body.weight(.semibold))
                     Text(t.scenario).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                 }
                 .padding(.vertical, Space.xs)

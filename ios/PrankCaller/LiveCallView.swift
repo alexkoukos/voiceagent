@@ -50,7 +50,7 @@ struct LiveCallView: View {
                 StatusBadge(call: call)
             } else {
                 Label("Καλεί…", systemImage: "phone.arrow.up.right")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(Palette.waiting)
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
             }
             if call?.status == "active" || call?.durationSeconds != nil {
                 Text(Duration.seconds(call?.durationSeconds ?? elapsed).formatted(.time(pattern: .minuteSecond)))
