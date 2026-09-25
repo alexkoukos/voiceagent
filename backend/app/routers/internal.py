@@ -14,9 +14,9 @@ from app import receptionist
 from app.models import Call, CallStatus, TranscriptEntry
 from app.schemas import (
     AppointmentRef, BookAppointment, CallEvent, CheckAvailability, FindArgs, FlagArgs, HandoffResult, InboundStart,
-    MessageArgs, RescheduleArgs, RouteArgs, TransferArgs, WaitlistArgs, normalize_phone,
+    MessageArgs, PrepareAction, RescheduleArgs, RouteArgs, TransferArgs, WaitlistArgs, normalize_phone,
 )
-from app.storage import delete_recording_later
+from app.storage import queue_recording_deletion
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
@@ -42,7 +42,7 @@ async def call_event(call_id: str, event: CallEvent, db: AsyncSession = Depends(
         call.delete_requested = True
         await db.execute(delete(TranscriptEntry).where(TranscriptEntry.call_id == call.id))
         if call.recording_url:
-            delete_recording_later(call.recording_url)
+            await queue_recording_deletion(db, call.recording_url, call.id)
             call.recording_url = None
     if event.transcript_role and event.transcript_text and not call.delete_requested:
         db.add(
@@ -63,11 +63,11 @@ async def call_event(call_id: str, event: CallEvent, db: AsyncSession = Depends(
     if event.latency_ms_median is not None:
         call.latency_ms_median = event.latency_ms_median
     if "recording_refused" in event.flags and call.recording_url:
-        delete_recording_later(call.recording_url)
+        await queue_recording_deletion(db, call.recording_url, call.id)
         call.recording_url = None
     if event.recording_url:
         if call.delete_requested or "recording_refused" in (call.flags or []):
-            delete_recording_later(event.recording_url)
+            await queue_recording_deletion(db, event.recording_url, call.id)
         else:
             call.recording_url = event.recording_url
     await db.commit()
@@ -121,6 +121,11 @@ async def t_emergency(call_id: str, db: AsyncSession = Depends(get_db)):
 @tools.post("/check_availability")
 async def t_check(call_id: str, args: CheckAvailability, db: AsyncSession = Depends(get_db)):
     return await receptionist.tool_check_availability(db, await _receptionist_call(db, call_id), args)
+
+
+@tools.post("/prepare_action")
+async def t_prepare_action(call_id: str, args: PrepareAction, db: AsyncSession = Depends(get_db)):
+    return await receptionist.tool_prepare_action(db, await _receptionist_call(db, call_id), args)
 
 
 @tools.post("/book_appointment")

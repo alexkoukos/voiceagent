@@ -7,6 +7,7 @@ calendars must be reachable; missing credentials must never imply an empty calen
 """
 
 import asyncio
+import hashlib
 import json
 from datetime import datetime
 from functools import lru_cache
@@ -94,15 +95,53 @@ async def busy_except(
 
 
 async def create_event(
-    calendar_id: str, *, summary: str, description: str, start: datetime, end: datetime, timezone: str
+    calendar_id: str, *, summary: str, description: str, start: datetime, end: datetime, timezone: str,
+    event_key: str,
 ) -> str:
-    data = await _request("POST", f"/calendars/{calendar_id}/events", json={
+    # Google permits caller-supplied base32hex IDs. A stable key makes a timed-out
+    # insert safe to retry with the same event instead of creating a second one.
+    event_id = "a" + hashlib.sha256(event_key.encode()).hexdigest()[:48]
+    path = f"/calendars/{quote(calendar_id, safe='')}/events"
+    body = {
+        "id": event_id,
         "summary": summary,
         "description": description,
         "start": {"dateTime": start.isoformat(), "timeZone": timezone},
         "end": {"dateTime": end.isoformat(), "timeZone": timezone},
-    })
-    return data["id"]
+        "extendedProperties": {"private": {"voiceagent": "1", "voiceagent_key": event_key}},
+    }
+    try:
+        data = await _request("POST", path, json=body)
+        return data["id"]
+    except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code != 409:
+            raise
+        try:
+            existing = await _request("GET", f"{path}/{event_id}")
+        except httpx.HTTPStatusError as missing:
+            if missing.response.status_code == 404:
+                raise exc
+            raise
+        if (existing.get("id") == event_id
+                and existing.get("extendedProperties", {}).get("private", {}).get("voiceagent_key") == event_key
+                and existing.get("start", {}).get("dateTime") == start.isoformat()
+                and existing.get("end", {}).get("dateTime") == end.isoformat()):
+            return event_id
+        raise RuntimeError("Calendar event ID already exists with different booking details")
+
+
+async def owned_events(calendar_id: str, start: datetime, end: datetime) -> list[dict]:
+    """Our events in a bounded window, for crash recovery after ambiguous writes."""
+    path = f"/calendars/{quote(calendar_id, safe='')}/events"
+    params = {"timeMin": start.isoformat(), "timeMax": end.isoformat(),
+              "privateExtendedProperty": "voiceagent=1", "showDeleted": "false", "maxResults": 2500}
+    events = []
+    while True:
+        data = await _request("GET", path, params=params)
+        events.extend(data.get("items", []))
+        if not data.get("nextPageToken"):
+            return events
+        params["pageToken"] = data["nextPageToken"]
 
 
 async def delete_event(calendar_id: str, event_id: str) -> None:

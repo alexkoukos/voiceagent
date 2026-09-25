@@ -39,6 +39,7 @@ from livekit.agents import (
     JobProcess,
     StopResponse,
     WorkerOptions,
+    RunContext,
     cli,
     function_tool,
     get_job_context,
@@ -212,27 +213,36 @@ class PrankCallerAgent(Agent):
         return "recording and transcript will be deleted"
 
     @function_tool
-    async def hang_up(self) -> str:
-        """Ends the call. Use this once the call has done its job or the other
-        person wants to stop — never leave a call open indefinitely."""
-        # Let any goodbye that's still playing finish before dropping the line, so the
-        # closing isn't cut off and there's no dangling gap.
-        await self._drain_speech()
-        job_ctx = get_job_context()
-        await job_ctx.room.disconnect()
-        return "call ended"
-
-    async def _drain_speech(self, timeout: float = 5.0) -> None:
-        """Wait (bounded) for the speech that's currently playing to finish."""
-        speech = getattr(self.session, "current_speech", None)
-        if speech is None:
-            return
+    async def hang_up(self, context: RunContext, silent: bool = False) -> str:
+        """Says a final goodbye and ends the call after it has played. Use silent=true only for voicemail."""
+        # current_speech.wait_for_playout() waits for the tool itself to finish and
+        # raises inside a function tool. Wait for the speech before this tool instead.
+        context.disallow_interruptions()
         try:
-            await asyncio.wait_for(speech.wait_for_playout(), timeout=timeout)
+            await asyncio.wait_for(context.wait_for_playout(), timeout=10)
         except asyncio.TimeoutError:
-            pass
-        except Exception:
-            logger.debug("call %s: waiting for closing playout failed", self._call_id, exc_info=True)
+            logger.warning("call %s: timed out waiting for speech before hang-up", self._call_id)
+        if silent:
+            await get_job_context().room.disconnect()
+            return "call ended"
+        closing = "Ευχαριστούμε που καλέσατε. Γεια σας." if self.language == "el" else "Thank you for calling. Goodbye."
+        if self._fillers is not None:
+            handle = self.session.say(closing, allow_interruptions=False)
+        else:
+            quote = "Πες μόνο αυτή τη φράση" if self.language == "el" else "Say only this phrase"
+            handle = self.session.generate_reply(instructions=f"{quote}: {closing}", allow_interruptions=False)
+        room = get_job_context().room
+
+        async def finish() -> None:
+            try:
+                # The tool must return before the new speech can finish playing.
+                await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
+            except Exception:
+                logger.exception("call %s: goodbye playout failed", self._call_id)
+            await room.disconnect()
+
+        asyncio.create_task(finish())
+        return "The call is ending. Do not speak again."
 
     async def _play_opening(self) -> bool:
         opening = await ready_opening(self._opening_task)
@@ -299,24 +309,34 @@ class ReceptionistAgent(PrankCallerAgent):
         self._opened = True
 
     async def _tool(self, name: str, args: dict | None = None) -> str:
-        result = await self._rc.tool(name, args or {})
+        payload = dict(args or {})
+        if name in ("book_appointment", "reschedule_appointment", "cancel_appointment"):
+            payload.update(self._rc.confirmation_for_write())
+        result = await self._rc.tool(name, payload)
+        if name in ("book_appointment", "reschedule_appointment", "cancel_appointment") and not result.get("error"):
+            self._rc.clear_confirmation()
         return json.dumps(result, ensure_ascii=False)
 
     @function_tool
-    async def route_call(self, intent: str, staff: str = "", department: str = "") -> str:
+    async def route_call(self, context: RunContext, intent: str, staff: str = "", department: str = "", language: str = "") -> str:
         """Call first, as soon as you know what the caller wants, and again if it changes.
 
         Args:
             intent: One of book, change, cancel, confirm, question, message, human, emergency, unclear, off_topic (not about the business, or trolling).
             staff: Who they asked for, in their words ("με τον Γιώργο", "τον γιατρό"); empty if nobody.
             department: The department they named, if any.
+            language: el or en only when the caller clearly speaks that language; empty if uncertain.
         """
-        # The call's language is fixed (Greek, or English for foreign numbers): no switching.
+        # Only an explicitly enabled business rule may switch the call language.
         result = await self._rc.tool("route_call", {
             "intent": intent, "staff": staff or None, "department": department or None,
+            "language": language or None,
         })
+        if result.get("switch_language"):
+            self._rc.spawn(self._rc.switch_language(result["switch_language"]))
         if result.get("path") == "end_call":
             # Third off-topic / abusive turn: the backend decided to end the call.
+            await context.wait_for_playout()
             self._rc.spawn(self._rc.end_with(result.get("say", "")))
             return json.dumps({"path": "end_call", "next": "The call is ending. Say nothing more."})
         return json.dumps(result, ensure_ascii=False)
@@ -336,6 +356,32 @@ class ReceptionistAgent(PrankCallerAgent):
             "when": when, "service_id": service_id or None, "staff": staff or None,
             "appointment_id": appointment_id or None,
         })
+
+    @function_tool
+    async def prepare_action(
+        self, action: str, date: str = "", time: str = "", service_id: str = "",
+        customer_name: str = "", staff: str = "", appointment_id: str = "",
+    ) -> str:
+        """Reads back trusted details and asks for a clear yes before booking, moving or cancelling.
+
+        Args:
+            action: book, reschedule or cancel.
+            date: The offered date, for book or reschedule.
+            time: The offered time, for book or reschedule.
+            service_id: The service id, for book or reschedule.
+            customer_name: The full name, for a new booking.
+            staff: Same staff wording used in check_availability.
+            appointment_id: From find_appointments, for reschedule or cancel.
+        """
+        result = await self._rc.tool("prepare_action", {
+            "action": action, "date": date or None, "time": time or None,
+            "service_id": service_id or None, "customer_name": customer_name or None,
+            "staff": staff or None, "appointment_id": appointment_id or None,
+        })
+        if result.get("confirmation_id"):
+            self._rc.read_back(result)
+            return json.dumps({"next": "Wait for the caller to answer the spoken readback. Only a clear yes permits the action."})
+        return json.dumps(result, ensure_ascii=False)
 
     @function_tool
     async def book_appointment(
@@ -492,8 +538,8 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
                 # a false alarm, carry on where it stopped.
                 interruption={"min_duration": 0.6, "min_words": 2, "resume_false_interruption": True,
                               "false_interruption_timeout": 1.5},
-                # Start writing and voicing the reply before the friend has fully finished.
-                preemptive_generation={"enabled": True, "preemptive_tts": True},
+                # Prepare the text early, but do not voice it over a caller who is still speaking.
+                preemptive_generation={"enabled": True, "preemptive_tts": False},
             ),
         )
     return AgentSession(**language_parts(engine, voice, language, vocabulary))
@@ -657,13 +703,14 @@ def guard_repetition(session: AgentSession, ctx: JobContext, call_id: str) -> No
     return
 
 
-def room_options(web: bool = False) -> room_io.RoomOptions:
+def room_options(web: bool = False, caller_identity: str | None = None) -> room_io.RoomOptions:
     # Clean noise before transcription and turn detection hear it: the telephony model for
     # 8 kHz phone lines, the full-band one for browser (web demo) microphones.
     nc = None
     if NOISE_CANCELLATION:
         nc = noise_cancellation.BVC() if web else noise_cancellation.BVCTelephony()
-    return room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=nc))
+    kwargs = {"participant_identity": caller_identity} if caller_identity else {}
+    return room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=nc), **kwargs)
 
 
 class ReceptionistCall:
@@ -686,11 +733,48 @@ class ReceptionistCall:
         self.handed_off = False
         self._emergency_said = False
         self._tasks: set[asyncio.Task] = set()
+        self._user_turn = 0
+        self._last_user_text = ""
+        self._confirmation_id: str | None = None
+        self._confirmation_floor = 0
+        self._confirmation_armed = False
 
     def spawn(self, coro) -> None:
         t = asyncio.create_task(coro)
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
+
+    def heard_user(self, text: str) -> None:
+        self._user_turn += 1
+        self._last_user_text = text
+
+    def read_back(self, result: dict) -> None:
+        self._confirmation_id = result["confirmation_id"]
+        self._confirmation_armed = False
+        if self.engine == "pipeline":
+            handle = self.session.say(result["say"], allow_interruptions=False)
+        else:
+            quote = "Πες ακριβώς αυτό" if self.language == "el" else "Say exactly this"
+            handle = self.session.generate_reply(instructions=f"{quote}: {result['say']}", allow_interruptions=False)
+
+        async def arm() -> None:
+            try:
+                await asyncio.wait_for(handle.wait_for_playout(), timeout=20)
+                self._confirmation_floor = self._user_turn
+                self._confirmation_armed = True
+            except Exception:
+                logger.exception("call %s: confirmation readback failed", self.call_id)
+
+        self.spawn(arm())
+
+    def confirmation_for_write(self) -> dict:
+        if self._confirmation_id and self._confirmation_armed and self._user_turn > self._confirmation_floor:
+            return {"confirmation_id": self._confirmation_id, "confirmation_text": self._last_user_text}
+        return {}
+
+    def clear_confirmation(self) -> None:
+        self._confirmation_id = None
+        self._confirmation_armed = False
 
     async def tool(self, name: str, args: dict) -> dict:
         try:
@@ -710,19 +794,30 @@ class ReceptionistCall:
             fillers=self.engine == "pipeline", **(parts or {}),
         )
 
+    async def switch_language(self, language: str) -> None:
+        # The backend authorizes and logs R7; only then replace the model's STT
+        # language hint (or realtime model) along with the prompt.
+        if language not in ("el", "en") or language == self.language or self.session is None:
+            return
+        await asyncio.sleep(0.2)  # let route_call return before replacing its agent
+        parts = language_parts(self.engine, self.metadata.get("voice", "default"), language,
+                               self.metadata.get("vocabulary"))
+        self.language = language
+        self.agent = self.make_agent(language, parts)
+        self.session.update_agent(self.agent)
+
     async def end_with(self, line: str) -> None:
         """Say one closing line (not interruptible), then hang up."""
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.1)
         try:
             if self.engine == "pipeline":
                 handle = self.session.say(line, allow_interruptions=False)
             else:
                 quote = "Πες ακριβώς αυτό" if self.language == "el" else "Say exactly this"
                 handle = self.session.generate_reply(instructions=f"{quote}: {line}", allow_interruptions=False)
-            await handle.wait_for_playout()
+            await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
         except Exception:
             logger.exception("call %s: closing line failed", self.call_id)
-        await asyncio.sleep(0.5)
         await self.ctx.room.disconnect()
 
     # --- emergency (R5): a deterministic phrase match on what the caller said ---
@@ -868,8 +963,8 @@ async def say_busy_and_leave(ctx: JobContext, engine: str, busy: dict) -> None:
     session = build_session(ctx, engine, busy.get("voice", "default"), busy.get("language", "el"))
     await session.start(agent=Agent(instructions="Say only the line you are given, then stop."), room=ctx.room)
     quote = "Πες ακριβώς αυτό" if busy.get("language") == "el" else "Say exactly this"
-    await session.generate_reply(instructions=f"{quote}: {busy['busy_line']}")
-    await asyncio.sleep(6)
+    handle = session.generate_reply(instructions=f"{quote}: {busy['busy_line']}", allow_interruptions=False)
+    await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
     await ctx.room.disconnect()
     ctx.shutdown(reason="lines busy")
 
@@ -945,6 +1040,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
     @session.on("conversation_item_added")
     def _heard(ev) -> None:
         if getattr(ev.item, "type", None) == "message" and ev.item.role == "user" and ev.item.text_content:
+            rc.heard_user(ev.item.text_content)
             rc.check_emergency(ev.item.text_content)
 
     @session.on("user_input_transcribed")
@@ -982,7 +1078,9 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
         await report(call_id, _retries=5, **event)
 
     ctx.add_shutdown_callback(_finish)
-    await session.start(agent=agent, room=ctx.room, room_options=room_options(web=metadata.get("direction") == "web"))
+    await session.start(agent=agent, room=ctx.room, room_options=room_options(
+        web=metadata.get("direction") == "web", caller_identity=rc.caller_identity,
+    ))
     if dialing:
         # Let the customer say "Εμπρός;" first (and hear a voicemail greeting before speaking).
         spoke = asyncio.Event()
@@ -1056,7 +1154,8 @@ async def entrypoint(ctx: JobContext) -> None:
     # The agent only greets once the callee speaks or open_after_silence runs, so nothing is
     # said before someone answers.
     warm_task = asyncio.create_task(session.start(
-        agent=agent, room=ctx.room, room_options=room_options(),
+        agent=agent, room=ctx.room,
+        room_options=room_options(caller_identity=None if test_no_dial else f"friend-{call_id}"),
     ))
 
     lk = api.LiveKitAPI()

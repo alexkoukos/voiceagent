@@ -287,6 +287,8 @@ class BookAppointment(BaseModel):
     customer_phone: str | None = Field(default=None, max_length=30)
     staff: str | None = Field(default=None, max_length=SHORT_TEXT)
     name_uncertain: bool = False
+    confirmation_id: str | None = None
+    confirmation_text: str | None = Field(default=None, max_length=SHORT_TEXT)
 
     @field_validator("customer_phone")
     @classmethod
@@ -466,10 +468,24 @@ class RescheduleArgs(BaseModel):
     appointment_id: str
     date: dt.date
     time: str = Field(pattern=HHMM)
+    confirmation_id: str | None = None
+    confirmation_text: str | None = Field(default=None, max_length=SHORT_TEXT)
 
 
 class AppointmentRef(BaseModel):
     appointment_id: str
+    confirmation_id: str | None = None
+    confirmation_text: str | None = Field(default=None, max_length=SHORT_TEXT)
+
+
+class PrepareAction(BaseModel):
+    action: Literal["book", "reschedule", "cancel"]
+    date: dt.date | None = None
+    time: str | None = Field(default=None, pattern=HHMM)
+    service_id: str | None = Field(default=None, max_length=SHORT_TEXT)
+    customer_name: str | None = Field(default=None, max_length=SHORT_TEXT)
+    staff: str | None = Field(default=None, max_length=SHORT_TEXT)
+    appointment_id: str | None = None
 
 
 class MessageArgs(BaseModel):

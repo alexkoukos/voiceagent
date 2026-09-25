@@ -571,6 +571,7 @@ async def book(
                 start=starts_at,
                 end=ends_at,
                 timezone=practice.timezone,
+                event_key=f"{practice.id}:{key or appt.id}",
             )
         await db.commit()
     except IntegrityError:

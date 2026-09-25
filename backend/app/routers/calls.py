@@ -14,7 +14,7 @@ from app.dispatcher import active_count, start_call, start_next_queued
 from app.livekit_dispatch import end_call
 from app.models import Call, CallStatus, Friend, TranscriptEntry
 from app.schemas import CallCreate, CallDetailOut, CallOut
-from app.storage import delete_recording_later, presigned_recording_url, recording_exists
+from app.storage import queue_recording_deletion, presigned_recording_url, recording_exists
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -99,8 +99,9 @@ async def delete_call_recording(call_id: str, db: AsyncSession = Depends(get_db)
     call = await db.get(Call, call_id)
     if call is None or not call.recording_url:
         raise HTTPException(status_code=404, detail="No recording")
-    delete_recording_later(call.recording_url)
+    await queue_recording_deletion(db, call.recording_url, call.id)
     call.recording_url = None
+    call.delete_requested = True
     await db.execute(delete(TranscriptEntry).where(TranscriptEntry.call_id == call.id))
     await db.commit()
     events.publish(call.id)
