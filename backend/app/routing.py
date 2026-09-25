@@ -34,7 +34,15 @@ EMERGENCY_SCRIPT = {
     "en": "That sounds like an emergency. Please call 112 right now. I'll let the practice know straight away.",
 }
 
-INTENTS = ("book", "change", "cancel", "confirm", "question", "message", "human", "emergency", "unclear")
+INTENTS = ("book", "change", "cancel", "confirm", "question", "message", "human", "emergency", "unclear", "off_topic")
+
+# Said on the last off-topic / abusive turn before the agent hangs up.
+END_LINE = {
+    "el": "Αυτή η γραμμή είναι μόνο για ραντεβού και ερωτήσεις για την επιχείρηση. Δεν μπορώ να βοηθήσω σε κάτι άλλο, "
+          "οπότε κλείνω την κλήση. Αν χρειαστείτε κάτι, καλέστε ξανά. Καλή συνέχεια.",
+    "en": "This line is only for appointments and questions about the business. I can't help with anything else, "
+          "so I'll end the call now. If you need something, please call again. Goodbye.",
+}
 BOOKING_INTENTS = {"book", "change", "cancel", "confirm"}
 
 
@@ -50,6 +58,9 @@ def rules_for(practice: Practice) -> dict:
         "after_hours": {"booking": True, "message": True, **(r.get("after_hours") or {})},
         # Off by default: the call keeps its language (Greek, or English for foreign numbers).
         "language_switch": r.get("language_switch", False),
+        # Off-topic or abusive requests allowed before the agent ends the call.
+        "off_topic_limit": int(r.get("off_topic_limit", 3)),
+        "end_line": r.get("end_line") or {},
     }
 
 
@@ -140,6 +151,19 @@ async def route(
         await log(db, call, "intent", intent, "R5 emergency", "emergency")
         out.update(path="emergency", say=EMERGENCY_SCRIPT["el" if lang == "el" else "en"],
                    next="Say the emergency line, then take an urgent message (take_message with urgent=true).")
+        return out
+
+    if intent == "off_topic":
+        n = await _count(db, call, "intent", "off_topic") + 1
+        if n >= rules["off_topic_limit"]:
+            await log(db, call, "intent", intent, f"off-topic {n}/{rules['off_topic_limit']} -> end call", "end_call")
+            key = "el" if lang == "el" else "en"
+            out.update(path="end_call", say=rules["end_line"].get(key) or END_LINE[key])
+            return out
+        await log(db, call, "intent", intent, f"off-topic {n}/{rules['off_topic_limit']}", "refuse")
+        out.update(path="refuse", next=(
+            "Say briefly and politely that you can only help with this business (appointments, questions about it, "
+            "messages), and ask what they need. Don't do what they asked, don't joke along, don't explain further."))
         return out
 
     if intent == "unclear":

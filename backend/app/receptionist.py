@@ -368,6 +368,8 @@ async def tool_route(db: AsyncSession, call: Call, args) -> dict:
     )
     if result.get("path") == "emergency":
         await _emergency(db, practice, call)
+    if result.get("path") == "end_call":
+        add_flag(call, "off_topic")
     if args.intent in routing.BOOKING_INTENTS:
         call.use_case = "booking"
     elif call.use_case is None and call.direction != "outbound":
