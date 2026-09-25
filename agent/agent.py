@@ -335,7 +335,7 @@ class ReceptionistAgent(PrankCallerAgent):
         if result.get("switch_language"):
             self._rc.spawn(self._rc.switch_language(result["switch_language"]))
         if result.get("path") == "end_call":
-            # Third off-topic / abusive turn: the backend decided to end the call.
+            # Last allowed off-topic / abusive turn (2nd by default): the backend decided to end the call.
             await context.wait_for_playout()
             self._rc.spawn(self._rc.end_with(result.get("say", "")))
             return json.dumps({"path": "end_call", "next": "The call is ending. Say nothing more."})
