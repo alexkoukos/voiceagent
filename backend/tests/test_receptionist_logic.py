@@ -48,14 +48,11 @@ def test_emergency_phrases():
     assert not is_emergency(practice(vertical="barber"), "δεν αναπνέει")
 
 
-def test_greeting_discloses_ai_recording_and_hours():
+def test_greeting_is_only_the_assistant_line():
     p = practice()
-    g = default_greeting(p, now=datetime(2026, 9, 28, 10, tzinfo=ATH), language="el")
-    assert "ψηφιακός βοηθός" in g and "καταγράφεται" in g and "καλημέρα" in g
-    g = default_greeting(p, now=datetime(2026, 9, 28, 22, tzinfo=ATH), language="el", hours_state="closed")
-    assert "κλειστά" in g and "ραντεβού" in g and "μήνυμα" in g
-    g = default_greeting(p, now=datetime(2026, 9, 28, 22, tzinfo=ATH), language="en", recording=False)
-    assert "recorded" not in g and "digital assistant" in g
+    assert default_greeting(p, language="el") == "Είμαι ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω;"
+    assert default_greeting(p, language="en") == "I'm a digital assistant, how can I help you?"
+    assert default_greeting(practice(greeting="Γεια σας!"), language="el") == "Γεια σας!"
 
 
 def test_customer_sms():
