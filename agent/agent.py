@@ -7,11 +7,13 @@ duration cap. This worker dials out over the Telnyx SIP trunk, runs the
 conversation, records it to S3-compatible storage, reports transcript/status
 back to the backend, and hangs up via its own tool or the duration cap.
 
-Two engines (AGENT_ENGINE):
+Three engines (AGENT_ENGINE):
 - "pipeline" (default): ElevenLabs Scribe realtime -> Gemini Flash-Lite ->
   ElevenLabs voice, with multilingual turn detection, preemptive generation,
   filler words when a reply is slow, and an opening line prepared during the ring.
 - "realtime": Gemini Live speech-to-speech (the original engine; fallback).
+- "openai": OpenAI Realtime speech-to-speech (gpt-realtime-2.1). Needs OPENAI_API_KEY;
+  without it the call uses "realtime".
 """
 
 import asyncio
@@ -40,7 +42,7 @@ from livekit.agents.voice.turn import TurnHandlingOptions
 
 from fillers import FillerPicker, normalize_language
 from opening import prepare_opening, ready_opening
-from voices import elevenlabs_voice, gemini_voice
+from voices import elevenlabs_voice, gemini_voice, openai_voice
 
 logger = logging.getLogger("prank-caller")
 
@@ -49,11 +51,18 @@ AGENT_TOKEN = os.environ.get("INTERNAL_API_TOKEN", "")
 # How long the friend's phone rings before we give up (the library default is 30s).
 RINGING_TIMEOUT_SECONDS = int(os.environ.get("RINGING_TIMEOUT_SECONDS", "45"))
 ENGINE = os.environ.get("AGENT_ENGINE", "pipeline")
+if ENGINE == "openai":
+    # Plugins must register at import time on the main process; import it only when used,
+    # since every worker process pays for what's imported and memory is tight on Railway.
+    from livekit.plugins import openai
+    from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
 # Realtime engine model.
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
+# OpenAI engine model; "gpt-realtime-2.1-mini" costs about a third.
+OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1")
 # Pipeline engine: the "brain". Flash-Lite starts answering in ~0.45 s.
 LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
-# Realtime engine: how long a pause means the friend has finished talking.
+# Realtime and OpenAI engines: how long a pause means the friend has finished talking.
 REALTIME_SILENCE_MS = int(os.environ.get("REALTIME_SILENCE_MS", "500"))
 # Say a filler word if the reply hasn't started this long after the friend stops talking.
 FILLER_DELAY_SECONDS = 0.5
@@ -273,6 +282,19 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str) -> Ag
                 preemptive_generation={"enabled": True, "preemptive_tts": True},
             ),
         )
+    if engine == "openai":
+        return AgentSession(
+            llm=openai.realtime.RealtimeModel(
+                model=OPENAI_REALTIME_MODEL,
+                voice=openai_voice(voice),
+                # The language hint only steers the transcript; the model hears the audio itself.
+                input_audio_transcription=InputAudioTranscription(model="gpt-4o-transcribe", language=language),
+                turn_detection=TurnDetection(
+                    type="server_vad", silence_duration_ms=REALTIME_SILENCE_MS, prefix_padding_ms=300,
+                ),
+                api_key=os.environ.get("OPENAI_API_KEY"),
+            ),
+        )
     return AgentSession(
         llm=google.beta.realtime.RealtimeModel(
             model=GEMINI_MODEL,
@@ -337,6 +359,9 @@ async def entrypoint(ctx: JobContext) -> None:
     engine = ENGINE
     if engine == "pipeline" and not os.environ.get("ELEVEN_API_KEY"):
         logger.warning("call %s: ELEVEN_API_KEY missing, using the realtime engine", call_id)
+        engine = "realtime"
+    if engine == "openai" and not os.environ.get("OPENAI_API_KEY"):
+        logger.warning("call %s: OPENAI_API_KEY missing, using the realtime engine", call_id)
         engine = "realtime"
 
     # Everything that doesn't need the friend happens while the phone rings:
