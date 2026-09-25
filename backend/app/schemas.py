@@ -1,12 +1,20 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import CallStatus, TranscriptRole
 
 
+# Caps on free text that ends up in the agent's prompt.
+SHORT_TEXT = 200
+LONG_TEXT = 2000
+
+Voice = Literal["default", "Puck", "Charon", "Fenrir", "Kore", "Aoede"]
+
+
 class FriendCreate(BaseModel):
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=100)
     phone_number: str = Field(pattern=r"^\+\d{8,15}$")
 
 
@@ -20,12 +28,14 @@ class FriendOut(BaseModel):
 
 class CallCreate(BaseModel):
     friend_id: str
-    persona: str
-    scenario: str
-    context: str = ""
-    reveal: str = ""
-    voice: str = "default"
+    persona: str = Field(min_length=1, max_length=LONG_TEXT)
+    scenario: str = Field(min_length=1, max_length=LONG_TEXT)
+    context: str = Field(default="", max_length=LONG_TEXT)
+    reveal: str = Field(default="", max_length=LONG_TEXT)
+    voice: Voice = "default"
     max_duration_seconds: int = Field(default=300, gt=0)
+    # Show the owner's verified number (OWN_CALLER_NUMBER) instead of the trunk number.
+    from_own_number: bool = False
 
 
 class CallEvent(BaseModel):
@@ -53,6 +63,7 @@ class CallOut(BaseModel):
     persona: str
     scenario: str
     voice: str
+    from_own_number: bool
     recording_url: str | None
     duration_seconds: int | None
     created_at: datetime
@@ -65,11 +76,11 @@ class CallDetailOut(CallOut):
 
 
 class PromptTemplateCreate(BaseModel):
-    title: str
-    persona: str
-    scenario: str
-    context: str = ""
-    reveal: str = ""
+    title: str = Field(min_length=1, max_length=SHORT_TEXT)
+    persona: str = Field(min_length=1, max_length=LONG_TEXT)
+    scenario: str = Field(min_length=1, max_length=LONG_TEXT)
+    context: str = Field(default="", max_length=LONG_TEXT)
+    reveal: str = Field(default="", max_length=LONG_TEXT)
 
 
 class PromptTemplateOut(BaseModel):

@@ -25,6 +25,8 @@ async def create_call(payload: CallCreate, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Friend not found")
 
     settings = get_settings()
+    if payload.from_own_number and not settings.own_caller_number:
+        raise HTTPException(status_code=400, detail="No own caller number is configured")
     call = Call(
         friend_id=friend.id,
         persona=payload.persona,
@@ -33,6 +35,7 @@ async def create_call(payload: CallCreate, db: AsyncSession = Depends(get_db)):
         reveal=payload.reveal,
         voice=payload.voice,
         max_duration_seconds=min(payload.max_duration_seconds, settings.max_call_duration_seconds),
+        from_own_number=payload.from_own_number,
         status=CallStatus.queued,
     )
     db.add(call)

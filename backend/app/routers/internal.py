@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 
 def require_agent_token(x_agent_token: str = Header(default="")) -> None:
     expected = get_settings().internal_api_token
-    if not expected or x_agent_token != expected:
+    if not expected or not secrets.compare_digest(x_agent_token, expected):
         raise HTTPException(status_code=401, detail="Invalid agent token")
 
 

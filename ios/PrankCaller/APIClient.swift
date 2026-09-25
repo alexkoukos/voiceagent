@@ -10,9 +10,16 @@ enum APIError: LocalizedError {
 }
 
 enum Settings {
+    // The API key lives in the Keychain; older builds kept it in UserDefaults, so move it over once.
     static var apiKey: String {
-        get { UserDefaults.standard.string(forKey: "apiKey") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "apiKey") }
+        get {
+            if let legacy = UserDefaults.standard.string(forKey: "apiKey") {
+                Keychain.set(legacy, for: "apiKey")
+                UserDefaults.standard.removeObject(forKey: "apiKey")
+            }
+            return Keychain.get("apiKey") ?? ""
+        }
+        set { Keychain.set(newValue, for: "apiKey") }
     }
     static var baseURL: String {
         get { UserDefaults.standard.string(forKey: "baseURL") ?? "http://localhost:8000" }
@@ -69,6 +76,7 @@ struct APIClient {
         try Self.decoder.decode(T.self, from: try await request(method, path, body: body))
     }
 
+    func options() async throws -> ServerOptions { try await get("/options") }
     func friends() async throws -> [Friend] { try await get("/friends") }
     func addFriend(_ f: NewFriend) async throws -> Friend { try await send("POST", "/friends", body: f) }
     func templates() async throws -> [PromptTemplate] { try await get("/templates") }

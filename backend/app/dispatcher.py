@@ -40,6 +40,7 @@ async def start_call(db: AsyncSession, call: Call, friend: Friend) -> None:
             merged_prompt=merged_prompt,
             voice=call.voice,
             max_duration_seconds=call.max_duration_seconds,
+            from_own_number=call.from_own_number,
         )
         call.status = CallStatus.dialing
     except Exception:

@@ -21,6 +21,8 @@ class Settings(BaseSettings):
 
     sip_trunk_id: str = ""
     sip_outbound_number: str = ""
+    # The owner's own number, verified with Telnyx, for calls placed "from my number".
+    own_caller_number: str = ""
     telnyx_public_key: str = ""
 
     r2_account_id: str = ""
@@ -34,6 +36,8 @@ class Settings(BaseSettings):
     internal_api_token: str = ""
     app_api_token: str = ""
     backend_public_url: str = "http://localhost:8000"
+    # Swagger UI / OpenAPI schema; off by default so a deployed backend doesn't publish its API.
+    enable_docs: bool = False
 
     @field_validator("database_url")
     @classmethod

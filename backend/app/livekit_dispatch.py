@@ -20,9 +20,14 @@ async def dispatch_call(
     merged_prompt: str,
     voice: str,
     max_duration_seconds: int,
+    from_own_number: bool = False,
 ) -> None:
     settings = get_settings()
     room_name = f"call-{call_id}"
+    outbound_number = (
+        settings.own_caller_number if from_own_number and settings.own_caller_number
+        else settings.sip_outbound_number
+    )
 
     metadata = json.dumps(
         {
@@ -32,7 +37,7 @@ async def dispatch_call(
             "voice": voice,
             "max_duration_seconds": max_duration_seconds,
             "sip_trunk_id": settings.sip_trunk_id,
-            "outbound_number": settings.sip_outbound_number,
+            "outbound_number": outbound_number,
         }
     )
 
