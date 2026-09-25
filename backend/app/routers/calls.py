@@ -22,7 +22,7 @@ router = APIRouter(prefix="/calls", tags=["calls"])
 @router.post("", response_model=CallOut)
 async def create_call(payload: CallCreate, db: AsyncSession = Depends(get_db)):
     friend = await db.get(Friend, payload.friend_id)
-    if friend is None:
+    if friend is None or friend.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Friend not found")
 
     settings = get_settings()
