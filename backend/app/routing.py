@@ -34,6 +34,18 @@ EMERGENCY_SCRIPT = {
     "en": "That sounds like an emergency. Please call 112 right now. I'll let the practice know straight away.",
 }
 
+# Only clearly DIRECTED insults/curses at the agent: matched accent-stripped and lowercase.
+# Casual fillers ("γαμώτο", "ρε", "μωρέ", bare "damn") stay untouched — they aren't insults.
+PROFANITY_PHRASES = {
+    "el": ["μαλακα", "καριολη", "γαμησου", "να γαμηθεις", "αρχιδι", "πουστη", "ηλιθιε", "βλακα",
+           "χαζε", "κωλοπαιδο"],
+    "en": ["fuck you", "asshole", "bastard", "idiot", "moron", "dickhead", "shut up", "bitch"],
+}
+PROFANITY_SCRIPT = {
+    "el": "Παρακαλώ, ας μιλήσουμε ευγενικά· δεν χρειάζονται βρισιές. Πώς μπορώ να σας βοηθήσω;",
+    "en": "Please, let's keep things polite — there's no need to swear. How can I help you?",
+}
+
 INTENTS = ("book", "change", "cancel", "confirm", "question", "message", "human", "emergency", "unclear", "off_topic")
 
 # Three strikes for off-topic / abusive turns: a warning, a last warning, then goodbye and hang up.
@@ -55,8 +67,12 @@ def rules_for(practice: Practice) -> dict:
     health = practice.vertical in HEALTH_VERTICALS
     emergency = {"enabled": health, "phrases": [], **(r.get("emergency") or {})}
     emergency["phrases"] = list(emergency["phrases"]) + EMERGENCY_PHRASES["el"] + EMERGENCY_PHRASES["en"]
+    # Always on: a caller who swears at the agent gets one polite reminder, whatever the vertical.
+    profanity = {"enabled": True, "phrases": [], **(r.get("profanity") or {})}
+    profanity["phrases"] = list(profanity["phrases"]) + PROFANITY_PHRASES["el"] + PROFANITY_PHRASES["en"]
     return {
         "emergency": emergency,
+        "profanity": profanity,
         "handoff": {"enabled": True, "mode": "app", "timeout_seconds": 20, "ask_twice": True,
                     "after_hours": False, **(r.get("handoff") or {})},
         "after_hours": {"booking": True, "message": True, **(r.get("after_hours") or {})},
@@ -74,6 +90,12 @@ def is_emergency(practice: Practice, text: str) -> bool:
         return False
     t = _plain(text)
     return any(_plain(p) in t for p in rules["phrases"])
+
+
+def is_profanity(text: str, language: str) -> bool:
+    """True if the caller swears directly at the agent (directed insults only)."""
+    t = _plain(text)
+    return any(_plain(p) in t for p in PROFANITY_PHRASES.get(language, PROFANITY_PHRASES["en"]))
 
 
 async def log(db: AsyncSession, call: Call, kind: str, value: str, rule: str, path: str = "") -> None:
