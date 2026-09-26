@@ -1,0 +1,43 @@
+{
+  "practice": {
+    "name": "Κουρείο Άλφα (demo)",
+    "slug": null,
+    "timezone": "Europe/Athens",
+    "language": "el",
+    "voice": "Kore",
+    "greeting": "Κουρείο Άλφα, δοκιμαστική υπηρεσία. Είμαι ο ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω; For English, say English.",
+    "phone_numbers": [],
+    "hours": {
+      "tue": [["10:00", "14:00"], ["16:00", "20:00"]],
+      "wed": [["10:00", "14:00"], ["16:00", "20:00"]],
+      "thu": [["10:00", "14:00"], ["16:00", "20:00"]],
+      "fri": [["10:00", "14:00"], ["16:00", "20:00"]],
+      "sat": [["10:00", "17:00"]]
+    },
+    "services": [
+      {"id": "haircut", "name": "Ανδρικό κούρεμα", "duration_minutes": 30, "price": "18€"},
+      {"id": "beard", "name": "Περιποίηση γενιών", "duration_minutes": 15, "price": "10€"},
+      {"id": "haircut_beard", "name": "Κούρεμα και γένια", "duration_minutes": 45, "price": "25€"}
+    ],
+    "rules": {"slot_step_minutes": 15, "buffer_minutes": 0, "max_days_ahead": 45, "min_notice_minutes": 30},
+    "knowledge_base": {
+      "Σχετικά με το κατάστημα": "Αυτό είναι δοκιμαστικό κουρείο. Δεν υπάρχει φυσικό κατάστημα και όλα τα ραντεβού είναι δοκιμαστικά.",
+      "Διεύθυνση": "Δεν υπάρχει φυσική διεύθυνση για το δοκιμαστικό κουρείο.",
+      "Πληρωμή": "Στο demo δεν γίνεται καμία πληρωμή.",
+      "Χωρίς ραντεβού": "Στο demo δεχόμαστε μόνο δοκιμαστικά ραντεβού μέσω του βοηθού.",
+      "Ακυρώσεις": "Μπορείτε να ζητήσετε ακύρωση ή αλλαγή του δοκιμαστικού ραντεβού από τον βοηθό."
+    },
+    "calendar_id": null,
+    "vertical": "barber",
+    "routing_rules": {"handoff": {"enabled": false}, "language_switch": false},
+    "notifications": {"emails": [], "urgent_sms": [], "customer_sms": false, "monthly_report": false, "web_summaries": false},
+    "reminders": {"enabled": false, "waitlist": false},
+    "max_concurrent_calls": 1,
+    "monthly_cost_cap_eur": 5,
+    "avg_booking_value": 18
+  },
+  "staff": [
+    {"name": "Νίκος", "role": "staff", "aliases": ["Νίκο", "κύριο Νίκο"], "service_ids": ["haircut", "beard", "haircut_beard"]},
+    {"name": "Μαρία", "role": "staff", "aliases": ["Μαρία", "κυρία Μαρία"], "service_ids": ["haircut", "beard", "haircut_beard"]}
+  ]
+}

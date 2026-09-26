@@ -1,7 +1,11 @@
-from datetime import datetime
+from datetime import datetime, time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
+import pytest
+
+from app import booking
 from app.booking import hours_state, match_staff
 from app.prompts import default_greeting
 from app.routing import is_emergency
@@ -60,3 +64,25 @@ def test_customer_sms():
     appt = {"date_spoken": "Τρίτη 29 Σεπτεμβρίου", "time": "17:30", "service": "Έλεγχος"}
     text = customer_sms(practice(), "booked", appt, "el")
     assert "17:30" in text and "Σόλωνος 10" in text and "+302100000001" in text
+
+
+@pytest.mark.asyncio
+async def test_equal_time_bounds_check_one_exact_slot(monkeypatch):
+    p = practice(
+        id="mock-barber",
+        services=[{"id": "haircut", "name": "Κούρεμα", "duration_minutes": 30}],
+        hours={"tue": [["16:00", "20:00"]]}, calendar_id=None,
+    )
+    monkeypatch.setattr(booking, "staff_of", AsyncMock(return_value=[]))
+    slots = {
+        datetime(2026, 9, 29, hour, minute, tzinfo=ATH): []
+        for hour, minute in [(16, 45), (17, 0), (17, 15)]
+    }
+    monkeypatch.setattr(booking, "availability", AsyncMock(return_value=slots))
+
+    result = await booking.check_availability(
+        None, p, "την Τρίτη το απόγευμα", "haircut",
+        datetime(2026, 9, 25, 12, tzinfo=ATH), after=time(17), before=time(17),
+    )
+
+    assert result["free_times"] == ["17:00"]
