@@ -10,11 +10,14 @@ from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import data_requests, events, notifications, receptionist
+from app import data_requests, events, notifications, onboarding, receptionist
 from app.database import get_db
 from app.models import AdminLink, Alert, Appointment, Call, CallStatus, DataRequest, Practice
 from app.routers.practices import _get
-from app.schemas import AlertOut, AppointmentOut, CostCapIn, DataRequestOut, PhoneIn, UsageOut
+from app.schemas import (
+    AlertOut, AppointmentOut, ConfigVersionOut, CostCapIn, DataRequestOut, GoogleImportIn, PhoneIn, PriceListIn,
+    UsageOut,
+)
 
 router = APIRouter(prefix="/practices", tags=["ops"])
 alerts_router = APIRouter(prefix="/alerts", tags=["ops"])
@@ -152,6 +155,56 @@ async def export_csv(practice_id: str, db: AsyncSession = Depends(get_db)):
     name = "".join(ch for ch in practice.name if ch.isalnum()) or "practice"
     return Response(buf.getvalue().encode("utf-8-sig"), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{name}.csv"', "Cache-Control": "no-store"})
+
+
+# --- onboarding imports (O1, O2, O4) and forwarding (O5) ---
+
+
+def _import_error(e: onboarding.ImportError_) -> HTTPException:
+    missing = e.code.endswith("_missing")
+    return HTTPException(status_code=503 if missing else 422, detail=e.code)
+
+
+@router.post("/{practice_id}/imports/google", response_model=ConfigVersionOut | None)
+async def import_google(practice_id: str, payload: GoogleImportIn, db: AsyncSession = Depends(get_db)):
+    """Hours, address, phone and website from the Google profile, into the approval queue.
+    None when nothing differs from today's config."""
+    practice = await _get(db, practice_id)
+    try:
+        version = await onboarding.import_google(db, practice, payload.query)
+    except onboarding.ImportError_ as e:
+        raise _import_error(e)
+    await db.commit()
+    events.publish(f"practice:{practice.id}")
+    return version
+
+
+@router.post("/{practice_id}/imports/price-list", response_model=ConfigVersionOut | None)
+async def import_price_list(practice_id: str, payload: PriceListIn, db: AsyncSession = Depends(get_db)):
+    """Services, prices and durations read from a photo, PDF or web page, into the approval queue."""
+    practice = await _get(db, practice_id)
+    if not payload.url and not payload.data_base64:
+        raise HTTPException(status_code=422, detail="file_or_url_required")
+    try:
+        version = await onboarding.import_price_list(db, practice, data_b64=payload.data_base64,
+                                                     mime_type=payload.mime_type, url=payload.url)
+    except onboarding.ImportError_ as e:
+        raise _import_error(e)
+    await db.commit()
+    events.publish(f"practice:{practice.id}")
+    return version
+
+
+@router.get("/{practice_id}/forwarding")
+async def forwarding(practice_id: str, mode: str = "backup", db: AsyncSession = Depends(get_db)):
+    """Codes the owner dials once on the business mobile so unanswered calls reach the agent."""
+    practice = await _get(db, practice_id)
+    if not practice.phone_numbers:
+        raise HTTPException(status_code=409, detail="no_agent_number")
+    target = practice.phone_numbers[0]
+    return {"target": target, "mode": mode,
+            "codes": onboarding.forwarding_codes(target, "full" if mode == "full" else "backup"),
+            "off": FORWARDING_OFF}
 
 
 # --- operator alerts (OP9) ---
