@@ -6,7 +6,15 @@ from fastapi import APIRouter, HTTPException, Request
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+
+from app import admin_changes, notifications
 from app.config import get_settings
+from app.database import async_session
+from app.models import Staff
+from app.schemas import normalize_phone
 
 logger = logging.getLogger("telnyx")
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -40,5 +48,26 @@ async def telnyx_webhook(request: Request):
     )
     payload = await request.json()
     data = payload.get("data", {})
-    logger.info("telnyx event %s: %s", data.get("event_type"), data.get("payload"))
+    event = data.get("event_type")
+    if event == "message.received":
+        await _sms_received(data.get("payload") or {})
+    else:
+        logger.info("telnyx event %s", event)
     return {"received": True}
+
+
+async def _sms_received(p: dict) -> None:
+    """A business texting a change (OP2). Message text is not logged: it can hold patient names."""
+    sender = normalize_phone((p.get("from") or {}).get("phone_number", ""))
+    to = normalize_phone(((p.get("to") or [{}])[0]).get("phone_number", ""))
+    text = (p.get("text") or "").strip()
+    if not sender or not text:
+        return
+    async with async_session() as db:
+        reply = await admin_changes.handle_sms(db, sender, to, text, datetime.now(timezone.utc))
+        if reply:
+            practice_id = (await db.execute(select(Staff.practice_id).where(Staff.phone == sender))).scalars().first()
+            await notifications.queue(db, practice_id=practice_id, kind="admin_sms_reply", channel="sms",
+                                      recipient=sender, body=reply)
+        await db.commit()
+    notifications.kick()
