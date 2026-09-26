@@ -46,7 +46,7 @@ Migrations 0016 and 0017. 66 backend tests; each part below has its own test fil
 - **OP7 offboarding:** stops answering, revokes links, cancels queued calls, emails the ##002# code, CSV export; recordings and transcripts purged 30 days later; `/reactivate` undoes it.
 - **O1/O2/O4/O5 onboarding:** Google Places import (needs `GOOGLE_MAPS_API_KEY`), price list from photo/scan/PDF/website via Gemini (checked live on a Greek price list), both into the approval queue; forwarding codes.
 - **OP2 by SMS and phone:** registered staff mobiles; Gemini parses, backend checks, reads back, applies on yes. Phone needs the practice PIN (3 tries), recording stops first and PIN digits are masked. SMS needs Telnyx messaging pointed at `/webhooks/telnyx`.
-- **OP1:** LiveKit check every 5 min; agent probe job (off by default, `HEALTH_AGENT_CHECK_MINUTES`, OOM risk); `notifications.fallback_number` setting. Not built: the Telnyx "forward on failure" script (needs the Greek DID) and the daily real test call.
+- **OP1:** LiveKit check every 5 min; agent probe job (off by default, `HEALTH_AGENT_CHECK_MINUTES`, OOM risk); `notifications.fallback_number` setting. The Telnyx "forward on failure" script (`scripts/setup_failover.py --apply`, needs the Greek DID) and the daily real test call (scheduler `test_call`/`check_test_call`) are now built; neither has run against a real number.
 - **Language (owner's rule):** always Greek; English only on "English mode", matched in code.
 - **Encryption at rest:** `app/crypto.py`, patient-data columns AES-GCM, phone numbers AES-SIV (lookups still work). Off until `DATA_ENCRYPTION_KEY` is set; then run `scripts/encrypt_existing.py`.
 - **iOS:** Face ID on Ιστορικό and Γραμματεία (60 s re-lock, app switcher cover) and on approve/rollback/links/exports/PIN/offboarding; settings screens for all of the above.
@@ -54,7 +54,7 @@ Migrations 0016 and 0017. 66 backend tests; each part below has its own test fil
 ## Remaining engineering work
 
 - **O3 Google Calendar sign-in** is built (migration 0018, `app/google_oauth.py`, iOS "Ημερολόγια Google"). It needs a Google OAuth "Web application" client: set `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` and the redirect URI `<BACKEND_PUBLIC_URL>/oauth/google/callback`. Unverified apps allow 100 test users.
-- **OP1:** `scripts/setup_failover.py` (dry run by default) sets Telnyx on-failure forwarding; run it with `--apply` once the Greek number and the practice's fallback mobile exist. The daily real test call is not built.
+- **OP1:** `scripts/setup_failover.py` (dry run by default) sets Telnyx on-failure forwarding; run it with `--apply` once the Greek number and the practice's fallback mobile exist. The daily real test call is built: with `practice.notifications["test_call"]` = `{"enabled": true, "number": "+30…", "time": "HH:MM"}`, the scheduler places one real outbound call a day (purpose `test`, no business email) and raises a `test_call_failed` alert (OP9) if it does not connect. Off by default; not yet run against a real number.
 - **Encryption:** on in production since 2026-09-25 (key in the owner's `~/.config/voiceagent/`); recordings are sealed by the scheduler after upload.
 - **Push notifications** need a paid Apple developer account.
 - **Agent health probe** stays off until the agent has more memory.
