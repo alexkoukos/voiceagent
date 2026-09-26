@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import admin_changes, data_requests, events, notifications, onboarding, receptionist
 from app.database import get_db
 from app.models import AdminLink, Alert, Appointment, Call, CallStatus, DataRequest, Practice
-from app.routers.practices import _get
+from app.routers.practices import _check_numbers, _get
 from app.schemas import (
     AdminPinIn, AlertOut, AppointmentOut, ConfigVersionOut, CostCapIn, DataRequestOut, GoogleImportIn, OnboardingIn, PhoneIn,
     PriceListIn, UsageOut,
@@ -134,6 +134,10 @@ async def offboard(practice_id: str, db: AsyncSession = Depends(get_db)):
 @router.post("/{practice_id}/reactivate")
 async def reactivate(practice_id: str, db: AsyncSession = Depends(get_db)):
     practice = await _get(db, practice_id)
+    if practice.offboarded_at is not None:
+        # Its numbers may have gone to another practice meanwhile: a number answers for one
+        # active practice only.
+        await _check_numbers(db, practice.phone_numbers or [], practice.id)
     practice.offboarded_at = None
     await db.commit()
     return {"offboarded_at": None}

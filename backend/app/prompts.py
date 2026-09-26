@@ -152,7 +152,9 @@ def build_receptionist_prompt(
     return out
 
 
-RECORDING_WORDS = ("ηχογραφ", "καταγράφ", "καταγραφ", "record")
+RECORDING_WORDS = ("ηχογραφ", "καταγράφ", "καταγραφ")
+# "recorded"/"recording", not "record" alone: "your medical records" says nothing about the call.
+RECORDING_EN = re.compile(r"\brecord(ed|ing)\b")
 RECORDING_NOTICE = {
     "el": "Η κλήση ηχογραφείται· αν θέλετε να σβηστεί, πείτε μου.",
     "en": "This call is recorded; tell me if you'd like the recording deleted.",
@@ -160,7 +162,8 @@ RECORDING_NOTICE = {
 
 
 def mentions_recording(text: str) -> bool:
-    return any(w in text.lower() for w in RECORDING_WORDS)
+    text = text.lower()
+    return any(w in text for w in RECORDING_WORDS) or RECORDING_EN.search(text) is not None
 
 
 def with_recording_notice(greeting: str, language: str) -> str:
@@ -169,8 +172,8 @@ def with_recording_notice(greeting: str, language: str) -> str:
     if mentions_recording(greeting):
         return greeting
     notice = RECORDING_NOTICE["el" if language == "el" else "en"]
-    # Greek writes the question mark as ";".
-    m = re.match(r"^(.*?[.!·])\s+([^.!·;?]*[;?])(.*)$", greeting, re.S)
+    # Greek writes the question mark as ";" (or U+037E, the Greek question mark).
+    m = re.match(r"^(.*?[.!·])\s+([^.!·;?\u037e]*[;?\u037e])(.*)$", greeting, re.S)
     if m:
         return f"{m.group(1)} {notice} {m.group(2)}{m.group(3)}"
     return f"{greeting} {notice}".strip()

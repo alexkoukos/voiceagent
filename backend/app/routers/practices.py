@@ -86,8 +86,11 @@ def _check_vertical(vertical: str) -> None:
         raise HTTPException(status_code=422, detail={"error": "unknown_vertical", "vertical": vertical})
 
 
-def _check_staff_services(practice: Practice, payload: StaffIn) -> None:
-    known = {s["id"] for s in practice.services or []}
+def _check_staff_services(practice: Practice, payload: StaffIn, current: list[str] | None = None) -> None:
+    """New service ids must exist. Ids the person already has are let through: a service
+    removed from the practice later (price list import, edit) must not block every edit of
+    this person."""
+    known = {s["id"] for s in practice.services or []} | set(current or [])
     unknown = [i for i in payload.service_ids if i not in known]
     if unknown:
         raise HTTPException(status_code=422, detail={"error": "unknown_service", "service_ids": unknown})
@@ -184,7 +187,7 @@ async def update_staff(practice_id: str, staff_id: str, payload: StaffIn, db: As
     person = await db.get(Staff, staff_id)
     if person is None or person.practice_id != practice_id:
         raise HTTPException(status_code=404, detail="Staff not found")
-    _check_staff_services(await _get(db, practice_id), payload)
+    _check_staff_services(await _get(db, practice_id), payload, person.service_ids)
     for k, v in payload.to_columns().items():
         setattr(person, k, v)
     return await _save(db, person)

@@ -20,7 +20,7 @@ from app.models import (
     Appointment, Call, CallStatus, Customer, Handoff, Message, Practice, RoutingEvent, Staff, TranscriptEntry,
     TranscriptRole, WaitlistEntry,
 )
-from app.prompts import build_receptionist_prompt, default_greeting
+from app.prompts import build_receptionist_prompt, default_greeting, mentions_recording
 
 OUTCOME_PRIORITY = {
     "info_given": 1, "message_taken": 3, "confirmed": 4, "booked": 4, "rescheduled": 4, "cancelled": 4,
@@ -216,7 +216,10 @@ async def build_metadata(
     _, admin = await _admin(db, call)
     # G7: web demo calls are never recorded; a practice can turn recording off for every call.
     record = call.direction != "web" and practice.recording_enabled is not False
-    notice = record and bool(practice.recording_notice) and call.purpose != "test"
+    # A custom greeting that already says so counts as the notice (as in the go-live checklist),
+    # so reminder and waitlist calls, which don't use the greeting, say it too.
+    notice = (record and (bool(practice.recording_notice) or mentions_recording(practice.greeting or ""))
+              and call.purpose != "test")
 
     def prompt_for(lang: str) -> str:
         prompt = build_receptionist_prompt(
