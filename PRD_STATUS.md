@@ -67,6 +67,16 @@ Migrations 0016 and 0017. 66 backend tests; each part below has its own test fil
 - Complete Greek DID/forwarding setup, DPA/legal review and vendor residency/account checks before pilot acceptance. Existing repository notes identify these as onboarding dependencies; their external status was not reverified.
 - Validate the iOS receptionist and handoff flows on device, including push entitlements. No iOS code changed in this pass.
 
+## Deployment: move backend + Postgres to EU West (before Greek go-live), 2026-09-26
+
+Follow-up for when the service goes live in Greece (Alex to do on return). Not started.
+
+- Move `backend` and `Postgres` from Railway US West to EU West. The `agent` already runs in EU West (LiveKit region "Germany 2"); this puts the whole stack closer to Greek callers.
+- Keep `backend` and `Postgres` co-located in the same region.
+- Needs a Postgres data migration (dump/restore, or a Railway region move). Do it in a quiet window: live push holds subscribers in memory on a single backend instance, so the switch drops open connections.
+- The backend URL (`backend-production-c085.up.railway.app`) may change; the iOS app and the agent both point at it and would need the new URL.
+- Check whether the `recordings` S3 bucket should also move (latency, and EU/Greek data-residency rules for call recordings).
+
 ## Reproduce
 
 From the repository root, with the local Docker Postgres running:
