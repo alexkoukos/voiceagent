@@ -42,7 +42,7 @@ class CallerVoice:
             api_key=os.environ["GEMINI_API_KEY"],
             # A separate model quota keeps test-caller synthesis from starving the
             # receptionist's own 3.8 TTS during long scripted calls.
-            model=os.environ.get("CALLER_GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
+            model=os.environ.get("CALLER_GEMINI_TTS_MODEL", "gemini-3.8-flash-tts"),
             voice_name=os.environ.get("CALLER_GEMINI_VOICE", "Puck"),
         ) if provider == "gemini" else None)
 
