@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -14,6 +15,9 @@ _docs = get_settings().enable_docs
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Notification sender and the once-a-minute jobs (digests, reminders, retention).
+    from app import crypto
+    if not crypto.enabled():
+        logging.getLogger("app").warning("DATA_ENCRYPTION_KEY is not set: patient data is stored unencrypted")
     tasks = []
     if get_settings().scheduler_enabled:
         from app import notifications, scheduler

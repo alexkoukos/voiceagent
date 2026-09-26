@@ -5,6 +5,7 @@ from datetime import date, datetime
 from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.crypto import SecretLookup, SecretText
 from app.database import Base
 
 
@@ -143,8 +144,8 @@ class Customer(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
-    phone: Mapped[str] = mapped_column(String, nullable=False)
-    name: Mapped[str] = mapped_column(String, default="")
+    phone: Mapped[str] = mapped_column(SecretLookup, nullable=False)
+    name: Mapped[str] = mapped_column(SecretText, default="")
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 
@@ -159,8 +160,8 @@ class Appointment(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
     call_id: Mapped[str | None] = mapped_column(ForeignKey("calls.id"), nullable=True)
-    customer_name: Mapped[str] = mapped_column(String, nullable=False)
-    customer_phone: Mapped[str | None] = mapped_column(String, nullable=True)
+    customer_name: Mapped[str] = mapped_column(SecretText, nullable=False)
+    customer_phone: Mapped[str | None] = mapped_column(SecretLookup, nullable=True)
     service_id: Mapped[str] = mapped_column(String, nullable=False)
     service_name: Mapped[str] = mapped_column(String, nullable=False)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -190,14 +191,14 @@ class Call(Base):
     practice_id: Mapped[str | None] = mapped_column(ForeignKey("practices.id"), nullable=True)
     # outbound, inbound or web
     direction: Mapped[str] = mapped_column(String, default="outbound")
-    caller_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    caller_number: Mapped[str | None] = mapped_column(SecretLookup, nullable=True)
     customer_id: Mapped[str | None] = mapped_column(ForeignKey("customers.id"), nullable=True)
     # booking, call_center, outbound
     use_case: Mapped[str | None] = mapped_column(String, nullable=True)
     # booked, rescheduled, cancelled, confirmed, info_given, message_taken, transferred, abandoned, failed
     outcome: Mapped[str | None] = mapped_column(String, nullable=True)
     appointment_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(SecretText, nullable=True)
     # name_uncertain, urgent, tool_error, over_duration, emergency, recording_refused
     flags: Mapped[list] = mapped_column(JSON, default=list)
     cost_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -245,7 +246,7 @@ class TranscriptEntry(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     call_id: Mapped[str] = mapped_column(ForeignKey("calls.id"), nullable=False)
     role: Mapped[TranscriptRole] = mapped_column(Enum(TranscriptRole), nullable=False)
-    text: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(SecretText, nullable=False)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
     call: Mapped["Call"] = relationship(back_populates="transcript_entries")
@@ -328,8 +329,8 @@ class Alert(Base):
     practice_id: Mapped[str | None] = mapped_column(ForeignKey("practices.id"), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String, nullable=False)
     call_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    subject: Mapped[str] = mapped_column(String, default="")
-    body: Mapped[str] = mapped_column(Text, default="")
+    subject: Mapped[str] = mapped_column(SecretText, default="")
+    body: Mapped[str] = mapped_column(SecretText, default="")
     dedupe_key: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     acked_at: Mapped[datetime | None] = mapped_column(nullable=True)
@@ -345,12 +346,12 @@ class AdminRequest(Base):
     practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
     # sms, phone
     channel: Mapped[str] = mapped_column(String, nullable=False)
-    sender: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    sender: Mapped[str] = mapped_column(SecretLookup, nullable=False, index=True)
     staff_id: Mapped[str | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
     call_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    text: Mapped[str] = mapped_column(Text, default="")
+    text: Mapped[str] = mapped_column(SecretText, default="")
     parsed: Mapped[dict] = mapped_column(JSON, default=dict)
-    readback: Mapped[str] = mapped_column(Text, default="")
+    readback: Mapped[str] = mapped_column(SecretText, default="")
     # pending, applied, queued (sent for approval), cancelled, expired
     status: Mapped[str] = mapped_column(String, default="pending")
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
@@ -366,11 +367,11 @@ class Message(Base):
     practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
     call_id: Mapped[str | None] = mapped_column(ForeignKey("calls.id"), nullable=True)
     staff_id: Mapped[str | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
-    caller_name: Mapped[str] = mapped_column(String, default="")
-    callback_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    caller_name: Mapped[str] = mapped_column(SecretText, default="")
+    callback_number: Mapped[str | None] = mapped_column(SecretLookup, nullable=True)
     # Non-medical words only (G3).
-    reason: Mapped[str] = mapped_column(Text, default="")
-    best_time: Mapped[str] = mapped_column(String, default="")
+    reason: Mapped[str] = mapped_column(SecretText, default="")
+    best_time: Mapped[str] = mapped_column(SecretText, default="")
     urgent: Mapped[bool] = mapped_column(Boolean, default=False)
     # new, done
     status: Mapped[str] = mapped_column(String, default="new")
@@ -389,9 +390,9 @@ class Notification(Base):
     kind: Mapped[str] = mapped_column(String, nullable=False)
     # email, sms, push
     channel: Mapped[str] = mapped_column(String, nullable=False)
-    recipient: Mapped[str] = mapped_column(String, nullable=False)
-    subject: Mapped[str] = mapped_column(String, default="")
-    body: Mapped[str] = mapped_column(Text, default="")
+    recipient: Mapped[str] = mapped_column(SecretLookup, nullable=False)
+    subject: Mapped[str] = mapped_column(SecretText, default="")
+    body: Mapped[str] = mapped_column(SecretText, default="")
     data: Mapped[dict] = mapped_column(JSON, default=dict)
     # pending (also awaiting configuration), sent, failed (gave up), skipped (dedupe marker)
     status: Mapped[str] = mapped_column(String, default="pending", index=True)
@@ -446,8 +447,8 @@ class WaitlistEntry(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
-    customer_name: Mapped[str] = mapped_column(String, default="")
-    phone: Mapped[str] = mapped_column(String, nullable=False)
+    customer_name: Mapped[str] = mapped_column(SecretText, default="")
+    phone: Mapped[str] = mapped_column(SecretLookup, nullable=False)
     service_id: Mapped[str] = mapped_column(String, nullable=False)
     staff_id: Mapped[str | None] = mapped_column(String, nullable=True)
     date_from: Mapped[date] = mapped_column(Date, nullable=False)
