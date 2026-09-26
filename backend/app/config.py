@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     # Agent the backend dispatches receptionist web calls to; "prank-caller-test" for a local worker.
     agent_name: str = "prank-caller"
 
+    # Patient data encryption at rest (app/crypto.py): base64 of 32 random bytes. Keep a copy
+    # outside Railway: without it encrypted data can't be read.
+    data_encryption_key: str = ""
     internal_api_token: str = ""
     app_api_token: str = ""
     backend_public_url: str = "http://localhost:8000"

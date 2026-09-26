@@ -36,13 +36,27 @@ Calendar behavior follows Google's [Events list API](https://developers.google.c
 - Magic link page `/manage/<token>` (public, no-store, noindex): hours and closures apply after a confirm dialog; services, prices and FAQ go to the approval queue. A staff link only sets that person's leave.
 - Tests: `backend/tests/test_config_changes.py`. Checked in a local server and headless Chromium at 390 px. Not yet built: OP2 by phone (caller ID + PIN) and by SMS.
 
+## Built 2026-09-25 (later): ops, onboarding, security
+
+Migrations 0016 and 0017. 66 backend tests; each part below has its own test file.
+
+- **OP8 patient data:** `POST /practices/<id>/data/export|erase` (phone in the body), log in `data_requests` (hashed number). Erase refuses while an upcoming appointment exists.
+- **OP9 alerts:** `alerts` table, `GET /alerts`, `POST /alerts/<id>/ack`; emailed/texted to `FOUNDER_EMAIL`/`FOUNDER_SMS`, unacknowledged after 30 min to `BACKUP_EMAIL`/`BACKUP_SMS`. Raised for emergencies, failed notifications, cost cap, spam blocks, wrong PINs, LiveKit/agent down.
+- **OP10:** monthly cost cap (alert at 80%, refuse at 100%), blocked numbers (silent hang-up), 3 silent calls in 24 h auto-block.
+- **OP7 offboarding:** stops answering, revokes links, cancels queued calls, emails the ##002# code, CSV export; recordings and transcripts purged 30 days later; `/reactivate` undoes it.
+- **O1/O2/O4/O5 onboarding:** Google Places import (needs `GOOGLE_MAPS_API_KEY`), price list from photo/scan/PDF/website via Gemini (checked live on a Greek price list), both into the approval queue; forwarding codes.
+- **OP2 by SMS and phone:** registered staff mobiles; Gemini parses, backend checks, reads back, applies on yes. Phone needs the practice PIN (3 tries), recording stops first and PIN digits are masked. SMS needs Telnyx messaging pointed at `/webhooks/telnyx`.
+- **OP1:** LiveKit check every 5 min; agent probe job (off by default, `HEALTH_AGENT_CHECK_MINUTES`, OOM risk); `notifications.fallback_number` setting. Not built: the Telnyx "forward on failure" script (needs the Greek DID) and the daily real test call.
+- **Language (owner's rule):** always Greek; English only on "English mode", matched in code.
+- **Encryption at rest:** `app/crypto.py`, patient-data columns AES-GCM, phone numbers AES-SIV (lookups still work). Off until `DATA_ENCRYPTION_KEY` is set; then run `scripts/encrypt_existing.py`.
+- **iOS:** Face ID on Ιστορικό and Γραμματεία (60 s re-lock, app switcher cover) and on approve/rollback/links/exports/PIN/offboarding; settings screens for all of the above.
+
 ## Remaining engineering work
 
-Items 1 to 3 and G9 of the earlier list were addressed in `95694eb` (offer + readback state via `prepare_action`, deterministic Google event IDs, durable `recording_deletions` queue, fallback summaries, and the G9 check on waitlist calls). Still open:
-
-1. **R7 language switching** stays off on purpose: the agent never switches language mid-call (owner's decision).
-2. **P0 features with no code yet:** onboarding imports and config versions (O1 to O6, with draft/publish/rollback), OP1 failover (needs Telnyx), and OP2 changes by phone PIN or SMS (the magic link is built).
-3. **P1 features with no code yet:** OP8 patient data export/delete, OP10 monthly cost cap and spam blocking, OP7 offboarding export.
+1. **O3 Google Calendar OAuth** (connect per staff member) still uses the shared service-account calendar.
+2. **OP1 Telnyx failover script** and daily real test call, once the Greek DID exists.
+3. **Push notifications** need a paid Apple developer account.
+4. **Recording bucket encryption:** check the Railway bucket's server-side encryption; recordings are not covered by `DATA_ENCRYPTION_KEY`.
 
 ## Remaining acceptance and onboarding work
 
