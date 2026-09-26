@@ -56,6 +56,32 @@ def _keys() -> tuple[AESGCM, AESSIV] | None:
     return AESGCM(derive(b"voiceagent text v1", 32)), AESSIV(derive(b"voiceagent lookup v1", 64))
 
 
+BLOB = b"ENC1"
+
+
+def encrypt_bytes(data: bytes) -> bytes:
+    keys = _keys()
+    if keys is None:
+        raise KeyError_("DATA_ENCRYPTION_KEY is not set")
+    nonce = os.urandom(12)
+    return BLOB + nonce + keys[0].encrypt(nonce, data, None)
+
+
+def decrypt_bytes(blob: bytes) -> bytes:
+    keys = _keys()
+    if keys is None or not blob.startswith(BLOB):
+        raise KeyError_("not an encrypted blob, or no key")
+    return keys[0].decrypt(blob[4:16], blob[16:], None)
+
+
+@lru_cache
+def token_secret() -> bytes:
+    """Signs short-lived playback links for encrypted recordings."""
+    raw = get_settings().data_encryption_key
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=b"voiceagent links v1").derive(
+        base64.b64decode(raw))
+
+
 def enabled() -> bool:
     return _keys() is not None
 

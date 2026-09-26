@@ -46,6 +46,30 @@ def recording_exists(key: str) -> bool:
         raise
 
 
+SEALED = ".enc"
+
+
+def seal_recording(key: str) -> str:
+    """Replaces an uploaded recording with its encrypted copy (app/crypto.py); returns the new key.
+    Egress writes straight to the bucket, so this runs once the upload is complete."""
+    from app import crypto
+
+    bucket = get_settings().aws_s3_bucket_name
+    client = _client()
+    data = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+    sealed = key + SEALED
+    client.put_object(Bucket=bucket, Key=sealed, Body=crypto.encrypt_bytes(data),
+                      ContentType="application/octet-stream")
+    client.delete_object(Bucket=bucket, Key=key)
+    return sealed
+
+
+def open_recording(key: str) -> bytes:
+    from app import crypto
+
+    return crypto.decrypt_bytes(_client().get_object(Bucket=get_settings().aws_s3_bucket_name, Key=key)["Body"].read())
+
+
 def presigned_recording_url(key: str, expires_seconds: int = 600) -> str:
     return _client().generate_presigned_url(
         "get_object",
@@ -102,3 +126,31 @@ async def process_recording_deletions() -> int:
                 item.next_attempt_at = now + timedelta(seconds=min(3600, 30 * 2 ** min(item.attempts, 7)))
             await db.commit()
     return processed
+
+
+async def seal_recordings(db) -> int:
+    """Encrypt finished uploads. Leaves a recording alone until its upload shows up."""
+    from starlette.concurrency import run_in_threadpool
+
+    from app import crypto
+
+    if not (crypto.enabled() and storage_configured()):
+        return 0
+    cutoff = datetime.utcnow() - timedelta(minutes=2)
+    calls = list((await db.execute(select(Call).where(
+        Call.recording_url.is_not(None), ~Call.recording_url.endswith(SEALED),
+        Call.status.in_([CallStatus.completed, CallStatus.failed]), Call.ended_at < cutoff,
+    ).limit(10))).scalars())
+    done = 0
+    for call in calls:
+        key = call.recording_url
+        try:
+            if not await run_in_threadpool(recording_exists, key):
+                continue
+            call.recording_url = await run_in_threadpool(seal_recording, key)
+            await db.commit()
+            done += 1
+        except Exception:
+            await db.rollback()
+            logger.exception("sealing recording of call %s failed; will retry", call.id)
+    return done

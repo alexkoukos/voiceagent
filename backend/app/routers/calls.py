@@ -7,6 +7,7 @@ from fastapi import Depends
 from fastapi.concurrency import run_in_threadpool
 
 from app import events
+from app.routers import recordings
 from app.database import get_db
 from app.config import get_settings
 from app.languages import language_for_phone
@@ -14,7 +15,7 @@ from app.dispatcher import active_count, start_call, start_next_queued
 from app.livekit_dispatch import end_call
 from app.models import Call, CallStatus, Friend, TranscriptEntry
 from app.schemas import CallCreate, CallDetailOut, CallOut
-from app.storage import queue_recording_deletion, presigned_recording_url, recording_exists
+from app.storage import SEALED, presigned_recording_url, queue_recording_deletion, recording_exists
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -90,6 +91,9 @@ async def get_recording(call_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No recording")
     if not await run_in_threadpool(recording_exists, call.recording_url):
         raise HTTPException(status_code=409, detail="Recording is still uploading")
+    if call.recording_url.endswith(SEALED):
+        # Encrypted at rest: the backend decrypts it for this link only (routers/recordings.py).
+        return {"url": recordings.playback_url(call.id), "expires_in": recordings.LINK_SECONDS}
     url = await run_in_threadpool(presigned_recording_url, call.recording_url)
     return {"url": url, "expires_in": 600}
 

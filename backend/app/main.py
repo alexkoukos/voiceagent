@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI
 from app.auth import require_app_token
 from app.config import get_settings
 from app.languages import LANGUAGES
-from app.routers import calls, demo, friends, internal, manage, ops, practices, templates, webhooks
+from app.routers import calls, demo, friends, internal, manage, ops, practices, recordings, templates, webhooks
 
 _docs = get_settings().enable_docs
 
@@ -48,6 +48,7 @@ app.include_router(ops.alerts_router, dependencies=[Depends(require_app_token)])
 app.include_router(internal.router)
 app.include_router(demo.router)
 app.include_router(manage.router)
+app.include_router(recordings.router)
 app.include_router(webhooks.router)
 
 
