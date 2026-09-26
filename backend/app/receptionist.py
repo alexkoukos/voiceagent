@@ -536,7 +536,8 @@ def _affirmative(text: str | None) -> bool:
     words = set(re.findall(r"[\w]+", plain))
     if words & {"οχι", "μη", "δεν", "no", "not", "wait", "αλλα", "but"}:
         return False
-    return bool(words & {"ναι", "σωστα", "βεβαια", "επιβεβαιωνω", "ενταξει", "οκ",
+    return bool(words & {"ναι", "σωστα", "σωστο", "βεβαια", "επιβεβαιωνω", "ενταξει", "οκ",
+                         "μαλιστα", "θετικο",
                          "yes", "correct", "confirm", "okay", "ok"})
 
 
