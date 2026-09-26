@@ -12,11 +12,14 @@ duration cap. This worker dials out over the Telnyx SIP trunk, runs the
 conversation, records it to S3-compatible storage, reports transcript/status
 back to the backend, and hangs up via its own tool or the duration cap.
 
-Three engines (AGENT_ENGINE):
+Four engines (AGENT_ENGINE):
 - "pipeline" (default): ElevenLabs Scribe realtime -> Gemini Flash-Lite ->
   ElevenLabs voice, with multilingual turn detection, preemptive generation,
   filler words when a reply is slow, and an opening line prepared during the ring.
 - "realtime": Gemini Live speech-to-speech (the original engine; fallback).
+- "text_pipeline": Deepgram transcription -> Gemini text model -> Gemini speech.
+  Receptionist fallback when ElevenLabs is unavailable, so the model receives
+  the same words the caller sees in the web transcript.
 - "openai": OpenAI Realtime speech-to-speech (gpt-realtime-2.1). Needs OPENAI_API_KEY;
   without it the call uses "realtime".
 """
@@ -72,6 +75,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
 OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1")
 # Pipeline engine: the "brain". Flash-Lite starts answering in ~0.45 s.
 LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
+GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-3.8-flash-lite-tts")
 # Realtime and OpenAI engines: how long a pause means the friend has finished talking.
 REALTIME_SILENCE_MS = int(os.environ.get("REALTIME_SILENCE_MS", "400"))
 # Turn detector (pipeline engine): the longest we wait after the caller stops before
@@ -536,7 +540,7 @@ class ReceptionistAgent(PrankCallerAgent):
         instruction = self._rc.metadata.get("greeting_instruction")
         if instruction:
             await self.session.generate_reply(instructions=instruction)
-        elif self._rc.engine == "pipeline":
+        elif self._rc.engine in ("pipeline", "text_pipeline"):
             handle = self.session.say(self._rc.metadata["greeting"], add_to_chat_ctx=True)
             if wait_for_playout:
                 await asyncio.wait_for(handle.wait_for_playout(), timeout=20)
@@ -546,21 +550,27 @@ class ReceptionistAgent(PrankCallerAgent):
 
 
 def prewarm(proc: JobProcess) -> None:
-    # Loaded once per worker process, not per call; only the pipeline engine needs it.
-    if "pipeline" in (ENGINE, RECEPTIONIST_ENGINE):
+    # Loaded once per worker process, not per call; both text pipelines need it.
+    if any(engine in ("pipeline", "text_pipeline") for engine in (ENGINE, RECEPTIONIST_ENGINE)):
         proc.userdata["vad"] = silero.VAD.load()
 
 
 def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> AgentSession:
-    if engine == "pipeline":
-        stt = scribe_stt(language, vocab_terms(language, vocabulary))
-        tts = elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
+    if engine in ("pipeline", "text_pipeline"):
+        stt = (scribe_stt(language, vocab_terms(language, vocabulary)) if engine == "pipeline"
+               else caller_stt(language))
+        tts = (elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
+               if engine == "pipeline" else google.beta.GeminiTTS(
+                   model=GEMINI_TTS_MODEL, voice_name=gemini_voice(voice),
+                   api_key=os.environ.get("GEMINI_API_KEY"),
+               ))
         # Open the connections now, while the phone rings, not on the first reply.
         for part in (stt, tts):
-            try:
-                part.prewarm()
-            except Exception:
-                logger.warning("could not prewarm %s", type(part).__name__)
+            if prewarm_part := getattr(part, "prewarm", None):
+                try:
+                    prewarm_part()
+                except Exception:
+                    logger.warning("could not prewarm %s", type(part).__name__)
         return AgentSession(
             stt=stt,
             llm=google.LLM(
@@ -572,14 +582,15 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
             tts=tts,
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             turn_handling=TurnHandlingOptions(
-                # Understands when someone has finished a sentence, in any language,
-                # instead of waiting for a fixed silence. Runs on LiveKit Cloud, so the
-                # worker doesn't load a local model (that process ran out of memory on Railway).
-                # Outside LiveKit Cloud hosting this resolves to the local v1-mini model, which
-                # doesn't know Greek, so Greek turns end on max_delay. version="v1" (cloud) got
-                # the job process OOM-killed on Railway on 2026-09-25; don't retry it blindly.
-                turn_detection=inference.TurnDetector(local_fallback=False),
-                endpointing={"mode": "dynamic", "min_delay": ENDPOINT_MIN_DELAY, "max_delay": TURN_MAX_DELAY_MS / 1000},
+                # ElevenLabs uses the turn detector. Deepgram's final transcript ends
+                # a fallback turn, so the text model responds to that exact transcript.
+                # Avoid loading a local turn model in the fallback worker: it previously
+                # exhausted Railway's memory.
+                turn_detection=(inference.TurnDetector(local_fallback=False)
+                                if engine == "pipeline" else "stt"),
+                endpointing=({"mode": "dynamic", "min_delay": ENDPOINT_MIN_DELAY,
+                              "max_delay": TURN_MAX_DELAY_MS / 1000}
+                             if engine == "pipeline" else {"mode": "fixed", "min_delay": ENDPOINT_MIN_DELAY}),
                 # A cough or a one-word "ναι" mid-reply shouldn't cut the agent off; if it was
                 # a false alarm, carry on where it stopped.
                 interruption={"min_duration": 0.6, "min_words": 2, "resume_false_interruption": True,
@@ -628,6 +639,8 @@ def language_parts(engine: str, voice: str, language: str, vocabulary: list[str]
     words = vocab_terms(language, vocabulary)
     if engine == "pipeline":
         return {"stt": scribe_stt(language, words)}
+    if engine == "text_pipeline":
+        return {"stt": caller_stt(language)}
     if engine == "openai":
         return {"llm": openai.realtime.RealtimeModel(
             model=OPENAI_REALTIME_MODEL,
@@ -659,7 +672,7 @@ def language_parts(engine: str, voice: str, language: str, vocabulary: list[str]
 
 
 def caller_stt(language: str):
-    """Transcript-only STT for the realtime engine (Gemini replies to the audio itself).
+    """Deepgram STT for the text pipeline and realtime call transcript.
     Deepgram nova-3 via LiveKit Inference was the best streaming option on a real Greek
     phone recording (2026-09-25); Speechmatics, Cartesia and Gemini Transcribe Live garbled
     more, AssemblyAI has no Greek."""
@@ -779,13 +792,14 @@ async def elevenlabs_usable() -> bool:
 
 async def pick_engine(call_id: str, receptionist: bool = False) -> str:
     engine = RECEPTIONIST_ENGINE if receptionist else ENGINE
+    fallback = "text_pipeline" if receptionist and os.environ.get("GEMINI_API_KEY") else "realtime"
     if engine == "pipeline" and not os.environ.get("ELEVEN_API_KEY"):
-        logger.warning("call %s: ELEVEN_API_KEY missing, using the realtime engine", call_id)
-        engine = "realtime"
-    # Out of credits (or ElevenLabs down) would mean a silent call: fall back to Gemini Live.
+        logger.warning("call %s: ELEVEN_API_KEY missing, using %s", call_id, fallback)
+        engine = fallback
+    # Out of credits (or ElevenLabs down) would mean a silent call.
     if engine == "pipeline" and not await elevenlabs_usable():
-        logger.warning("call %s: ElevenLabs unusable, using the realtime engine", call_id)
-        engine = "realtime"
+        logger.warning("call %s: ElevenLabs unusable, using %s", call_id, fallback)
+        engine = fallback
     if engine == "openai" and not os.environ.get("OPENAI_API_KEY"):
         logger.warning("call %s: OPENAI_API_KEY missing, using the realtime engine", call_id)
         engine = "realtime"
@@ -928,7 +942,7 @@ class ReceptionistCall:
         self._confirmation_id = result["confirmation_id"]
         self._confirmation_armed = False
         self._prepared_name = customer_name
-        if self.engine == "pipeline":
+        if self.engine in ("pipeline", "text_pipeline"):
             handle = self.session.say(result["say"], allow_interruptions=False)
         else:
             quote = "Πες ακριβώς αυτό" if self.language == "el" else "Say exactly this"
@@ -988,7 +1002,7 @@ class ReceptionistCall:
         """Say one closing line (not interruptible), then hang up."""
         await asyncio.sleep(0.1)
         try:
-            if self.engine == "pipeline":
+            if self.engine in ("pipeline", "text_pipeline"):
                 handle = self.session.say(line, allow_interruptions=False)
             else:
                 quote = "Πες ακριβώς αυτό" if self.language == "el" else "Say exactly this"
@@ -1015,7 +1029,7 @@ class ReceptionistCall:
             self.session.interrupt()
             await self.switch_language(language)
             line = LANGUAGE_MODE_LINE[language]
-            if self.engine == "pipeline":
+            if self.engine in ("pipeline", "text_pipeline"):
                 self.session.say(line, add_to_chat_ctx=True)
             else:
                 quote = "Πες ακριβώς αυτό" if language == "el" else "Say exactly this"

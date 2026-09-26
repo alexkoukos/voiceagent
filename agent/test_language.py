@@ -25,6 +25,39 @@ def test_web_call_uses_final_transcript_instead_of_raw_model_events(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_receptionist_uses_text_pipeline_when_elevenlabs_has_no_credits(monkeypatch):
+    async def unusable():
+        return False
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("ELEVEN_API_KEY", "test-key")
+    monkeypatch.setattr(worker, "elevenlabs_usable", unusable)
+    assert await worker.pick_engine("test-call", receptionist=True) == "text_pipeline"
+    assert await worker.pick_engine("test-call", receptionist=False) == "realtime"
+
+
+def test_text_pipeline_feeds_deepgram_transcript_to_text_model(monkeypatch):
+    stt = object()
+    llm = object()
+    tts = object()
+    vad = object()
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(worker, "caller_stt", lambda language: stt)
+    monkeypatch.setattr(worker.google, "LLM", lambda **kwargs: llm)
+    monkeypatch.setattr(worker.google.beta, "GeminiTTS", lambda **kwargs: tts)
+    monkeypatch.setattr(worker, "AgentSession", lambda **kwargs: kwargs)
+    ctx = SimpleNamespace(proc=SimpleNamespace(userdata={"vad": vad}))
+
+    session = worker.build_session(ctx, "text_pipeline", "default", "el")
+
+    assert session["stt"] is stt
+    assert session["llm"] is llm
+    assert session["tts"] is tts
+    assert session["vad"] is vad
+    assert session["turn_handling"]["turn_detection"] == "stt"
+
+
+@pytest.mark.asyncio
 async def test_web_transcript_hides_latin_garble_in_greek_mode():
     published = []
 
