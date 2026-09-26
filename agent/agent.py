@@ -37,7 +37,7 @@ import httpx
 from google.genai import types as genai_types
 from google.protobuf.duration_pb2 import Duration
 from livekit import api, rtc
-from livekit.agents import inference, room_io, tts as livekit_tts
+from livekit.agents import inference, room_io, stt as livekit_stt, tts as livekit_tts
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -583,17 +583,9 @@ def prewarm(proc: JobProcess) -> None:
 
 def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> AgentSession:
     if engine in ("pipeline", "text_pipeline"):
-        stt = (scribe_stt(language, vocab_terms(language, vocabulary)) if engine == "pipeline"
+        stt = (pipeline_stt(language, vocab_terms(language, vocabulary)) if engine == "pipeline"
                else caller_stt(language))
-        if engine == "pipeline":
-            tts = elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
-        else:
-            models = list(dict.fromkeys((GEMINI_TTS_MODEL, GEMINI_TTS_FALLBACK_MODEL)))
-            tts = livekit_tts.FallbackAdapter([
-                google.beta.GeminiTTS(model=model, voice_name=gemini_voice(voice),
-                                      api_key=os.environ.get("GEMINI_API_KEY"))
-                for model in models
-            ], max_retry_per_tts=1)
+        tts = pipeline_tts(voice) if engine == "pipeline" else gemini_tts(voice)
         # Open the connections now, while the phone rings, not on the first reply.
         for part in ((stt, tts) if engine == "pipeline" else (stt,)):
             if prewarm_part := getattr(part, "prewarm", None):
@@ -632,6 +624,37 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
     return AgentSession(**language_parts(engine, voice, language, vocabulary))
 
 
+def gemini_tts(voice: str) -> livekit_tts.TTS:
+    """Gemini's voice: the text pipeline's only voice, and the pipeline's spare."""
+    models = list(dict.fromkeys((GEMINI_TTS_MODEL, GEMINI_TTS_FALLBACK_MODEL)))
+    return livekit_tts.FallbackAdapter([
+        google.beta.GeminiTTS(model=model, voice_name=gemini_voice(voice),
+                              api_key=os.environ.get("GEMINI_API_KEY"))
+        for model in models
+    ], max_retry_per_tts=1)
+
+
+def pipeline_tts(voice: str) -> livekit_tts.TTS:
+    """ElevenLabs, with Gemini's voice taking over the moment it fails mid-call (credits run
+    out, outage): the call starting fine doesn't keep it from going silent later. No retry on
+    ElevenLabs, so the caller waits one failed attempt, not three; a background probe brings it
+    back for the next reply if it was a blip. The output keeps ElevenLabs' rate, so only
+    Gemini's audio is resampled."""
+    eleven = elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
+    if not os.environ.get("GEMINI_API_KEY"):
+        return eleven
+    return livekit_tts.FallbackAdapter([eleven, gemini_tts(voice)], max_retry_per_tts=0,
+                                       sample_rate=eleven.sample_rate)
+
+
+def pipeline_stt(language: str, keyterms: list[str] | None = None) -> livekit_stt.STT:
+    """Scribe, with Deepgram taking over for the rest of the call if Scribe fails (it ends
+    the session on quota_exceeded). One quick retry covers a dropped connection; the words
+    said while it failed are lost, so the caller may have to repeat them."""
+    return livekit_stt.FallbackAdapter([scribe_stt(language, keyterms), caller_stt(language)],
+                                       max_retry_per_stt=1, retry_interval=0.5)
+
+
 def scribe_stt(language: str, keyterms: list[str] | None = None):
     return elevenlabs.STT(
         keyterms=keyterms or None,
@@ -668,7 +691,7 @@ def language_parts(engine: str, voice: str, language: str, vocabulary: list[str]
     switches language (R7) hands over to a new agent built with these."""
     words = vocab_terms(language, vocabulary)
     if engine == "pipeline":
-        return {"stt": scribe_stt(language, words)}
+        return {"stt": pipeline_stt(language, words)}
     if engine == "text_pipeline":
         return {"stt": caller_stt(language)}
     if engine == "openai":
@@ -799,21 +822,64 @@ def log_latency(session: AgentSession, call_id: str) -> None:
 RECEPTIONIST_ENGINE = os.environ.get("RECEPTIONIST_ENGINE", "pipeline")
 
 
-async def elevenlabs_usable() -> bool:
-    """Tiny paid TTS request (~1 credit): ElevenLabs refuses it with quota_exceeded when the
-    account is out of credits. A 1-character text is let through even at 0 credits, so the
-    probe is two. The key lacks user_read, so the subscription endpoint isn't an option."""
+# Credits left below which a warning is logged, and below which a call doesn't start on
+# ElevenLabs at all (~1500 is about one 5-minute call).
+ELEVEN_LOW_CREDITS = int(os.environ.get("ELEVEN_LOW_CREDITS", "5000"))
+ELEVEN_MIN_CREDITS = int(os.environ.get("ELEVEN_MIN_CREDITS", "1500"))
+ELEVEN_CHECK_SECONDS = 2.5
+
+
+async def elevenlabs_credits(client: httpx.AsyncClient) -> tuple[int, bool] | None:
+    """Credits left this period and whether billing may go past the limit; None when the key
+    can't read them (no user_read), the request fails or the answer has no numbers, which
+    means "use the TTS probe instead"."""
     try:
-        async with httpx.AsyncClient(timeout=2.5) as client:
-            r = await client.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{elevenlabs_voice('default')}",
-                params={"output_format": "mp3_22050_32"},
-                headers={"xi-api-key": os.environ["ELEVEN_API_KEY"]},
-                json={"text": "ok", "model_id": "eleven_flash_v2_5"},
-            )
+        r = await client.get("https://api.elevenlabs.io/v1/user/subscription",
+                             headers={"xi-api-key": os.environ["ELEVEN_API_KEY"]}, timeout=1.2)
+        if r.status_code != 200:
+            if r.status_code not in (401, 403):
+                logger.warning("ElevenLabs subscription check failed (%s)", r.status_code)
+            return None
+        sub = r.json()
+        remaining = int(sub["character_limit"]) - int(sub["character_count"])
     except Exception as e:
+        logger.warning("ElevenLabs subscription check failed: %r", e)
+        return None
+    # Usage-based billing goes past the limit instead of refusing.
+    overage = bool(sub.get("can_extend_character_limit") and sub.get("allowed_to_extend_character_limit"))
+    return remaining, overage
+
+
+async def elevenlabs_usable() -> bool:
+    """Reads the credits left when the key has user_read; out of credits means a call that
+    would go silent, so it starts on the fallback engine. Without user_read it sends a tiny
+    paid TTS request (~1 credit) instead: ElevenLabs refuses it with quota_exceeded when the
+    account is out of credits. A 1-character text is let through even at 0 credits, so the
+    probe is two. Both together stay within ELEVEN_CHECK_SECONDS."""
+    try:
+        return await asyncio.wait_for(_elevenlabs_usable(), ELEVEN_CHECK_SECONDS)
+    except Exception as e:  # includes the timeout
         logger.warning("ElevenLabs check failed: %r", e)
         return False
+
+
+async def _elevenlabs_usable() -> bool:
+    async with httpx.AsyncClient(timeout=ELEVEN_CHECK_SECONDS) as client:
+        if (credits := await elevenlabs_credits(client)) is not None:
+            remaining, overage = credits
+            logger.info("ElevenLabs credits: %d left%s", remaining, " (billing past the limit)" if overage else "")
+            if remaining < ELEVEN_MIN_CREDITS and not overage:
+                logger.warning("ElevenLabs credits below %d, not using ElevenLabs", ELEVEN_MIN_CREDITS)
+                return False
+            if remaining < ELEVEN_LOW_CREDITS:
+                logger.warning("ElevenLabs credits low: %d left (top up)", remaining)
+            return True
+        r = await client.post(
+            f"https://api.elevenlabs.io/v1/text-to-speech/{elevenlabs_voice('default')}",
+            params={"output_format": "mp3_22050_32"},
+            headers={"xi-api-key": os.environ["ELEVEN_API_KEY"]},
+            json={"text": "ok", "model_id": "eleven_flash_v2_5"},
+        )
     if r.status_code != 200:
         logger.warning("ElevenLabs unusable (%s): %s", r.status_code, r.text[:200])
         return False
