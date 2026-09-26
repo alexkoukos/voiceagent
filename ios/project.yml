@@ -24,5 +24,6 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
         SWIFT_VERSION: "5.0"
+        INFOPLIST_KEY_NSCameraUsageDescription: "Για να σκανάρεις τον τιμοκατάλογο μιας επιχείρησης."
         INFOPLIST_KEY_NSFaceIDUsageDescription: "Για να προστατεύονται οι κλήσεις, οι ηχογραφήσεις και τα στοιχεία των πελατών."
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Για να μιλήσεις με πελάτες που ζητούν άνθρωπο."

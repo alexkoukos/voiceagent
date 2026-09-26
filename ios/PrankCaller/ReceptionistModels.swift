@@ -258,6 +258,9 @@ struct ConfigVersion: Decodable, Identifiable {
         case "link": return "Σύνδεσμος γιατρού"
         case "rollback": return "Επαναφορά"
         case "baseline": return "Αρχική κατάσταση"
+        case "import": return "Εισαγωγή"
+        case "sms": return "SMS από το προσωπικό"
+        case "phone": return "Τηλέφωνο με PIN"
         default: return "Εφαρμογή"
         }
     }
@@ -272,10 +275,69 @@ struct ConfigVersion: Decodable, Identifiable {
                 lines.append("• \(s["name"]?.text ?? "?"): \(price), \(minutes)′")
             }
         }
+        if case .object(let hours)? = changes["hours"] {
+            let names = ["mon": "Δευ", "tue": "Τρι", "wed": "Τετ", "thu": "Πεμ", "fri": "Παρ", "sat": "Σαβ", "sun": "Κυρ"]
+            for key in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] {
+                guard case .array(let spans)? = hours[key] else { continue }
+                let text = spans.map { span -> String in
+                    if case .array(let ab) = span { return ab.map(\.text).joined(separator: "-") }
+                    return span.text
+                }.joined(separator: ", ")
+                lines.append("• \(names[key]!): \(text.isEmpty ? "κλειστά" : text)")
+            }
+        }
         // The decoder camel-cases dictionary keys too.
         if case .object(let kb)? = changes["knowledgeBase"] ?? changes["knowledge_base"] {
             for (k, v) in kb.sorted(by: { $0.key < $1.key }) { lines.append("• \(k): \(v.text)") }
         }
         return lines
     }
+}
+
+// MARK: Operations (OP1-OP10, onboarding)
+
+struct OpsAlert: Decodable, Identifiable {
+    let id: String
+    let practiceId: String?
+    let kind: String
+    let subject: String
+    let body: String
+    let createdAt: Date
+    let ackedAt: Date?
+    let escalatedAt: Date?
+}
+
+struct PriceListUpload: Encodable {
+    let dataBase64: String?
+    let mimeType: String?
+    let url: String?
+}
+
+struct ForwardingInfo: Decodable {
+    struct Code: Decodable { let what: String; let code: String }
+    let target: String
+    let mode: String
+    let codes: [Code]
+    let off: String
+}
+
+/// Only the counts, for the screen; the file itself is shared as-is.
+struct CallerExport: Decodable {
+    let calls: Int
+    let appointments: Int
+    let messages: Int
+    private enum Keys: String, CodingKey { case calls, appointments, messages }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        calls = try c.decode([JSONValue].self, forKey: .calls).count
+        appointments = try c.decode([JSONValue].self, forKey: .appointments).count
+        messages = try c.decode([JSONValue].self, forKey: .messages).count
+    }
+}
+
+struct PracticeUsage: Decodable {
+    let monthCostEur: Double
+    let monthlyCostCapEur: Double?
+    let blockedNumbers: [String]
+    let offboardedAt: Date?
 }

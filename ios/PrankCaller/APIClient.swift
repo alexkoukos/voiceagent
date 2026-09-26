@@ -184,6 +184,42 @@ struct APIClient {
         try await send("POST", "/practices/\(pid)/links", body: ["staff_id": staffId])
     }
     func revokeLinks(_ pid: String) async throws { _ = try await request("DELETE", "/practices/\(pid)/links") }
+    // Operations
+    func alerts() async throws -> [OpsAlert] { try await get("/alerts") }
+    func ackAlert(_ id: String) async throws { _ = try await request("POST", "/alerts/\(id)/ack") }
+    func importGoogle(_ pid: String, query: String) async throws -> ConfigVersion? {
+        try await send("POST", "/practices/\(pid)/imports/google", body: ["query": query])
+    }
+    func importPriceList(_ pid: String, _ upload: PriceListUpload) async throws -> ConfigVersion? {
+        try await send("POST", "/practices/\(pid)/imports/price-list", body: upload)
+    }
+    func forwarding(_ pid: String, full: Bool) async throws -> ForwardingInfo {
+        try await get("/practices/\(pid)/forwarding?mode=" + (full ? "full" : "backup"))
+    }
+    /// The raw JSON, to hand to the patient as a file.
+    func exportCaller(_ pid: String, phone: String) async throws -> Data {
+        try await request("POST", "/practices/\(pid)/data/export", body: ["phone": phone])
+    }
+    func eraseCaller(_ pid: String, phone: String) async throws -> [String: Int] {
+        try await send("POST", "/practices/\(pid)/data/erase", body: ["phone": phone])
+    }
+    func usage(_ pid: String) async throws -> PracticeUsage { try await get("/practices/\(pid)/usage") }
+    func setCostCap(_ pid: String, _ cap: Double?) async throws -> PracticeUsage {
+        try await send("PUT", "/practices/\(pid)/cost-cap", body: ["monthly_cost_cap_eur": cap])
+    }
+    func block(_ pid: String, phone: String) async throws -> PracticeUsage {
+        try await send("POST", "/practices/\(pid)/blocked", body: ["phone": phone])
+    }
+    func unblock(_ pid: String, phone: String) async throws -> PracticeUsage {
+        try await send("POST", "/practices/\(pid)/unblock", body: ["phone": phone])
+    }
+    func setAdminPin(_ pid: String, pin: String?) async throws {
+        _ = try await request("PUT", "/practices/\(pid)/admin-pin", body: ["pin": pin])
+    }
+    func exportCSV(_ pid: String) async throws -> Data { try await request("GET", "/practices/\(pid)/export.csv") }
+    func offboard(_ pid: String) async throws { _ = try await request("POST", "/practices/\(pid)/offboard") }
+    func reactivate(_ pid: String) async throws { _ = try await request("POST", "/practices/\(pid)/reactivate") }
+
     /// "changed" whenever a call, message or handoff of the practice changes.
     func practiceUpdates(_ pid: String) throws -> URLSessionWebSocketTask {
         try socket("/practices/\(pid)/ws")
