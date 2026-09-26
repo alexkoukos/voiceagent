@@ -25,6 +25,9 @@ struct PracticeSettingsView: View {
                 NavigationLink { ImportView(practice: practice) } label: {
                     Label("Εισαγωγή στοιχείων", systemImage: "square.and.arrow.down")
                 }
+                NavigationLink { CalendarView(practice: practice) } label: {
+                    Label("Ημερολόγια Google", systemImage: "calendar")
+                }
                 NavigationLink { ForwardingView(practice: practice) } label: {
                     Label("Προώθηση κλήσεων", systemImage: "phone.arrow.right")
                 }

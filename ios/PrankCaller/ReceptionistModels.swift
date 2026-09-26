@@ -341,3 +341,15 @@ struct PracticeUsage: Decodable {
     let blockedNumbers: [String]
     let offboardedAt: Date?
 }
+
+struct CalendarConnectionInfo: Decodable, Identifiable {
+    let id: String
+    let staffId: String?
+    let googleEmail: String
+    let calendarId: String
+}
+
+struct CalendarConnectStart: Decodable {
+    let url: String
+    let callbackScheme: String
+}

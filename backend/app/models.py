@@ -358,6 +358,21 @@ class AdminRequest(Base):
     decided_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
 
+class CalendarConnection(Base):
+    """A Google Calendar connected by its owner's sign-in (O3), instead of shared with the
+    service account. The refresh token is encrypted at rest."""
+
+    __tablename__ = "calendar_connections"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
+    staff_id: Mapped[str | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    google_email: Mapped[str] = mapped_column(SecretText, default="")
+    calendar_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    refresh_token: Mapped[str] = mapped_column(SecretText, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
 class Message(Base):
     """A message taken for the business (C3)."""
 
