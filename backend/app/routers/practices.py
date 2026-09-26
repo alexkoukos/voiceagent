@@ -62,7 +62,7 @@ async def get_vertical(vertical: str):
     if not path.is_file() or not vertical.isalnum():
         raise HTTPException(status_code=404, detail="Unknown vertical")
     v = json.loads(path.read_text(encoding="utf-8"))
-    return {k: v[k] for k in ("hours", "services", "routing_rules", "knowledge_base") if k in v} | {
+    return {k: v[k] for k in ("hours", "services", "routing_rules", "knowledge_base", "voice") if k in v} | {
         "vertical": vertical, "rules": v.get("rules", {}),
     }
 
