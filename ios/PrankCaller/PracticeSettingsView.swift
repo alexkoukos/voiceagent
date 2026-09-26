@@ -14,11 +14,27 @@ struct PracticeSettingsView: View {
     @State private var rollingBack: ConfigVersion?
     @State private var errorMessage: String?
     @State private var loaded = false
+    @State private var alerts: [OpsAlert] = []
 
     var body: some View {
         List {
             if let errorMessage { ErrorBanner(text: errorMessage).listRowSeparator(.hidden) }
+            AlertsSection(alerts: $alerts) { await load() }
             approvalSection
+            Section {
+                NavigationLink { ImportView(practice: practice) } label: {
+                    Label("Εισαγωγή στοιχείων", systemImage: "square.and.arrow.down")
+                }
+                NavigationLink { ForwardingView(practice: practice) } label: {
+                    Label("Προώθηση κλήσεων", systemImage: "phone.arrow.right")
+                }
+                NavigationLink { PatientDataView(practice: practice) } label: {
+                    Label("Στοιχεία πελάτη (GDPR)", systemImage: "person.text.rectangle")
+                }
+                NavigationLink { PracticeControlsView(practice: practice) } label: {
+                    Label("Κόστος, αποκλεισμοί, PIN, αποχώρηση", systemImage: "gearshape")
+                }
+            }
             closuresSection
             linkSection
             historySection
@@ -159,6 +175,7 @@ struct PracticeSettingsView: View {
             async let c = api.closures(practice.id)
             async let s = api.staff(practice.id)
             let versions = try await v
+            alerts = (try? await api.alerts()) ?? []
             (closures, staff) = try await (c, s)
             pending = versions.filter { $0.status == "pending" }
             history = versions.filter { $0.status != "pending" }
