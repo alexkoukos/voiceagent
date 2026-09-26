@@ -184,6 +184,17 @@ struct APIClient {
         try await send("POST", "/practices/\(pid)/links", body: ["staff_id": staffId])
     }
     func revokeLinks(_ pid: String) async throws { _ = try await request("DELETE", "/practices/\(pid)/links") }
+    // Google Calendar (O3)
+    func calendarConnections(_ pid: String) async throws -> [CalendarConnectionInfo] {
+        try await get("/practices/\(pid)/calendar/connections")
+    }
+    func startCalendarConnect(_ pid: String, staffId: String?) async throws -> CalendarConnectStart {
+        try await send("POST", "/practices/\(pid)/calendar/connect", body: ["staff_id": staffId])
+    }
+    func disconnectCalendar(_ pid: String, _ id: String) async throws {
+        _ = try await request("DELETE", "/practices/\(pid)/calendar/connections/\(id)")
+    }
+
     // Operations
     func alerts() async throws -> [OpsAlert] { try await get("/alerts") }
     func ackAlert(_ id: String) async throws { _ = try await request("POST", "/alerts/\(id)/ack") }

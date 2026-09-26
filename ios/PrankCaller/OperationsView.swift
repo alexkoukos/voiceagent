@@ -1,3 +1,4 @@
+import AuthenticationServices
 import PhotosUI
 import SwiftUI
 import VisionKit
@@ -431,5 +432,85 @@ struct PracticeControlsView: View {
     }
     private func reactivate() async {
         await run("Επανενεργοποίηση επιχείρησης") { try await APIClient().reactivate(practice.id); note = "Ενεργή ξανά." }
+    }
+}
+
+// MARK: Google Calendar (O3)
+
+struct CalendarView: View {
+    let practice: Practice
+    @Environment(\.webAuthenticationSession) private var webAuth
+    @State private var staff: [StaffMember] = []
+    @State private var connections: [CalendarConnectionInfo] = []
+    @State private var note: String?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(connections) { c in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(owner(c)).font(.body.weight(.semibold))
+                        Text(c.googleEmail).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .swipeActions {
+                        Button("Αποσύνδεση", role: .destructive) { Task { await disconnect(c) } }
+                    }
+                }
+                Menu {
+                    ForEach(staff) { p in Button(p.name) { Task { await connect(staffId: p.id) } } }
+                    Button("Όλη η επιχείρηση") { Task { await connect(staffId: nil) } }
+                } label: {
+                    Label("Σύνδεση Google Calendar", systemImage: "calendar.badge.plus")
+                }
+            } footer: {
+                Text("Ο γιατρός συνδέεται μία φορά με τον λογαριασμό Google του, σε ιδιωτικό παράθυρο: τίποτα δεν μένει στο κινητό σου. Ο βοηθός βλέπει πότε είναι απασχολημένος και γράφει εκεί τα ραντεβού.")
+            }
+            if let note { Section { Label(note, systemImage: "checkmark.circle.fill") } }
+            if let errorMessage { Section { Text(errorMessage).foregroundStyle(Palette.danger) } }
+        }
+        .navigationTitle("Ημερολόγια")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await load() }
+    }
+
+    private func owner(_ c: CalendarConnectionInfo) -> String {
+        guard let id = c.staffId else { return "Όλη η επιχείρηση" }
+        return staff.first { $0.id == id }?.name ?? "Προσωπικό"
+    }
+
+    private func load() async {
+        do {
+            async let s = APIClient().staff(practice.id)
+            async let c = APIClient().calendarConnections(practice.id)
+            (staff, connections) = try await (s, c)
+        } catch { errorMessage = friendlyMessage(error) }
+    }
+
+    private func connect(staffId: String?) async {
+        guard await AppLock.confirm("Σύνδεση ημερολογίου Google") else { return }
+        do {
+            let start = try await APIClient().startCalendarConnect(practice.id, staffId: staffId)
+            guard let url = URL(string: start.url) else { return }
+            let back = try await webAuth.authenticate(using: url, callbackURLScheme: start.callbackScheme,
+                                                      preferredBrowserSession: .ephemeral)
+            let result = URLComponents(url: back, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "result" }?.value
+            if result == "ok" { note = "Το ημερολόγιο συνδέθηκε."; errorMessage = nil }
+            else if result != "cancelled" { errorMessage = "Η σύνδεση απέτυχε (\(result ?? "?")). Δοκίμασε ξανά." }
+            await load()
+        } catch let e as ASWebAuthenticationSessionError where e.code == .canceledLogin {
+            return
+        } catch {
+            if case APIError.badStatus(503, _) = error {
+                errorMessage = "Λείπει το Google OAuth client στον server (GOOGLE_OAUTH_CLIENT_ID)."
+            } else { errorMessage = friendlyMessage(error) }
+        }
+    }
+
+    private func disconnect(_ c: CalendarConnectionInfo) async {
+        guard await AppLock.confirm("Αποσύνδεση ημερολογίου") else { return }
+        do { try await APIClient().disconnectCalendar(practice.id, c.id); await load() }
+        catch { errorMessage = friendlyMessage(error) }
     }
 }

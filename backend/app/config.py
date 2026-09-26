@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     # Service account key (the whole JSON) for practices' Google Calendars.
     # Database-only booking requires an unassigned calendar_id.
     google_service_account_json: str = ""
+    # O3: doctors connect their own calendar (Google OAuth "Web application" client). Redirect URI:
+    # <BACKEND_PUBLIC_URL>/oauth/google/callback
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
 
     # Notifications. Email over SMTP (any provider); SMS through Telnyx Messaging;
     # push through APNs (needs a paid Apple developer account). Unset channels stay pending.

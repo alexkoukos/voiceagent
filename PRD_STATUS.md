@@ -53,10 +53,11 @@ Migrations 0016 and 0017. 66 backend tests; each part below has its own test fil
 
 ## Remaining engineering work
 
-1. **O3 Google Calendar OAuth** (connect per staff member) still uses the shared service-account calendar.
-2. **OP1 Telnyx failover script** and daily real test call, once the Greek DID exists.
-3. **Push notifications** need a paid Apple developer account.
-4. **Recording bucket encryption:** check the Railway bucket's server-side encryption; recordings are not covered by `DATA_ENCRYPTION_KEY`.
+- **O3 Google Calendar sign-in** is built (migration 0018, `app/google_oauth.py`, iOS "Ημερολόγια Google"). It needs a Google OAuth "Web application" client: set `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` and the redirect URI `<BACKEND_PUBLIC_URL>/oauth/google/callback`. Unverified apps allow 100 test users.
+- **OP1:** `scripts/setup_failover.py` (dry run by default) sets Telnyx on-failure forwarding; run it with `--apply` once the Greek number and the practice's fallback mobile exist. The daily real test call is not built.
+- **Encryption:** on in production since 2026-09-25 (key in the owner's `~/.config/voiceagent/`); recordings are sealed by the scheduler after upload.
+- **Push notifications** need a paid Apple developer account.
+- **Agent health probe** stays off until the agent has more memory.
 
 ## Remaining acceptance and onboarding work
 
