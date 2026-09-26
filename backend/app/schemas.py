@@ -178,6 +178,8 @@ class NotificationSettings(BaseModel):
     monthly_report: bool = True
     # Also email summaries of web demo calls.
     web_summaries: bool = False
+    # OP1: where Telnyx sends calls when the agent doesn't answer (scripts/setup_failover.py).
+    fallback_number: str | None = None
 
 
 class ReminderSettings(BaseModel):
