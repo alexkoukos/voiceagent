@@ -1221,9 +1221,16 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
 
 
 async def entrypoint(ctx: JobContext) -> None:
+    metadata = json.loads(ctx.job.metadata or "{}")
+    if metadata.get("health_check"):
+        # Backend's synthetic check (OP1): answer and leave without joining the room.
+        try:
+            await backend_post("/internal/health/agent", {"token": metadata["health_check"]})
+        finally:
+            ctx.shutdown(reason="health check")
+        return
     await ctx.connect()
 
-    metadata = json.loads(ctx.job.metadata or "{}")
     if metadata.get("mode") == "receptionist" or "call_id" not in metadata:
         try:
             await run_receptionist(ctx, metadata)

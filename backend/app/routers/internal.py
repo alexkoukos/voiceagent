@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import events, finalize
+from app import events, finalize, health
 from app.config import get_settings
 from app.database import get_db
 from app.dispatcher import start_next_queued
@@ -79,6 +79,12 @@ async def call_event(call_id: str, event: CallEvent, db: AsyncSession = Depends(
         finalize.schedule(call.id)
     if was_in_progress and call.status in (CallStatus.completed, CallStatus.failed):
         await start_next_queued(db)
+
+
+@router.post("/health/agent", dependencies=[Depends(require_agent_token)])
+async def agent_health(payload: dict):
+    """The agent answered a no-op health job (OP1)."""
+    return {"ok": health.acknowledge(str(payload.get("token", "")))}
 
 
 @router.post("/inbound", dependencies=[Depends(require_agent_token)])
