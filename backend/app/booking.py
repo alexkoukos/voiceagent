@@ -416,7 +416,8 @@ async def check_availability(
 ) -> dict:
     """What the agent's check_availability tool returns. `when` is the caller's own words;
     `staff_name` is who they asked for ("με τον Γιώργο"), empty for anyone free.
-    `after`/`before` keep only times strictly after/before them. `last_offer` is the previous
+    `after`/`before` keep only times strictly after/before them; equal bounds ask for
+    that exact start time. `last_offer` is the previous
     result in this call ({"date", "free_times"}): "νωρίτερα"/"αργότερα" are relative to it."""
     tz = ZoneInfo(practice.timezone)
     language = language or practice.language
@@ -452,6 +453,8 @@ async def check_availability(
     slots = list(await availability(db, practice, resolved.day, service, now, resources, exclude_id))
     def in_window(s: datetime) -> bool:
         t = s.timetz().replace(tzinfo=None)
+        if after is not None and before == after:
+            return t == after
         return (after is None or t > after) and (before is None or t < before)
 
     matching = [s for s in slots if in_part_of_day(s, resolved.part_of_day) and in_window(s)]

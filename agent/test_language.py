@@ -41,10 +41,12 @@ def test_text_pipeline_feeds_deepgram_transcript_to_text_model(monkeypatch):
     llm = object()
     tts = object()
     vad = object()
+    models = []
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(worker, "caller_stt", lambda language: stt)
     monkeypatch.setattr(worker.google, "LLM", lambda **kwargs: llm)
-    monkeypatch.setattr(worker.google.beta, "GeminiTTS", lambda **kwargs: tts)
+    monkeypatch.setattr(worker.google.beta, "GeminiTTS", lambda **kwargs: models.append(kwargs["model"]) or object())
+    monkeypatch.setattr(worker.livekit_tts, "FallbackAdapter", lambda providers, **kwargs: tts)
     monkeypatch.setattr(worker, "AgentSession", lambda **kwargs: kwargs)
     ctx = SimpleNamespace(proc=SimpleNamespace(userdata={"vad": vad}))
 
@@ -53,6 +55,7 @@ def test_text_pipeline_feeds_deepgram_transcript_to_text_model(monkeypatch):
     assert session["stt"] is stt
     assert session["llm"] is llm
     assert session["tts"] is tts
+    assert models == [worker.GEMINI_TTS_MODEL, worker.GEMINI_TTS_FALLBACK_MODEL]
     assert session["vad"] is vad
     assert session["turn_handling"]["turn_detection"] == "stt"
 

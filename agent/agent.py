@@ -37,7 +37,7 @@ import httpx
 from google.genai import types as genai_types
 from google.protobuf.duration_pb2 import Duration
 from livekit import api, rtc
-from livekit.agents import inference, room_io
+from livekit.agents import inference, room_io, tts as livekit_tts
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -76,6 +76,7 @@ OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2.
 # Pipeline engine: the "brain". Flash-Lite starts answering in ~0.45 s.
 LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
 GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-3.8-flash-lite-tts")
+GEMINI_TTS_FALLBACK_MODEL = os.environ.get("GEMINI_TTS_FALLBACK_MODEL", "gemini-3.8-flash-tts")
 # Realtime and OpenAI engines: how long a pause means the friend has finished talking.
 REALTIME_SILENCE_MS = int(os.environ.get("REALTIME_SILENCE_MS", "400"))
 # Turn detector (pipeline engine): the longest we wait after the caller stops before
@@ -364,6 +365,7 @@ class ReceptionistAgent(PrankCallerAgent):
             appointment_id: When moving an existing appointment, its id.
             after: "αργότερα" / "later": the latest time you just offered (HH:MM); only later times come back.
             before: "νωρίτερα" / "earlier": the earliest time you just offered (HH:MM); only earlier times come back.
+                To check one exact time, set both after and before to that time.
         """
         return await self._tool("check_availability", {
             "when": when, "service_id": service_id or None, "staff": staff or None,
@@ -559,13 +561,17 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
     if engine in ("pipeline", "text_pipeline"):
         stt = (scribe_stt(language, vocab_terms(language, vocabulary)) if engine == "pipeline"
                else caller_stt(language))
-        tts = (elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
-               if engine == "pipeline" else google.beta.GeminiTTS(
-                   model=GEMINI_TTS_MODEL, voice_name=gemini_voice(voice),
-                   api_key=os.environ.get("GEMINI_API_KEY"),
-               ))
+        if engine == "pipeline":
+            tts = elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
+        else:
+            models = list(dict.fromkeys((GEMINI_TTS_MODEL, GEMINI_TTS_FALLBACK_MODEL)))
+            tts = livekit_tts.FallbackAdapter([
+                google.beta.GeminiTTS(model=model, voice_name=gemini_voice(voice),
+                                      api_key=os.environ.get("GEMINI_API_KEY"))
+                for model in models
+            ], max_retry_per_tts=1)
         # Open the connections now, while the phone rings, not on the first reply.
-        for part in (stt, tts):
+        for part in ((stt, tts) if engine == "pipeline" else (stt,)):
             if prewarm_part := getattr(part, "prewarm", None):
                 try:
                     prewarm_part()
