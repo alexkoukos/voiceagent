@@ -318,7 +318,7 @@ class ReceptionistAgent(PrankCallerAgent):
         return json.dumps(result, ensure_ascii=False)
 
     @function_tool
-    async def route_call(self, context: RunContext, intent: str, staff: str = "", department: str = "", language: str = "") -> str:
+    async def route_call(self, context: RunContext, intent: str, staff: str = "", department: str = "") -> str:
         """Call first, as soon as you know what the caller wants, and again if it changes.
 
         Args:
@@ -327,15 +327,11 @@ class ReceptionistAgent(PrankCallerAgent):
                 change = only an appointment they ALREADY have ("να αλλάξω το ραντεβού μου", "να το μεταφέρω").
             staff: Who they asked for, in their words ("με τον Γιώργο", "τον γιατρό"); empty if nobody.
             department: The department they named, if any.
-            language: el or en only when the caller clearly speaks that language; empty if uncertain.
         """
-        # Only an explicitly enabled business rule may switch the call language.
+        # The language never changes here: only "English mode", matched in code (check_language).
         result = await self._rc.tool("route_call", {
             "intent": intent, "staff": staff or None, "department": department or None,
-            "language": language or None,
         })
-        if result.get("switch_language"):
-            self._rc.spawn(self._rc.switch_language(result["switch_language"]))
         if result.get("path") == "end_call":
             # Third off-topic / abusive turn (off_topic_limit): the backend decided to end the call.
             await context.wait_for_playout()
@@ -859,6 +855,7 @@ class ReceptionistCall:
         self.latencies: list[float] = []
         self.handed_off = False
         self._emergency_said = False
+        self._switching_language = False
         self._tasks: set[asyncio.Task] = set()
         self._user_turn = 0
         self._last_user_text = ""
@@ -946,6 +943,33 @@ class ReceptionistCall:
         except Exception:
             logger.exception("call %s: closing line failed", self.call_id)
         await self.ctx.room.disconnect()
+
+    # --- language: Greek, English only on "English mode" (matched here, never the model) ---
+
+    def check_language(self, text: str) -> None:
+        wanted = wants_language(text)
+        if wanted and wanted != self.language and not self._switching_language:
+            self._switching_language = True
+            self.spawn(self._set_language(wanted))
+
+    async def _set_language(self, language: str) -> None:
+        try:
+            result = await self.tool("set_language", {"language": language})
+            if not result.get("ok"):
+                return
+            logger.info("call %s: %s mode", self.call_id, language)
+            self.session.interrupt()
+            await self.switch_language(language)
+            line = LANGUAGE_MODE_LINE[language]
+            if self.engine == "pipeline":
+                self.session.say(line, add_to_chat_ctx=True)
+            else:
+                quote = "Πες ακριβώς αυτό" if language == "el" else "Say exactly this"
+                self.session.generate_reply(instructions=f"{quote}: {line}")
+        except Exception:
+            logger.exception("call %s: language switch failed", self.call_id)
+        finally:
+            self._switching_language = False
 
     # --- emergency (R5): a deterministic phrase match on what the caller said ---
 
@@ -1167,6 +1191,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
     def _heard(text: str) -> None:
         rc.heard_user(text)
         rc.check_emergency(text)
+        rc.check_language(text)
 
     CallerTurns(session, rc.engine, _heard)
 
@@ -1218,6 +1243,25 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
         except asyncio.TimeoutError:
             pass
     await agent.greet()
+
+
+# "English mode" as the Greek transcriber writes it too ("ίνγκλις", "αγγλικά"); accents are
+# folded by _plain. "Greek mode" / "ελληνικά" switches back.
+ENGLISH_MODE = ("english", "inglis", "ινγκλ", "ιγκλ", "ινγλ", "ιγγλ", "αγγλικ")
+GREEK_MODE = ("greek", "γκρικ", "ελληνικ")
+LANGUAGE_MODE_LINE = {
+    "en": "English mode. How can I help you?",
+    "el": "Ελληνικά. Πώς μπορώ να σας βοηθήσω;",
+}
+
+
+def wants_language(text: str) -> str | None:
+    plain = _plain(text)
+    if any(w in plain for w in ENGLISH_MODE):
+        return "en"
+    if any(w in plain for w in GREEK_MODE):
+        return "el"
+    return None
 
 
 async def entrypoint(ctx: JobContext) -> None:

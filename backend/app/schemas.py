@@ -573,6 +573,10 @@ class RouteArgs(BaseModel):
     language: str | None = Field(default=None, max_length=5)
 
 
+class LanguageArgs(BaseModel):
+    language: Literal["el", "en"]
+
+
 class AdminLoginArgs(BaseModel):
     pin: str = Field(max_length=12)
 

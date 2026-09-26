@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import admin_changes, alerts, booking, events, notifications, routing, texts
 from app.config import get_settings
-from app.languages import english_name, language_for_phone
+from app.languages import english_name
 from app.models import (
     Appointment, Call, CallStatus, Customer, Handoff, Message, Practice, RoutingEvent, Staff, TranscriptEntry,
     TranscriptRole, WaitlistEntry,
@@ -62,9 +62,8 @@ def add_flag(call: Call, flag: str) -> None:
 
 
 def call_language(practice: Practice, caller_number: str | None) -> str:
-    """The practice's language, or English for a caller from a foreign number."""
-    if caller_number and caller_number.startswith("+") and language_for_phone(caller_number) != "el":
-        return "en"
+    """Every call starts in the practice's language (Greek). English only when the caller
+    says "English mode" (the agent matches it in code, see tool_set_language)."""
     return practice.language
 
 
@@ -232,13 +231,6 @@ async def build_metadata(
                        "(closure, leave, hours, a price, information), first call stop_recording, then ask for the PIN and call admin_login. Then "
                        "admin_change with their words, read say_and_ask, and wait for a clear yes or no before "
                        "admin_confirm. Never repeat the PIN.\n")
-        if rules["language_switch"]:
-            prompt += ("\nΑν ο πελάτης μιλά καθαρά αγγλικά στην πρώτη του απάντηση, κάλεσε route_call με language=en "
-                       "και συνέχισε στα αγγλικά. Αν είναι ασαφές ή ακούγεται φωνή στο βάθος, ζήτα επανάληψη στα "
-                       "ελληνικά· μην αλλάξεις γλώσσα.\n" if lang == "el" else
-                       "\nIf the caller clearly speaks Greek on the first turn, call route_call with language=el "
-                       "and continue in Greek. If unclear or a background voice is audible, ask them to repeat "
-                       "in English; do not switch languages.\n")
         return prompt
 
     record = call.direction != "web"
@@ -978,3 +970,14 @@ async def tool_admin_confirm(db: AsyncSession, call: Call, args) -> dict:
     notifications.kick()
     events.publish(f"practice:{practice.id}")
     return {"say": reply}
+
+
+async def tool_set_language(db: AsyncSession, call: Call, args) -> dict:
+    """The caller said "English mode" / "Greek mode", matched in the agent's code on the
+    transcript (never the model's guess)."""
+    if args.language == (call.language or "el"):
+        return {"ok": True, "language": args.language}
+    call.language = args.language
+    await routing.log(db, call, "language", args.language, "English mode" if args.language == "en" else "Greek mode")
+    await db.commit()
+    return {"ok": True, "language": args.language}

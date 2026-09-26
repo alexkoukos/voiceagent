@@ -13,7 +13,7 @@ from app.dispatcher import start_next_queued
 from app import receptionist
 from app.models import Call, CallStatus, TranscriptEntry
 from app.schemas import (
-    AdminChangeArgs, AdminConfirmArgs, AdminLoginArgs, AppointmentRef, BookAppointment, CallEvent, CheckAvailability, FindArgs, FlagArgs, HandoffResult, InboundStart,
+    AdminChangeArgs, AdminConfirmArgs, AdminLoginArgs, AppointmentRef, BookAppointment, LanguageArgs, CallEvent, CheckAvailability, FindArgs, FlagArgs, HandoffResult, InboundStart,
     MessageArgs, PrepareAction, RescheduleArgs, RouteArgs, TransferArgs, WaitlistArgs, normalize_phone,
 )
 from app.storage import queue_recording_deletion
@@ -140,6 +140,11 @@ async def t_prepare_action(call_id: str, args: PrepareAction, db: AsyncSession =
 @tools.post("/book_appointment")
 async def t_book(call_id: str, args: BookAppointment, db: AsyncSession = Depends(get_db)):
     return await receptionist.tool_book(db, await _receptionist_call(db, call_id), args)
+
+
+@tools.post("/set_language")
+async def t_set_language(call_id: str, args: LanguageArgs, db: AsyncSession = Depends(get_db)):
+    return await receptionist.tool_set_language(db, await _receptionist_call(db, call_id), args)
 
 
 @tools.post("/admin_login")
