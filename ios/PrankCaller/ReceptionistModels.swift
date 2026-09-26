@@ -176,3 +176,106 @@ struct DeviceRegistration: Encodable {
     let practiceId: String?
     let environment: String
 }
+
+// MARK: Changes after go-live (OP2, OP3)
+
+struct StaffMember: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let role: String
+}
+
+struct Closure: Decodable, Identifiable {
+    let id: String
+    let dateFrom: Date
+    let dateTo: Date
+    let staffId: String?
+    let reason: String?
+    let toRebook: [Appointment]
+
+    var range: String {
+        let f = Date.FormatStyle.dateTime.weekday(.abbreviated).day().month(.wide)
+        if Calendar.current.isDate(dateFrom, inSameDayAs: dateTo) { return dateFrom.formatted(f) }
+        return "\(dateFrom.formatted(f)) – \(dateTo.formatted(f))"
+    }
+
+    /// "2026-08-10" in the phone's calendar, as the backend expects.
+    static func day(_ date: Date) -> String {
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+}
+
+struct NewClosure: Encodable {
+    let dateFrom: String
+    let dateTo: String
+    let staffId: String?
+    let reason: String?
+}
+
+struct AdminLink: Decodable {
+    let url: String
+    let expiresAt: Date
+}
+
+/// Any JSON value (the changed fields of a config version).
+indirect enum JSONValue: Decodable, Hashable {
+    case string(String), number(Double), bool(Bool), array([JSONValue]), object([String: JSONValue]), null
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let b = try? c.decode(Bool.self) { self = .bool(b) }
+        else if let n = try? c.decode(Double.self) { self = .number(n) }
+        else if let s = try? c.decode(String.self) { self = .string(s) }
+        else if let a = try? c.decode([JSONValue].self) { self = .array(a) }
+        else { self = .object(try c.decode([String: JSONValue].self)) }
+    }
+    var text: String {
+        switch self {
+        case .string(let s): return s
+        case .number(let n): return n == n.rounded() ? String(Int(n)) : String(n)
+        case .bool(let b): return b ? "ναι" : "όχι"
+        case .array(let a): return a.map(\.text).joined(separator: ", ")
+        case .object(let o): return o.map { "\($0.key): \($0.value.text)" }.joined(separator: ", ")
+        case .null: return "—"
+        }
+    }
+    subscript(_ key: String) -> JSONValue? { if case .object(let o) = self { return o[key] } else { return nil } }
+}
+
+struct ConfigVersion: Decodable, Identifiable {
+    let id: String
+    let status: String
+    let source: String
+    let author: String
+    let summary: String
+    let changes: [String: JSONValue]
+    let createdAt: Date
+    let decidedAt: Date?
+
+    var sourceLabel: String {
+        switch source {
+        case "link": return "Σύνδεσμος γιατρού"
+        case "rollback": return "Επαναφορά"
+        case "baseline": return "Αρχική κατάσταση"
+        default: return "Εφαρμογή"
+        }
+    }
+
+    /// What the approver sees: new services with prices, or new information entries.
+    var previewLines: [String] {
+        var lines: [String] = []
+        if case .array(let services)? = changes["services"] {
+            for s in services {
+                let price = s["price"].map(\.text) ?? "—"
+                let minutes = s["durationMinutes"]?.text ?? s["duration_minutes"]?.text ?? "?"
+                lines.append("• \(s["name"]?.text ?? "?"): \(price), \(minutes)′")
+            }
+        }
+        // The decoder camel-cases dictionary keys too.
+        if case .object(let kb)? = changes["knowledgeBase"] ?? changes["knowledge_base"] {
+            for (k, v) in kb.sorted(by: { $0.key < $1.key }) { lines.append("• \(k): \(v.text)") }
+        }
+        return lines
+    }
+}
