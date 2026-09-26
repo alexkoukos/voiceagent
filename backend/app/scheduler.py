@@ -13,7 +13,7 @@ from app.database import async_session
 from app.models import (
     Appointment, AppointmentStatus, Call, CallStatus, Handoff, Notification, Practice, TranscriptEntry,
 )
-from app.storage import process_recording_deletions, queue_recording_deletion
+from app.storage import process_recording_deletions, queue_recording_deletion, seal_recordings
 
 logger = logging.getLogger("scheduler")
 
@@ -265,6 +265,8 @@ async def tick(now: datetime | None = None) -> None:
         await start_next_queued(db)
     notifications.kick()
     await process_recording_deletions()
+    async with async_session() as db:
+        await seal_recordings(db)
 
 
 async def run() -> None:
