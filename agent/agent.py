@@ -382,13 +382,18 @@ class ReceptionistAgent(PrankCallerAgent):
             staff: Same staff wording used in check_availability.
             appointment_id: From find_appointments, for reschedule or cancel.
         """
+        # Realtime speech models can invent a surname even when the separate STT got it
+        # right. A short, clearly spoken name in the latest caller turn wins over the
+        # model's tool argument; the backend still reads it back and requires a yes.
+        spoken_name = name_from_transcript(self._rc._last_user_text) if action == "book" else None
+        prepared_name = spoken_name or customer_name
         result = await self._rc.tool("prepare_action", {
             "action": action, "date": date or None, "time": time or None,
-            "service_id": service_id or None, "customer_name": customer_name or None,
+            "service_id": service_id or None, "customer_name": prepared_name or None,
             "staff": staff or None, "appointment_id": appointment_id or None,
         })
         if result.get("confirmation_id"):
-            self._rc.read_back(result)
+            self._rc.read_back(result, customer_name=prepared_name if action == "book" else None)
             return json.dumps({"next": "Wait for the caller to answer the spoken readback. Only a clear yes permits the action."})
         return json.dumps(result, ensure_ascii=False)
 
@@ -409,7 +414,8 @@ class ReceptionistAgent(PrankCallerAgent):
             name_uncertain: True if you're not sure you got the surname right.
         """
         return await self._tool("book_appointment", {
-            "date": date, "time": time, "service_id": service_id, "customer_name": customer_name,
+            "date": date, "time": time, "service_id": service_id,
+            "customer_name": self._rc._prepared_name or customer_name,
             "customer_phone": customer_phone or None, "staff": staff or None, "name_uncertain": name_uncertain,
         })
 
@@ -526,12 +532,14 @@ class ReceptionistAgent(PrankCallerAgent):
         await self._rc.stop_recording()
         return "recording stopped"
 
-    async def greet(self) -> None:
+    async def greet(self, *, wait_for_playout: bool = False) -> None:
         instruction = self._rc.metadata.get("greeting_instruction")
         if instruction:
             await self.session.generate_reply(instructions=instruction)
         elif self._rc.engine == "pipeline":
-            self.session.say(self._rc.metadata["greeting"], add_to_chat_ctx=True)
+            handle = self.session.say(self._rc.metadata["greeting"], add_to_chat_ctx=True)
+            if wait_for_playout:
+                await asyncio.wait_for(handle.wait_for_playout(), timeout=20)
         else:
             quote = "Πες ακριβώς αυτό" if self.language == "el" else "Say exactly this"
             await self.session.generate_reply(instructions=f"{quote}: {self._rc.metadata['greeting']}")
@@ -905,6 +913,7 @@ class ReceptionistCall:
         self._confirmation_id: str | None = None
         self._confirmation_floor = 0
         self._confirmation_armed = False
+        self._prepared_name: str | None = None
 
     def spawn(self, coro) -> None:
         t = asyncio.create_task(coro)
@@ -915,9 +924,10 @@ class ReceptionistCall:
         self._user_turn += 1
         self._last_user_text = text
 
-    def read_back(self, result: dict) -> None:
+    def read_back(self, result: dict, *, customer_name: str | None = None) -> None:
         self._confirmation_id = result["confirmation_id"]
         self._confirmation_armed = False
+        self._prepared_name = customer_name
         if self.engine == "pipeline":
             handle = self.session.say(result["say"], allow_interruptions=False)
         else:
@@ -942,6 +952,7 @@ class ReceptionistCall:
     def clear_confirmation(self) -> None:
         self._confirmation_id = None
         self._confirmation_armed = False
+        self._prepared_name = None
 
     async def tool(self, name: str, args: dict) -> dict:
         try:
@@ -1152,6 +1163,32 @@ def _plain(s: str) -> str:
     return "".join(c for c in s if unicodedata.category(c) != "Mn").replace("ς", "σ")
 
 
+def name_from_transcript(text: str) -> str | None:
+    """Extract only a standalone full name or an explicit name correction."""
+    if len(text) > 100:
+        return None
+    name = text.strip().strip(" .,!?;:·…")
+    without_negation = re.sub(r"^(?:όχι|οχι|λάθος|λαθος|no|wrong)[\s,.!?;:·]+", "", name, flags=re.I)
+    without_intro = re.sub(
+        r"^(?:με λένε|λένε|λέγομαι|ονομάζομαι|το όνομά μου είναι|"
+        r"my name is|i am|i'm)[\s]+", "", without_negation, flags=re.I,
+    ).strip(" .,!?;:·…")
+    explicit_name = without_intro != without_negation
+    name = without_intro
+    words = name.split()
+    if not 2 <= len(words) <= 3:
+        return None
+    if any(not re.fullmatch(r"[^\W\d_]+(?:['’-][^\W\d_]+)*", word) for word in words):
+        return None
+    if not explicit_name and not all(word[0].isupper() for word in words):
+        return None
+    if any(_plain(word) in {"ναι", "οχι", "σωστα", "πεντε", "τεταρτο", "ενταξει",
+                            "yes", "no", "correct", "okay"}
+           for word in words):
+        return None
+    return " ".join(words)
+
+
 async def say_busy_and_leave(ctx: JobContext, engine: str, busy: dict) -> None:
     """All lines busy (G8): one line, then hang up."""
     session = build_session(ctx, engine, busy.get("voice", "default"), busy.get("language", "el"))
@@ -1278,8 +1315,13 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
         await report(call_id, _retries=5, **event)
 
     ctx.add_shutdown_callback(_finish)
+    web = metadata.get("direction") == "web"
+    if web:
+        # Finish the opening before listening: an early browser-mic turn can interrupt
+        # Gemini's greeting and make it start the same sentence a second time.
+        session.input.set_audio_enabled(False)
     await session.start(agent=agent, room=ctx.room, room_options=room_options(
-        web=metadata.get("direction") == "web", caller_identity=rc.caller_identity,
+        web=web, caller_identity=rc.caller_identity,
     ))
     if dialing:
         # Let the customer say "Εμπρός;" first (and hear a voicemail greeting before speaking).
@@ -1290,7 +1332,11 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
             await asyncio.sleep(0.8)
         except asyncio.TimeoutError:
             pass
-    await agent.greet()
+    try:
+        await agent.greet(wait_for_playout=web)
+    finally:
+        if web:
+            session.input.set_audio_enabled(True)
 
 
 # "English" as the Greek transcriber writes it too ("ίνγκλις", "ένγκλις",
