@@ -26,11 +26,14 @@ import difflib
 import json
 import logging
 import os
+import re
+import uuid
+from collections.abc import Callable
 
 import httpx
 from google.genai import types as genai_types
 from google.protobuf.duration_pb2 import Duration
-from livekit import api
+from livekit import api, rtc
 from livekit.agents import inference, room_io
 from livekit.agents import (
     Agent,
@@ -598,6 +601,7 @@ def scribe_stt(language: str, keyterms: list[str] | None = None):
 GREEK_VOCABULARY = [
     "ρε", "μωρέ", "κομπλέ", "γαμώτο", "άσ' το", "θα 'ρθω", "κάνα", "τίποτα", "εντάξει", "μπορείς",
     "απογευματάκι", "πρωινό", "ραντεβουδάκι", "ρε φίλε", "έλα", "λέγε", "άντε", "οκ", "ναι ρε",
+    "English", "ίνγκλις", "ένγκλις", "αγγλικά",
 ]
 
 
@@ -780,11 +784,46 @@ async def pick_engine(call_id: str, receptionist: bool = False) -> str:
     return engine
 
 
-def track_transcript(session: AgentSession, call_id: str, engine: str) -> None:
+async def publish_web_transcript(
+    room: rtc.Room, role: str, text: str, caller_identity: str, language: str,
+) -> None:
+    """Publish final CallerTurns text, not the realtime model's raw events."""
+    if role == "friend" and language == "el":
+        # Gemini's fallback transcript can turn Greek audio into Spanish/Italian text.
+        # Keep an explicit "English" request so the caller can change language.
+        if not re.search(r"[\u0370-\u03ff\u1f00-\u1fff]", text) and wants_language(text) != "en":
+            return
+    if not room.isconnected():
+        return
+    identity = caller_identity if role == "friend" else room.local_participant.identity
+    participant = room.remote_participants.get(identity) if role == "friend" else room.local_participant
+    track_sid = ""
+    if participant:
+        track_sid = next((p.sid for p in participant.track_publications.values()
+                          if p.source == rtc.TrackSource.SOURCE_MICROPHONE), "")
+    try:
+        await room.local_participant.publish_transcription(rtc.Transcription(
+            participant_identity=identity,
+            track_sid=track_sid,
+            segments=[rtc.TranscriptionSegment(
+                id=uuid.uuid4().hex, text=text, start_time=0, end_time=0,
+                language=language, final=True,
+            )],
+        ))
+    except Exception:
+        logger.exception("could not publish web transcript")
+
+
+def track_transcript(
+    session: AgentSession, call_id: str, engine: str, *, room: rtc.Room | None = None,
+    caller_identity: str | None = None, language: Callable[[], str] | None = None,
+) -> None:
     def _line(role: str, text: str) -> None:
         # What each side said, to judge recognition and language from the logs.
         logger.info("call %s %s: %s", call_id, role, text)
         asyncio.create_task(report(call_id, transcript_role=role, transcript_text=text))
+        if room is not None and caller_identity and language:
+            asyncio.create_task(publish_web_transcript(room, role, text, caller_identity, language()))
 
     @session.on("conversation_item_added")
     def _on_item(ev) -> None:
@@ -833,6 +872,10 @@ def room_options(web: bool = False, caller_identity: str | None = None) -> room_
     if NOISE_CANCELLATION:
         nc = noise_cancellation.BVC() if web else noise_cancellation.BVCTelephony()
     kwargs = {"participant_identity": caller_identity} if caller_identity else {}
+    if web:
+        # Web calls publish final lines from track_transcript. RoomIO would also forward
+        # Gemini's unreliable raw user transcripts to the browser.
+        kwargs["text_output"] = False
     return room_io.RoomOptions(audio_input=room_io.AudioInputOptions(noise_cancellation=nc), **kwargs)
 
 
@@ -1183,7 +1226,12 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
 
     agent = rc.make_agent(rc.language)
     rc.agent = agent
-    track_transcript(session, call_id, rc.engine)
+    track_transcript(
+        session, call_id, rc.engine,
+        room=ctx.room if metadata.get("direction") == "web" else None,
+        caller_identity=rc.caller_identity,
+        language=lambda: rc.language,
+    )
     log_latency(session, call_id)
     guard_repetition(session, ctx, call_id)
     rc.track_latency()
@@ -1245,9 +1293,9 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
     await agent.greet()
 
 
-# "English mode" as the Greek transcriber writes it too ("ίνγκλις", "αγγλικά"); accents are
-# folded by _plain. "Greek mode" / "ελληνικά" switches back.
-ENGLISH_MODE = ("english", "inglis", "ινγκλ", "ιγκλ", "ινγλ", "ιγγλ", "αγγλικ")
+# "English" as the Greek transcriber writes it too ("ίνγκλις", "ένγκλις",
+# "αγγλικά"); accents are folded by _plain. "Greek" / "ελληνικά" switches back.
+ENGLISH_MODE = ("english", "inglis", "ινγκλ", "ενγκλ", "ιγκλ", "εγκλ", "ινγλ", "ιγγλ", "εγγλ", "αγγλικ")
 GREEK_MODE = ("greek", "γκρικ", "ελληνικ")
 LANGUAGE_MODE_LINE = {
     "en": "English mode. How can I help you?",
