@@ -26,7 +26,7 @@ Calendar behavior follows Google's [Events list API](https://developers.google.c
 - Booking offers no slots on those days; `hours_state` finds the next opening after a long closure; `check_availability` returns `business_closed` or `staff_away` with spoken dates, and next free days are searched from the end of the closure.
 - The agent's prompt lists current and upcoming closures, and both prompt files tell it to say the dates and offer the next free day or a message.
 - `GET/POST /practices/<id>/closures`, `DELETE /practices/<id>/closures/<closure_id>`. A new closure returns the booked appointments inside it (`to_rebook`) and emails them to the business once.
-- Tests: `backend/tests/test_closures.py` (slot blocking, next opening, agent output, endpoint). 50 tests pass. Not deployed; no real call yet. OP3's "the doctor says it by phone or SMS" belongs to OP2 and is not built.
+- Tests: `backend/tests/test_closures.py` (slot blocking, next opening, agent output, endpoint). 50 tests pass. Not deployed; no real call yet. OP3's "the doctor says it by phone or SMS" was built with OP2 by SMS and phone (below); on 2026-09-26 a test covers it end to end (see "Recording settings, trunk check, OP3").
 
 ## Changes after go-live (OP2, part), 2026-09-25
 
@@ -78,9 +78,9 @@ The 2.0 PRD file is kept local (gitignored) and was not available in the cloud s
 | Staff (R2) | Done | `POST /practices/<id>/staff` now rejects unknown `service_ids` (422). iOS: add staff from the go-live checklist. |
 | O1 Google profile, O2 price list, O4 approval queue | Done | Unchanged. Need `GOOGLE_MAPS_API_KEY` / `GEMINI_API_KEY`. |
 | O3 calendars | Built, needs credentials | Checklist item `calendars`: every calendar of the practice and its active staff needs a doctor sign-in or the service account. Needs `GOOGLE_OAUTH_CLIENT_ID/SECRET` or `GOOGLE_SERVICE_ACCOUNT_JSON`. |
-| O5 number and forwarding | Blocked on the Greek DID | Checklist `numbers` (required) and `forwarding` (optional, confirmed by hand after dialing the codes). `scripts/setup_inbound.py` still has to be run per number. |
+| O5 number and forwarding | Blocked on the Greek DID | Checklist `numbers` (required), `numbers_on_trunk` (optional, 2026-09-26: each number is on a LiveKit inbound trunk) and `forwarding` (optional, confirmed by hand after dialing the codes). `scripts/setup_inbound.py` still has to be run per number. |
 | G1 AI disclosure | Done | A custom greeting must say it's a digital/AI assistant; the default one does. |
-| G7 recording notice | Open (owner's decision) | Required checklist item: the greeting must say the call is recorded. No greeting says so yet (still testing). |
+| G7 recording notice | Built 2026-09-26 | Per-practice `recording_enabled` and `recording_notice` (migration 0020). Satisfied when the notice is on, recording is off, or a custom greeting already says it. Existing practices (the live demo) keep recording on and the notice off until switched in the app. |
 | G2 DPA | Record built, text needs a lawyer | `PUT /practices/<id>/onboarding` with `dpa: {signed_on, signed_by}`. The DPA text itself is not written. |
 | Test call (M0) | Done | Counted from a completed inbound/web call, or confirmed by hand. |
 | Notifications, OP1 fallback, OP9 alerts, OP8 encryption | Built, needs credentials | Shown as `not_configured` when SMTP, Telnyx SMS, `FOUNDER_*` or `DATA_ENCRYPTION_KEY` are missing. Email is required, the rest are warnings. |
@@ -89,6 +89,14 @@ The 2.0 PRD file is kept local (gitignored) and was not available in the cloud s
 - Migration 0019 adds `practices.onboarding` (JSON). Checked on a local Postgres 16: upgrade, downgrade, upgrade. Not deployed.
 - Tests: `backend/tests/test_go_live.py` (5 unit, 2 Postgres). 85 tests pass against Postgres. Endpoints also checked over HTTP with a local server.
 - iOS: `OnboardingView.swift` (new business, checklist, DPA, confirmations, staff) plus entries in Γραμματεία and Ρυθμίσεις. Not compiled (Linux session): build it in Xcode before installing.
+
+## Recording settings, trunk check, OP3 — 2026-09-26
+
+- **G7 per practice:** `practices.recording_enabled` (default on) and `practices.recording_notice` (migration 0020; existing rows get on/off, so nothing changes for the live demo; `POST /practices` defaults the notice to on). With the notice, the greeting says in Greek or English that the call is recorded and the caller can ask for it to be deleted (placed before the closing question; a custom greeting that already mentions recording is left alone); outbound reminder/waitlist openings get the same instruction; web demo calls (never recorded) and the OP1 test call never say it. With recording off the metadata has `record: false`, the agent starts no egress, `stop_recording` answers "not recorded", and the prompt tells the agent to say the call isn't recorded. Settings: `GET/PUT /practices/<id>/recording` (omitted fields stay), and the fields in `PracticeIn`/`PracticeOut` (omitted on a full update = unchanged, so older app builds never flip them). iOS: "Ηχογράφηση" section in Ρυθμίσεις (uncompiled).
+- **Checklist `numbers_on_trunk` (O5, optional):** lists LiveKit inbound SIP trunks (`livekit-api`, 3 s timeout, cached 5 min; failures cached 30 s) and reports numbers that aren't on one. A trunk with no numbers accepts any number. `not_configured` without LiveKit credentials, `unknown` when LiveKit can't be reached; the checklist always loads. Optional because a LiveKit outage must not block go-live; the required test call catches a missing trunk anyway.
+- **OP3 by phone/SMS:** already built as part of OP2 (`app/admin_changes.py`: closures and staff leave by SMS or by phone after the PIN; staff can only set their own leave; the reply counts appointments to rebook and the business gets the rebooking email). Added a test for leave by phone, the rebook count, and removal by SMS.
+- Tests: `backend/tests/test_recording_settings.py`, the OP3 test in `test_admin_changes.py`, and an agent test (no egress when recording is off). 92 backend tests pass against Postgres 16 (42 without it); 14 agent tests pass. Migration 0020 checked up/down/up on Postgres 16 with an existing row. Not deployed; no real call.
+- **Not done here (not code-only):** DPA text (lawyer), Greek DID and `setup_inbound.py`, credentials (SMTP, Telnyx SMS, Google OAuth, founder alerts), moving to EU West, the M0/M1 voice acceptance calls, push (paid Apple account), agent health probe (memory), key rotation. The `datetime.utcnow()` deprecation cleanup is code-only but touches naive timestamps across every table; left for its own change.
 
 ## Deployment: move backend + Postgres to EU West (before Greek go-live), 2026-09-26
 

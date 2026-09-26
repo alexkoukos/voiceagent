@@ -5,7 +5,7 @@ See [README.md](README.md) for layout, setup and deploy, and the PRD for the spe
 ## Direction change (2026-09-25, not yet deployed)
 - Calls are now professional, not pranks: no reveal, never mentions Alexandros. It still says it's an AI if asked directly, and deletes the recording on request.
 - Receptionist language (2026-09-25, owner's rule): every call starts in Greek, whatever the caller's number. English only when the caller says "English mode" (also "ίνγκλις", "αγγλικά"); "Greek mode"/"ελληνικά" switches back. The agent matches this in code on the Deepgram transcript (`wants_language`), never the model: Gemini Live misheard casual Greek as another language and refused with "I only speak Greek and English". That refusal line is gone. New soft male voice `Algieba`; receptionist practices default to Gemini `Zubenelgenubi` (2026-09-25).
-- Still in testing, so no up-front "this call is recorded" notice. Add one (or turn recording off) before real use: Greek law generally requires it.
+- Recording notice (2026-09-26, not deployed): per practice, `recording_notice` makes the greeting say the call is recorded and can be deleted; `recording_enabled` off means no egress at all. Existing practices (the live demo) still record with no notice; new ones start with the notice on. Turn the notice on (or recording off) before real use: Greek law generally requires it.
 
 ## 2.0 receptionist (2026-09-25, feature implementation)
 Current reliability fixes and remaining acceptance gaps are tracked in `PRD_STATUS.md`; feature presence does not mean every PRD requirement has been verified.
@@ -24,6 +24,10 @@ Spec: `AI Voice Receptionist 2.0 PRD.md`. Migrations 0012 + 0013. Nothing has ru
 ## Onboarding checklist (2026-09-26, not deployed)
 - New practice from the app: Γραμματεία → + (vertical template, name, number, email, demo slug). Then Ρυθμίσεις → "Έναρξη λειτουργίας": `GET /practices/<id>/onboarding` lists required/optional items, `PUT` records the DPA and hand confirmations, `POST .../go-live` records `live_at` (a record, not a gate). Migration 0019 (`practices.onboarding`).
 - Creation now rejects a number another active practice uses, unknown verticals, and staff with unknown service ids. Swift is uncompiled. Details in `PRD_STATUS.md` ("Onboarding").
+
+## Recording settings and trunk check (2026-09-26, not deployed)
+- Migration 0020: `practices.recording_enabled`, `practices.recording_notice`; `GET/PUT /practices/<id>/recording`; iOS toggles in Ρυθμίσεις → "Ηχογράφηση" (uncompiled). The G7 checklist item is met by the notice or by recording off.
+- Checklist `numbers_on_trunk` asks LiveKit which numbers are on inbound trunks (3 s max, cached); `unknown`/`not_configured` never break the checklist. OP3 by phone/SMS was already built with OP2 and now has a test. Details in `PRD_STATUS.md`.
 
 ## Checkpoint (2026-09-25, end of session)
 
