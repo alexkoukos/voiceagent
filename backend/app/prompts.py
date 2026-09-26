@@ -152,10 +152,9 @@ def build_receptionist_prompt(
 
 
 def default_greeting(practice, *, language: str) -> str:
-    """Opening line: only that it's the digital assistant and how it can help (the owner's
-    choice, 2026-09-25). A greeting set on the practice replaces it."""
+    """Opening line in the practice's language. A custom greeting replaces it."""
     if practice.greeting.strip():
         return practice.greeting.strip()
     if language == "el":
-        return "Είμαι ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω;"
+        return "Είμαι ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω; Για αγγλικά, πείτε «English»."
     return "I'm a digital assistant, how can I help you?"
