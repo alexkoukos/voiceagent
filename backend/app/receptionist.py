@@ -214,6 +214,9 @@ async def build_metadata(
     rules = routing.rules_for(practice)
     purpose = await _purpose(db, practice, call, staff, language)
     _, admin = await _admin(db, call)
+    # G7: web demo calls are never recorded; a practice can turn recording off for every call.
+    record = call.direction != "web" and practice.recording_enabled is not False
+    notice = record and bool(practice.recording_notice) and call.purpose != "test"
 
     def prompt_for(lang: str) -> str:
         prompt = build_receptionist_prompt(
@@ -231,13 +234,19 @@ async def build_metadata(
                        "(closure, leave, hours, a price, information), first call stop_recording, then ask for the PIN and call admin_login. Then "
                        "admin_change with their words, read say_and_ask, and wait for a clear yes or no before "
                        "admin_confirm. Never repeat the PIN.\n")
+        if not record:
+            prompt += ("\nΑυτή η κλήση ΔΕΝ ηχογραφείται. Αν ρωτήσουν, πες ότι δεν ηχογραφείται.\n" if lang == "el"
+                       else "\nThis call is NOT recorded. If asked, say it isn't.\n")
         return prompt
 
-    record = call.direction != "web"
-    greeting = default_greeting(practice, language=language)
+    greeting = default_greeting(practice, language=language, recording_notice=notice)
     instruction = None
     if purpose:
         instruction = purpose["greeting_" + ("el" if language == "el" else "en")]
+        if notice:
+            instruction += (" Πες επίσης σύντομα ότι η κλήση ηχογραφείται και ότι μπορεί να ζητήσει να σβηστεί."
+                            if language == "el" else
+                            " Also say briefly that the call is recorded and they can ask for it to be deleted.")
     meta = {
         "mode": "receptionist",
         "call_id": call.id,
@@ -251,7 +260,11 @@ async def build_metadata(
         "language": language,
         "language_name": english_name(language),
         "max_duration_seconds": call.max_duration_seconds,
+        # G7: `record` is what the agent obeys (egress or not); the practice setting and whether
+        # the greeting carries the notice ride along for the logs.
         "record": record,
+        "recording_enabled": practice.recording_enabled is not False,
+        "recording_notice": notice,
         "emergency": {
             "enabled": rules["emergency"]["enabled"],
             "phrases": rules["emergency"]["phrases"],

@@ -103,3 +103,37 @@ async def test_first_availability_lookup_uses_the_recognized_caller_day():
     )
     assert sent[1]["when"] == "Την άλλη Τρίτη το απόγευμα"
     assert rc._availability_checked is True
+
+
+@pytest.mark.asyncio
+async def test_practice_with_recording_off_starts_no_egress(monkeypatch):
+    started = []
+
+    async def fake_egress(lk, room, call_id):
+        started.append(call_id)
+        return "key", "egress"
+
+    monkeypatch.setattr(worker, "start_recording_with_id", fake_egress)
+    monkeypatch.setattr(worker, "storage_configured", lambda: True)
+    monkeypatch.setattr(worker.api, "LiveKitAPI", lambda: SimpleNamespace(aclose=lambda: _done()))
+
+    async def _done():
+        return None
+
+    for metadata, expected in (({"record": False, "recording_enabled": False}, []),
+                               ({"record": True, "recording_enabled": False}, []),
+                               ({"record": True, "recording_enabled": True}, ["c1"])):
+        started.clear()
+        rc = SimpleNamespace(metadata=metadata, call_id="c1", ctx=SimpleNamespace(room=SimpleNamespace(name="r")),
+                             recording_key=None, egress_id=None)
+        await worker.ReceptionistCall.start_recording(rc)
+        assert started == expected, metadata
+
+    stopped = []
+
+    async def stop():
+        stopped.append(True)
+
+    receiver = SimpleNamespace(_rc=SimpleNamespace(metadata={"record": False}, stop_recording=stop))
+    assert "not recorded" in await worker.ReceptionistAgent.stop_recording.__wrapped__(receiver)
+    assert not stopped

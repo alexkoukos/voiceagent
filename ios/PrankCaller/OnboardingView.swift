@@ -101,6 +101,7 @@ struct OnboardingView: View {
     private static let labels: [String: String] = [
         "hours": "Ωράριο", "services": "Υπηρεσίες και διάρκειες", "knowledge_base": "Πληροφορίες (διεύθυνση κ.λπ.)",
         "staff": "Προσωπικό", "calendars": "Ημερολόγια Google", "numbers": "Αριθμός του βοηθού",
+        "numbers_on_trunk": "Αριθμός στο LiveKit (SIP trunk)",
         "forwarding": "Προώθηση κλήσεων", "ai_disclosure": "Λέει ότι είναι ψηφιακός βοηθός",
         "recording_notice": "Ενημέρωση για ηχογράφηση", "dpa": "Σύμβαση επεξεργασίας (DPA)",
         "email": "Email περιλήψεων", "sms": "SMS", "fallback_number": "Αριθμός αν πέσει ο βοηθός",
@@ -168,6 +169,7 @@ struct OnboardingView: View {
         case "ok": return "checkmark.circle.fill"
         case "not_configured": return "wrench.and.screwdriver"
         case "warning": return "exclamationmark.circle"
+        case "unknown": return "questionmark.circle"
         default: return "circle"
         }
     }

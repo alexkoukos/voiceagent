@@ -5,20 +5,24 @@ so the owner sees every imported field before the agent says it (O4); approving 
 in one step and it can be rolled back like any other version.
 """
 
+import asyncio
 import base64
 import json
 import logging
 import re
+import time
 from html import unescape
 from urllib.parse import unquote
 
 import httpx
+from livekit import api
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import config_changes
 from app.booking import WEEKDAY_KEYS
 from app.config import get_settings
 from app.models import ConfigVersion, Practice
+from app.prompts import mentions_recording
 
 logger = logging.getLogger(__name__)
 
@@ -252,16 +256,11 @@ def forwarding_codes(target: str, mode: str, no_answer_seconds: int = 20) -> lis
 
 AI_WORDS = ("ψηφιακ", "τεχνητ", "αυτόματ", "a.i.", "digital assistant", "virtual assistant", "artificial",
             "automated")
-RECORDING_WORDS = ("ηχογραφ", "καταγράφ", "καταγραφ", "record")
 
 
 def discloses_ai(text: str) -> bool:
     text = text.lower()
     return any(w in text for w in AI_WORDS) or re.search(r"\bai\b", text) is not None
-
-
-def mentions_recording(text: str) -> bool:
-    return any(w in text.lower() for w in RECORDING_WORDS)
 
 
 def _item(id_: str, prd: str | None, ok: bool, detail: str, *, required: bool = True,
@@ -276,8 +275,9 @@ def _item(id_: str, prd: str | None, ok: bool, detail: str, *, required: bool = 
 
 
 def checklist(practice: Practice, staff: list, connected_calendars: set[str], answered_calls: int,
-              settings=None) -> list[dict]:
-    """Pure: everything is passed in, so it is testable without a database."""
+              settings=None, trunk: dict | None = None) -> list[dict]:
+    """Pure: everything is passed in, so it is testable without a database. `trunk` is
+    trunk_numbers()' result; None reports the trunk check as not configured."""
     s = settings or get_settings()
     state = practice.onboarding or {}
     notif = practice.notifications or {}
@@ -305,14 +305,19 @@ def checklist(practice: Practice, staff: list, connected_calendars: set[str], an
 
     items.append(_item("numbers", "O5", bool(practice.phone_numbers),
                        "No number for the agent: buy a Greek DID, add it here, run scripts/setup_inbound.py."))
+    items.append(_trunk_item(practice.phone_numbers or [], trunk))
     items.append(_item("forwarding", "O5", bool(state.get("forwarding_confirmed_at")),
                        "Dial the forwarding codes on the business phone, then confirm here.", required=False))
 
     greeting = practice.greeting or ""
     items.append(_item("ai_disclosure", "G1", not greeting.strip() or discloses_ai(greeting),
                        "The custom greeting must say it is a digital (AI) assistant."))
-    items.append(_item("recording_notice", "G7", mentions_recording(greeting),
-                       "The greeting must say the call is recorded (Greek law) before real use."))
+    # G7: callers must hear that the call is recorded, unless nothing is recorded.
+    recording = getattr(practice, "recording_enabled", True) is not False
+    notice = bool(getattr(practice, "recording_notice", False)) or mentions_recording(greeting)
+    items.append(_item("recording_notice", "G7", not recording or notice,
+                       "Calls are recorded but the greeting doesn't say so (Greek law): turn on the recording "
+                       "notice, or turn recording off."))
     dpa = state.get("dpa") or {}
     items.append(_item("dpa", "G2", bool(dpa.get("signed_on")), "Record the signed data processing agreement."))
 
@@ -338,6 +343,70 @@ def checklist(practice: Practice, staff: list, connected_calendars: set[str], an
     return items
 
 
+# --- number on the LiveKit inbound trunk (O5) ---
+#
+# A number that isn't on an inbound SIP trunk never reaches the agent: LiveKit rejects the call
+# before any job starts. Checked live (at most TRUNK_TIMEOUT seconds) and cached, so the
+# checklist stays fast; any failure reads "unknown" and never breaks the checklist.
+
+TRUNK_TIMEOUT = 3.0
+TRUNK_CACHE_SECONDS = 300
+TRUNK_ERROR_CACHE_SECONDS = 30
+_trunk_cache: tuple[float, dict] | None = None
+
+
+def _digits(number: str) -> str:
+    return re.sub(r"\D", "", number or "")
+
+
+async def _list_inbound_trunks(s) -> list:
+    async with api.LiveKitAPI(s.livekit_url, s.livekit_api_key, s.livekit_api_secret) as lk:
+        return list((await lk.sip.list_inbound_trunk(api.ListSIPInboundTrunkRequest())).items)
+
+
+async def trunk_numbers(settings=None) -> dict:
+    """{"status": "ok", "numbers": [digits...], "any_number": bool}, {"status": "not_configured"}
+    or {"status": "unknown", "error": ...}. A trunk with no numbers takes calls to any number."""
+    global _trunk_cache
+    s = settings or get_settings()
+    if not (getattr(s, "livekit_url", "") and getattr(s, "livekit_api_key", "")
+            and getattr(s, "livekit_api_secret", "")):
+        return {"status": "not_configured"}
+    now = time.monotonic()
+    if _trunk_cache is not None and now < _trunk_cache[0]:
+        return _trunk_cache[1]
+    try:
+        trunks = await asyncio.wait_for(_list_inbound_trunks(s), timeout=TRUNK_TIMEOUT)
+        numbers = sorted({_digits(n) for t in trunks for n in t.numbers})
+        result = {"status": "ok", "numbers": numbers, "any_number": any(not t.numbers for t in trunks)}
+        _trunk_cache = (now + TRUNK_CACHE_SECONDS, result)
+    except Exception as e:  # timeout, auth, network: the checklist still loads
+        logger.warning("inbound trunk check failed: %r", e)
+        result = {"status": "unknown", "error": (repr(e) or type(e).__name__)[:200]}
+        _trunk_cache = (now + TRUNK_ERROR_CACHE_SECONDS, result)
+    return result
+
+
+def _trunk_item(numbers: list[str], trunk: dict | None) -> dict:
+    item_id, what = "numbers_on_trunk", "Every number must be on a LiveKit inbound trunk (scripts/setup_inbound.py)."
+    if not numbers:
+        return _item(item_id, "O5", False, "Add the agent's number first.", required=False)
+    status = (trunk or {}).get("status", "not_configured")
+    if status == "not_configured":
+        return _item(item_id, "O5", False, "LIVEKIT_URL/LIVEKIT_API_KEY/LIVEKIT_API_SECRET not set: can't check. " + what,
+                     required=False, not_configured=True)
+    if status != "ok":
+        item = _item(item_id, "O5", False, "Couldn't reach LiveKit to check the trunk; try again. " + what,
+                     required=False)
+        return item | {"status": "unknown"}
+    if trunk.get("any_number"):
+        return _item(item_id, "O5", True, "", required=False)
+    missing = [n for n in numbers if _digits(n) not in set(trunk.get("numbers") or [])]
+    return _item(item_id, "O5", not missing,
+                 f"Not on an inbound trunk, so calls never reach the agent: {', '.join(missing)}. "
+                 "Run scripts/setup_inbound.py with them.", required=False)
+
+
 def ready(items: list[dict]) -> bool:
     return all(i["status"] == "ok" for i in items if i["required"])
 
@@ -353,6 +422,6 @@ async def readiness(db: AsyncSession, practice: Practice) -> dict:
     answered = (await db.execute(select(func.count()).select_from(Call).where(
         Call.practice_id == practice.id, Call.direction.in_(("inbound", "web")),
         Call.status == CallStatus.completed))).scalar_one()
-    items = checklist(practice, staff, connected, answered)
+    items = checklist(practice, staff, connected, answered, trunk=await trunk_numbers())
     state = practice.onboarding or {}
     return {"ready": ready(items), "live_at": state.get("live_at"), "dpa": state.get("dpa"), "items": items}

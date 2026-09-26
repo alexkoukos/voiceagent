@@ -17,7 +17,7 @@ from app.models import (
 )
 from app.schemas import (
     AppointmentCreate, AppointmentMove, AppointmentOut, AdminLinkIn, AdminLinkOut, CallReview, ClosureIn, ClosureOut, ConfigVersionOut, DeviceIn, HandoffJoin, HandoffOut,
-    MessageOut, MessageUpdate, PracticeIn, PracticeOut, ReceptionistCallDetail, ReceptionistCallOut, StaffIn,
+    MessageOut, MessageUpdate, PracticeIn, PracticeOut, ReceptionistCallDetail, ReceptionistCallOut, RecordingSettings, StaffIn,
     StaffOut, WaitlistOut,
 )
 
@@ -97,7 +97,8 @@ def _check_staff_services(practice: Practice, payload: StaffIn) -> None:
 async def create_practice(payload: PracticeIn, db: AsyncSession = Depends(get_db)):
     _check_vertical(payload.vertical)
     await _check_numbers(db, payload.phone_numbers)
-    practice = Practice(**payload.to_columns())
+    # G7: new practices record and say so; existing rows kept the old behaviour (migration 0020).
+    practice = Practice(**({"recording_enabled": True, "recording_notice": True} | payload.to_columns()))
     db.add(practice)
     return await _save(db, practice)
 
@@ -126,6 +127,23 @@ async def update_practice(practice_id: str, payload: PracticeIn, db: AsyncSessio
     for k, v in columns.items():
         setattr(practice, k, v)
     return await _save(db, practice)
+
+
+@router.get("/{practice_id}/recording", response_model=RecordingSettings)
+async def get_recording(practice_id: str, db: AsyncSession = Depends(get_db)):
+    practice = await _get(db, practice_id)
+    return RecordingSettings(recording_enabled=practice.recording_enabled, recording_notice=practice.recording_notice)
+
+
+@router.put("/{practice_id}/recording", response_model=RecordingSettings)
+async def set_recording(practice_id: str, payload: RecordingSettings, db: AsyncSession = Depends(get_db)):
+    """G7: recording on/off and the "this call is recorded" line in the greeting. Applies from the next call."""
+    practice = await _get(db, practice_id)
+    for key in ("recording_enabled", "recording_notice"):
+        if getattr(payload, key) is not None:
+            setattr(practice, key, getattr(payload, key))
+    await db.commit()
+    return await get_recording(practice_id, db)
 
 
 @router.websocket("/{practice_id}/ws")

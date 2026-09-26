@@ -1,12 +1,16 @@
-"""OP2 by SMS and by phone: only registered staff, readback then yes, PIN with lockout."""
+"""OP2 (and OP3 closures/leave) by SMS and by phone: only registered staff, readback then yes,
+PIN with lockout."""
 
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app import admin_changes, receptionist
-from app.models import AdminRequest, Call, CallStatus, ConfigVersion, Practice, Staff, TranscriptEntry, TranscriptRole
+from app.models import (
+    AdminRequest, Appointment, Call, CallStatus, ConfigVersion, Practice, Staff, TranscriptEntry, TranscriptRole,
+)
 from app.routers import ops
 from app.schemas import AdminChangeArgs, AdminConfirmArgs, AdminLoginArgs, AdminPinIn
 from sqlalchemy import select
@@ -116,3 +120,40 @@ async def test_phone_pin_lockout_and_change(sessions, monkeypatch):
         meta = await receptionist.build_metadata(db, practice, call2)
         assert "admin_login" in meta["prompt"]
         assert "admin_login" not in (await receptionist.build_metadata(db, practice, stranger))["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_op3_leave_by_phone_rebook_count_and_removal_by_sms(sessions, monkeypatch):
+    """OP3 "the doctor says it by phone or SMS": staff leave by phone (PIN), the reply counts the
+    appointments to rebook, and the closure can be removed again by SMS."""
+    later = (datetime.now(timezone.utc) + timedelta(days=12)).date()
+    parse = AsyncMock()
+    monkeypatch.setattr(admin_changes, "parse", parse)
+    now = datetime.now(timezone.utc)
+    async with sessions() as db:
+        practice, owner, nurse = await _setup(db)
+        start = datetime(later.year, later.month, later.day, 10, tzinfo=ZoneInfo("Europe/Athens"))
+        db.add(Appointment(practice_id=practice.id, customer_name="Ada", service_id="clean",
+                           service_name="Καθαρισμός", starts_at=start, ends_at=start + timedelta(minutes=30),
+                           staff_id=nurse.id))
+        await db.commit()
+        await ops.set_admin_pin(practice.id, AdminPinIn(pin="4821"), db)
+
+        call = Call(practice_id=practice.id, direction="inbound", caller_number=NURSE, persona="", scenario="",
+                    status=CallStatus.active)
+        db.add(call)
+        await db.commit()
+        assert (await receptionist.tool_admin_login(db, call, AdminLoginArgs(pin="4821")))["ok"]
+        parse.return_value = {"action": "closure", "date_from": later.isoformat(), "date_to": later.isoformat()}
+        out = await receptionist.tool_admin_change(db, call, AdminChangeArgs(request="λείπω τότε"))
+        assert "Γιώργος" in out["say_and_ask"]
+        said = (await receptionist.tool_admin_confirm(db, call, AdminConfirmArgs(yes=True)))["say"]
+        assert said.startswith("Έγινε") and "1 ραντεβού" in said
+        closures = (await db.get(Practice, practice.id)).rules["closures"]
+        assert len(closures) == 1 and closures[0]["staff_id"] == nurse.id
+
+        # The same person removes it by SMS; only their own.
+        parse.return_value = {"action": "remove_closure", "date_from": later.isoformat()}
+        assert "ΝΑΙ ή ΟΧΙ" in await admin_changes.handle_sms(db, NURSE, "+302100000000", "τελικά έρχομαι", now)
+        assert await admin_changes.handle_sms(db, NURSE, "+302100000000", "ναι", now) == "Έγινε."
+        assert not (await db.get(Practice, practice.id)).rules["closures"]

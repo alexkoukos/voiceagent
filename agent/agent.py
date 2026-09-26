@@ -559,6 +559,8 @@ class ReceptionistAgent(PrankCallerAgent):
     @function_tool
     async def stop_recording(self) -> str:
         """Stops recording the call, when the caller doesn't want to be recorded. The call goes on."""
+        if not self._rc.metadata.get("record"):
+            return "this call is not recorded"
         await self._rc.stop_recording()
         return "recording stopped"
 
@@ -1178,7 +1180,11 @@ class ReceptionistCall:
     # --- recording (G7) ---
 
     async def start_recording(self) -> None:
-        if not self.metadata.get("record") or not storage_configured():
+        # The practice can turn recording off (G7): then no egress starts at all.
+        if not self.metadata.get("record") or self.metadata.get("recording_enabled") is False:
+            logger.info("call %s: recording off for this call", self.call_id)
+            return
+        if not storage_configured():
             return
         lk = api.LiveKitAPI()
         try:

@@ -204,7 +204,8 @@ struct OnboardingItem: Codable, Identifiable {
     let id: String
     let prd: String?
     let required: Bool
-    /// ok, todo (the business), not_configured (a server credential) or warning (optional)
+    /// ok, todo (the business), not_configured (a server credential), warning (optional)
+    /// or unknown (a live check, like the LiveKit trunk, could not run)
     let status: String
     let detail: String
 }
@@ -376,6 +377,12 @@ struct CallerExport: Decodable {
         appointments = try c.decode([JSONValue].self, forKey: .appointments).count
         messages = try c.decode([JSONValue].self, forKey: .messages).count
     }
+}
+
+/// G7: whether calls are recorded, and whether the greeting says so.
+struct RecordingSettings: Codable, Equatable {
+    var recordingEnabled: Bool
+    var recordingNotice: Bool
 }
 
 struct PracticeUsage: Decodable {

@@ -247,6 +247,10 @@ struct APIClient {
     func unblock(_ pid: String, phone: String) async throws -> PracticeUsage {
         try await send("POST", "/practices/\(pid)/unblock", body: ["phone": phone])
     }
+    func recording(_ pid: String) async throws -> RecordingSettings { try await get("/practices/\(pid)/recording") }
+    func setRecording(_ pid: String, _ r: RecordingSettings) async throws -> RecordingSettings {
+        try await send("PUT", "/practices/\(pid)/recording", body: r)
+    }
     func setAdminPin(_ pid: String, pin: String?) async throws {
         _ = try await request("PUT", "/practices/\(pid)/admin-pin", body: ["pin": pin])
     }

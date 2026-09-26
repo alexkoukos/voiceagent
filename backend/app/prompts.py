@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -151,11 +152,43 @@ def build_receptionist_prompt(
     return out
 
 
-def default_greeting(practice, *, language: str) -> str:
-    """Opening line in the practice's language. A custom greeting replaces it."""
+RECORDING_WORDS = ("ηχογραφ", "καταγράφ", "καταγραφ", "record")
+RECORDING_NOTICE = {
+    "el": "Η κλήση ηχογραφείται· αν θέλετε να σβηστεί, πείτε μου.",
+    "en": "This call is recorded; tell me if you'd like the recording deleted.",
+}
+
+
+def mentions_recording(text: str) -> bool:
+    return any(w in text.lower() for w in RECORDING_WORDS)
+
+
+def with_recording_notice(greeting: str, language: str) -> str:
+    """Adds the G7 notice before the closing question ("... πώς μπορώ να βοηθήσω;"), or at the
+    end. A greeting that already mentions recording is left as it is."""
+    if mentions_recording(greeting):
+        return greeting
+    notice = RECORDING_NOTICE["el" if language == "el" else "en"]
+    # Greek writes the question mark as ";".
+    m = re.match(r"^(.*?[.!·])\s+([^.!·;?]*[;?])(.*)$", greeting, re.S)
+    if m:
+        return f"{m.group(1)} {notice} {m.group(2)}{m.group(3)}"
+    return f"{greeting} {notice}".strip()
+
+
+def default_greeting(practice, *, language: str, recording_notice: bool = False) -> str:
+    """Opening line in the practice's language. A custom greeting replaces it. With
+    `recording_notice` (G7) it also says the call is recorded and can be deleted."""
     if practice.greeting.strip():
-        return practice.greeting.strip()
-    if language == "el":
-        return (f"{practice.name}. Είμαι ο ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω; "
-                "For English, say English.")
-    return "I'm a digital assistant, how can I help you?"
+        greeting = practice.greeting.strip()
+    elif language == "el":
+        greeting = (f"{practice.name}. Είμαι ο ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω; "
+                    "For English, say English.")
+    else:
+        greeting = "I'm a digital assistant, how can I help you?"
+    if not recording_notice:
+        return greeting
+    if not practice.greeting.strip():
+        # The default line is one sentence; split it so the notice comes before the question.
+        greeting = greeting.replace("βοηθός, πώς", "βοηθός. Πώς").replace("assistant, how", "assistant. How")
+    return with_recording_notice(greeting, language)

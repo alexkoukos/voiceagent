@@ -215,6 +215,10 @@ class PracticeIn(BaseModel):
     guarantee_threshold: int = Field(default=10, ge=0)
     monthly_cost_cap_eur: float | None = Field(default=None, gt=0)
     blocked_numbers: list[str] = []
+    # G7. Omitted (null) keeps the current value on update, so older app builds never flip
+    # them; a new practice starts with recording and the notice on.
+    recording_enabled: bool | None = None
+    recording_notice: bool | None = None
 
     @field_validator("phone_numbers", "blocked_numbers")
     @classmethod
@@ -244,6 +248,9 @@ class PracticeIn(BaseModel):
     def to_columns(self) -> dict:
         data = self.model_dump(mode="json")
         data["hours"] = {k: [list(s) for s in spans] for k, spans in data["hours"].items()}
+        for key in ("recording_enabled", "recording_notice"):
+            if data[key] is None:
+                del data[key]
         return data
 
 
@@ -252,6 +259,20 @@ class PracticeOut(PracticeIn):
 
     id: str
     services: list[Service]
+    recording_enabled: bool = True
+    recording_notice: bool = False
+
+    @field_validator("recording_enabled", "recording_notice", mode="before")
+    @classmethod
+    def _unsaved(cls, v, info):
+        # A practice not yet flushed has no column defaults applied.
+        return cls.model_fields[info.field_name].default if v is None else v
+
+
+class RecordingSettings(BaseModel):
+    """G7 per practice. Omitted fields stay as they are."""
+    recording_enabled: bool | None = None
+    recording_notice: bool | None = None
 
 
 class AppointmentOut(BaseModel):

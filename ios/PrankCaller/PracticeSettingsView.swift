@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Changes after go-live (PRD OP2, OP3): approval queue, closures and leave, the doctor's
-/// magic link, and every past change with one-tap rollback.
+/// Changes after go-live (PRD OP2, OP3): approval queue, recording and its notice (G7),
+/// closures and leave, the doctor's magic link, and every past change with one-tap rollback.
 struct PracticeSettingsView: View {
     let practice: Practice
     private let api = APIClient()
@@ -15,6 +15,7 @@ struct PracticeSettingsView: View {
     @State private var errorMessage: String?
     @State private var loaded = false
     @State private var alerts: [OpsAlert] = []
+    @State private var recording: RecordingSettings?
 
     var body: some View {
         List {
@@ -41,6 +42,7 @@ struct PracticeSettingsView: View {
                     Label("Κόστος, αποκλεισμοί, PIN, αποχώρηση", systemImage: "gearshape")
                 }
             }
+            recordingSection
             closuresSection
             linkSection
             historySection
@@ -95,6 +97,35 @@ struct PracticeSettingsView: View {
         } footer: {
             Text("Τιμές, υπηρεσίες και πληροφορίες από τον σύνδεσμο του γιατρού. Ο βοηθός τις λέει μόνο αφού τις εγκρίνεις.")
         }
+    }
+
+    @ViewBuilder private var recordingSection: some View {
+        if let recording {
+            Section {
+                Toggle("Ηχογράφηση κλήσεων", isOn: recordingBinding(\.recordingEnabled, current: recording))
+                Toggle("Ενημέρωση στον χαιρετισμό", isOn: recordingBinding(\.recordingNotice, current: recording))
+                    .disabled(!recording.recordingEnabled)
+            } header: {
+                Text("Ηχογράφηση")
+            } footer: {
+                Text(recording.recordingEnabled
+                     ? "Με την ενημέρωση ο βοηθός λέει στην αρχή ότι η κλήση ηχογραφείται και ότι μπορεί να σβηστεί. Ο νόμος τη ζητά όταν ηχογραφούμε."
+                     : "Οι κλήσεις δεν ηχογραφούνται. Οι περιλήψεις και τα κείμενα των κλήσεων μένουν.")
+            }
+        }
+    }
+
+    private func recordingBinding(_ key: WritableKeyPath<RecordingSettings, Bool>,
+                                  current: RecordingSettings) -> Binding<Bool> {
+        Binding(
+            get: { current[keyPath: key] },
+            set: { value in
+                var next = current
+                next[keyPath: key] = value
+                recording = next
+                Task { await saveRecording(next, previous: current) }
+            }
+        )
     }
 
     @ViewBuilder private var closuresSection: some View {
@@ -182,12 +213,18 @@ struct PracticeSettingsView: View {
             async let s = api.staff(practice.id)
             let versions = try await v
             alerts = (try? await api.alerts()) ?? []
+            recording = try? await api.recording(practice.id)
             (closures, staff) = try await (c, s)
             pending = versions.filter { $0.status == "pending" }
             history = versions.filter { $0.status != "pending" }
             errorMessage = nil
         } catch { errorMessage = friendlyMessage(error) }
         loaded = true
+    }
+
+    private func saveRecording(_ next: RecordingSettings, previous: RecordingSettings) async {
+        do { recording = try await api.setRecording(practice.id, next) }
+        catch { recording = previous; errorMessage = friendlyMessage(error) }
     }
 
     private func decide(_ v: ConfigVersion, approve: Bool) async {

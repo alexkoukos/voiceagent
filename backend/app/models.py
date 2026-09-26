@@ -108,6 +108,10 @@ class Practice(Base):
     offboarded_at: Mapped[datetime | None] = mapped_column(nullable=True)
     # OP2: PBKDF2 of the 4-6 digit PIN for changes by phone. None turns phone changes off.
     admin_pin_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    # G7: off means the agent never starts egress for this practice's calls. The notice adds
+    # "this call is recorded" to the greeting; POST /practices turns it on for new practices.
+    recording_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    recording_notice: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # Go-live checklist state (app/onboarding.py): {"dpa": {"signed_on", "signed_by"},
     # "forwarding_confirmed_at", "test_call_confirmed_at", "live_at"}. Not part of PracticeIn,
     # so a full practice update never clears it.
