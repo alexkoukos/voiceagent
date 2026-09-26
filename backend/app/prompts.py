@@ -156,5 +156,6 @@ def default_greeting(practice, *, language: str) -> str:
     if practice.greeting.strip():
         return practice.greeting.strip()
     if language == "el":
-        return "Είμαι ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω; Για αγγλικά, πείτε «English»."
+        return (f"{practice.name}. Είμαι ο ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω; "
+                "For English, say English.")
     return "I'm a digital assistant, how can I help you?"
