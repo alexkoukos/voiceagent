@@ -107,6 +107,10 @@ async def finalize(call_id: str) -> None:
             entries = list((await db.execute(
                 select(TranscriptEntry).where(TranscriptEntry.call_id == call.id).order_by(TranscriptEntry.created_at)
             )).scalars())
+            if call.use_case == "admin" or (await db.execute(select(RoutingEvent.id).where(
+                    RoutingEvent.call_id == call.id, RoutingEvent.kind == "admin_login").limit(1))).first():
+                from app import receptionist
+                await receptionist.scrub_pins(db, call)
             caller_turns = sum(1 for e in entries if e.role == TranscriptRole.friend)
             call.outcome = decide_outcome(call, caller_turns)
             if call.use_case is None:

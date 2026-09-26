@@ -13,12 +13,12 @@ from livekit import api
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import alerts, booking, events, notifications, routing, texts
+from app import admin_changes, alerts, booking, events, notifications, routing, texts
 from app.config import get_settings
 from app.languages import english_name, language_for_phone
 from app.models import (
-    Appointment, Call, CallStatus, Customer, Handoff, Message, Practice, RoutingEvent, TranscriptEntry, TranscriptRole,
-    WaitlistEntry,
+    Appointment, Call, CallStatus, Customer, Handoff, Message, Practice, RoutingEvent, Staff, TranscriptEntry,
+    TranscriptRole, WaitlistEntry,
 )
 from app.prompts import build_receptionist_prompt, default_greeting
 
@@ -214,6 +214,7 @@ async def build_metadata(
     upcoming = upcoming or []
     rules = routing.rules_for(practice)
     purpose = await _purpose(db, practice, call, staff, language)
+    _, admin = await _admin(db, call)
 
     def prompt_for(lang: str) -> str:
         prompt = build_receptionist_prompt(
@@ -222,6 +223,15 @@ async def build_metadata(
             upcoming=[booking.describe(practice, a, staff, lang) for a in upcoming], staff=staff,
             purpose=purpose.get(lang) if purpose else None,
         )
+        if admin:
+            prompt += ("\n## Αλλαγές ρυθμίσεων\nΚαλεί από το κινητό του/της " + admin.name + ". Αν ζητήσει αλλαγή "
+                       "(κλειστά, άδεια, ωράριο, τιμή, πληροφορία), κάλεσε πρώτα stop_recording, μετά ζήτα τον κωδικό PIN και κάλεσε admin_login. Μετά "
+                       "admin_change με τα λόγια του, διάβασε το say_and_ask και περίμενε καθαρό «ναι» ή «όχι» πριν το "
+                       "admin_confirm. Ποτέ μην επαναλάβεις τον κωδικό.\n" if lang == "el" else
+                       "\n## Settings changes\nThis is " + admin.name + "'s registered mobile. If they ask for a change "
+                       "(closure, leave, hours, a price, information), first call stop_recording, then ask for the PIN and call admin_login. Then "
+                       "admin_change with their words, read say_and_ask, and wait for a clear yes or no before "
+                       "admin_confirm. Never repeat the PIN.\n")
         if rules["language_switch"]:
             prompt += ("\nΑν ο πελάτης μιλά καθαρά αγγλικά στην πρώτη του απάντηση, κάλεσε route_call με language=en "
                        "και συνέχισε στα αγγλικά. Αν είναι ασαφές ή ακούγεται φωνή στο βάθος, ζήτα επανάληψη στα "
@@ -894,3 +904,77 @@ async def tool_flag(db: AsyncSession, call: Call, flag: str) -> dict:
         add_flag(call, flag)
         await db.commit()
     return {"ok": True}
+
+
+# --- changes by phone (OP2): registered staff mobile + practice PIN ---
+
+
+async def _admin(db: AsyncSession, call: Call) -> tuple[Practice, Staff | None]:
+    practice = await db.get(Practice, call.practice_id)
+    if call.direction != "inbound" or not practice.admin_pin_hash:
+        return practice, None
+    return practice, await admin_changes.sender_staff(db, practice, call.caller_number)
+
+
+async def tool_admin_login(db: AsyncSession, call: Call, args) -> dict:
+    practice, staff = await _admin(db, call)
+    if staff is None:
+        return {"error": "not_available"}
+    if await routing._count(db, call, "admin_login", "fail") >= admin_changes.PIN_TRIES:
+        return {"error": "locked"}
+    await scrub_pins(db, call)
+    if not admin_changes.pin_ok(practice, re.sub(r"\D", "", args.pin)):
+        await routing.log(db, call, "admin_login", "fail", "OP2")
+        failures = await routing._count(db, call, "admin_login", "fail") + 1
+        if failures >= admin_changes.PIN_TRIES:
+            await alerts.raise_alert(db, practice, "admin_pin", f"{practice.name}: {failures} wrong PINs",
+                                     f"From {call.caller_number}.", call_id=call.id, dedupe_key=f"pin:{call.id}")
+        await db.commit()
+        return {"error": "wrong_pin", "tries_left": max(0, admin_changes.PIN_TRIES - failures)}
+    await routing.log(db, call, "admin_login", "ok", "OP2")
+    call.use_case = "admin"
+    await db.commit()
+    return {"ok": True, "staff": staff.name,
+            "hint": "Ask what they want to change: closures, leave, hours, a price or information."}
+
+
+async def scrub_pins(db: AsyncSession, call: Call) -> None:
+    """A spoken PIN must not stay in the transcript: mask 4-6 digit runs in what the caller said."""
+    for e in (await db.execute(select(TranscriptEntry).where(
+        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.friend))).scalars():
+        masked = re.sub(r"(?<!\d)(\d[\s-]?){3,5}\d(?!\d)", "••••", e.text)
+        if masked != e.text:
+            e.text = masked
+
+
+async def _logged_in(db: AsyncSession, call: Call) -> bool:
+    return await routing._count(db, call, "admin_login", "ok") > 0
+
+
+async def tool_admin_change(db: AsyncSession, call: Call, args) -> dict:
+    practice, staff = await _admin(db, call)
+    if staff is None or not await _logged_in(db, call):
+        return {"error": "login_first"}
+    try:
+        req = await admin_changes.request(db, practice, staff, args.request, channel="phone",
+                                          now=utcnow(), call_id=call.id)
+    except admin_changes.Rejected as e:
+        return {"error": "not_understood", "say": e.reply}
+    await db.commit()
+    return {"say_and_ask": admin_changes.confirm_prompt(practice, req.readback, "phone")}
+
+
+async def tool_admin_confirm(db: AsyncSession, call: Call, args) -> dict:
+    practice, staff = await _admin(db, call)
+    if staff is None or not await _logged_in(db, call):
+        return {"error": "login_first"}
+    req = await admin_changes.pending_for(db, practice, staff.phone)
+    if req is None or req.call_id != call.id:
+        await db.commit()
+        return {"error": "nothing_pending"}
+    reply = await admin_changes.decide(db, practice, req, args.yes)
+    await routing.log(db, call, "admin_change", req.status, "OP2")
+    await db.commit()
+    notifications.kick()
+    events.publish(f"practice:{practice.id}")
+    return {"say": reply}

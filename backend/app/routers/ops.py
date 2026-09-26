@@ -10,12 +10,12 @@ from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import data_requests, events, notifications, onboarding, receptionist
+from app import admin_changes, data_requests, events, notifications, onboarding, receptionist
 from app.database import get_db
 from app.models import AdminLink, Alert, Appointment, Call, CallStatus, DataRequest, Practice
 from app.routers.practices import _get
 from app.schemas import (
-    AlertOut, AppointmentOut, ConfigVersionOut, CostCapIn, DataRequestOut, GoogleImportIn, PhoneIn, PriceListIn,
+    AdminPinIn, AlertOut, AppointmentOut, ConfigVersionOut, CostCapIn, DataRequestOut, GoogleImportIn, PhoneIn, PriceListIn,
     UsageOut,
 )
 
@@ -205,6 +205,17 @@ async def forwarding(practice_id: str, mode: str = "backup", db: AsyncSession = 
     return {"target": target, "mode": mode,
             "codes": onboarding.forwarding_codes(target, "full" if mode == "full" else "backup"),
             "off": FORWARDING_OFF}
+
+
+# --- changes by phone and SMS (OP2) ---
+
+
+@router.put("/{practice_id}/admin-pin", status_code=204)
+async def set_admin_pin(practice_id: str, payload: AdminPinIn, db: AsyncSession = Depends(get_db)):
+    """The PIN staff say on the phone before a change; null turns changes by phone off."""
+    practice = await _get(db, practice_id)
+    practice.admin_pin_hash = admin_changes.hash_pin(practice.id, payload.pin) if payload.pin else None
+    await db.commit()
 
 
 # --- operator alerts (OP9) ---

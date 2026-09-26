@@ -571,6 +571,23 @@ class RouteArgs(BaseModel):
     language: str | None = Field(default=None, max_length=5)
 
 
+class AdminLoginArgs(BaseModel):
+    pin: str = Field(max_length=12)
+
+
+class AdminChangeArgs(BaseModel):
+    request: str = Field(min_length=2, max_length=500)
+
+
+class AdminConfirmArgs(BaseModel):
+    yes: bool
+
+
+class AdminPinIn(BaseModel):
+    # None turns changes by phone off.
+    pin: str | None = Field(default=None, pattern=r"^\d{4,6}$")
+
+
 class FindArgs(BaseModel):
     phone: str | None = Field(default=None, max_length=30)
 
