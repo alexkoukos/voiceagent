@@ -290,6 +290,17 @@ async def _purpose(db: AsyncSession, practice: Practice, call: Call, staff, lang
     """Outbound calls: what the call is for, in both languages, plus the opening instruction."""
     if call.direction != "outbound" or not call.purpose:
         return None
+    if call.purpose == "test":
+        # OP1 daily test call: exercise the whole path (LiveKit -> agent -> SIP -> PSTN) and hang up.
+        return {
+            "el": ("Αυτή είναι μια αυτόματη ΔΟΚΙΜΑΣΤΙΚΗ κλήση για έλεγχο του συστήματος. Πες μία σύντομη "
+                   "πρόταση ότι πρόκειται για δοκιμή και κλείσε αμέσως με hang_up(). Αν απαντήσει "
+                   "τηλεφωνητής, κλείσε αμέσως με hang_up(silent=true) χωρίς να πεις τίποτα."),
+            "en": ("This is an automated TEST call to check the system. Say one short sentence that this is a "
+                   "test and hang_up() at once. If voicemail answers, hang_up(silent=true) without speaking."),
+            "greeting_el": "Ο δέκτης σήκωσε. Πες ότι αυτή είναι μια αυτόματη δοκιμαστική κλήση του συστήματος και κλείσε.",
+            "greeting_en": "They picked up. Say this is an automated system test call and hang up.",
+        }
     if call.purpose == "reminder":
         appt = await db.get(Appointment, call.appointment_id)
         if appt is None:
@@ -387,6 +398,15 @@ async def queue_reminder(db: AsyncSession, practice: Practice, appt: Appointment
         return None
     appt.reminder_status = "calling"
     call = _outbound_call(practice, appt.customer_phone, "reminder", appt.id)
+    db.add(call)
+    return call
+
+
+async def queue_test_call(db: AsyncSession, practice: Practice, number: str) -> Call | None:
+    """OP1: a real call to a known number that checks the whole telephony path end to end."""
+    if not number or not await outbound_allowed(db, practice):
+        return None
+    call = _outbound_call(practice, number, "test")
     db.add(call)
     return call
 
