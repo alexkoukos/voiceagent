@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
 
-from app import alerts, booking, finalize, gcal, notifications, receptionist, texts
+from app import alerts, booking, health, finalize, gcal, notifications, receptionist, texts
 from app.database import async_session
 from app.models import (
     Appointment, AppointmentStatus, Call, CallStatus, Handoff, Notification, Practice, TranscriptEntry,
@@ -245,6 +245,7 @@ async def tick(now: datetime | None = None) -> None:
                 await retention(db, practice)
         await stale(db)
         await failed_notifications(db)
+        await health.check(db)
         await alerts.escalate(db)
         await db.commit()
         if retained:
