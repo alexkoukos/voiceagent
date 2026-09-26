@@ -493,6 +493,35 @@ class ReceptionistAgent(PrankCallerAgent):
         return await self._tool("add_to_waitlist", {"when": when, "service_id": service_id, "customer_name": customer_name})
 
     @function_tool
+    async def admin_login(self, pin: str) -> str:
+        """Checks the PIN of a staff member calling from their registered mobile to change settings.
+        Only when the prompt says this caller may change settings, after stop_recording.
+
+        Args:
+            pin: The digits they said.
+        """
+        return await self._tool("admin_login", {"pin": pin})
+
+    @function_tool
+    async def admin_change(self, request: str) -> str:
+        """Plans a settings change (closure, leave, hours, a price, information) after admin_login.
+        Read say_and_ask to them and wait for a clear yes or no.
+
+        Args:
+            request: What they asked for, in their own words.
+        """
+        return await self._tool("admin_change", {"request": request})
+
+    @function_tool
+    async def admin_confirm(self, yes: bool) -> str:
+        """Applies (yes) or drops (no) the change admin_change read back. Say the returned `say`.
+
+        Args:
+            yes: True only for a clear yes.
+        """
+        return await self._tool("admin_confirm", {"yes": yes})
+
+    @function_tool
     async def stop_recording(self) -> str:
         """Stops recording the call, when the caller doesn't want to be recorded. The call goes on."""
         await self._rc.stop_recording()

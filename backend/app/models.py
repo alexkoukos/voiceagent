@@ -105,6 +105,8 @@ class Practice(Base):
     blocked_numbers: Mapped[list] = mapped_column(JSON, default=list)
     # OP7: set on offboarding; the agent stops answering.
     offboarded_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # OP2: PBKDF2 of the 4-6 digit PIN for changes by phone. None turns phone changes off.
+    admin_pin_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 
@@ -332,6 +334,27 @@ class Alert(Base):
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     acked_at: Mapped[datetime | None] = mapped_column(nullable=True)
     escalated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class AdminRequest(Base):
+    """A change the business asked for by SMS or by phone (OP2), waiting for their yes."""
+
+    __tablename__ = "admin_requests"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
+    # sms, phone
+    channel: Mapped[str] = mapped_column(String, nullable=False)
+    sender: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    staff_id: Mapped[str | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    call_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    text: Mapped[str] = mapped_column(Text, default="")
+    parsed: Mapped[dict] = mapped_column(JSON, default=dict)
+    readback: Mapped[str] = mapped_column(Text, default="")
+    # pending, applied, queued (sent for approval), cancelled, expired
+    status: Mapped[str] = mapped_column(String, default="pending")
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
 
 class Message(Base):
