@@ -535,6 +535,18 @@ class UsageOut(BaseModel):
     offboarded_at: datetime | None
 
 
+class GoogleImportIn(BaseModel):
+    # A Google Maps link or the business's name and area.
+    query: str = Field(min_length=2, max_length=2000)
+
+
+class PriceListIn(BaseModel):
+    # A photo/PDF (base64) or the website page with the prices.
+    data_base64: str | None = Field(default=None, max_length=17_000_000)
+    mime_type: str | None = None
+    url: str | None = Field(default=None, pattern=r"^https?://")
+
+
 class WaitlistOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

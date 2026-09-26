@@ -63,6 +63,9 @@ class Settings(BaseSettings):
 
     # Call summaries (a cheap text model, after hang-up).
     summary_model: str = "gemini-3.5-flash-lite"
+    # Onboarding (O1, O2): Google Places for the business profile, a vision model for price lists.
+    google_maps_api_key: str = ""
+    extraction_model: str = "gemini-3.5-flash"
     # Cost estimate per call, EUR per minute.
     cost_model_eur_per_min: float = 0.03
     cost_telephony_eur_per_min: float = 0.01

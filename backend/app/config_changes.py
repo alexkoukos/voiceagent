@@ -91,11 +91,13 @@ async def publish(
     return version
 
 
-async def propose(db: AsyncSession, practice: Practice, changes: dict, *, author: str, summary: str = "") -> ConfigVersion | None:
+async def propose(
+    db: AsyncSession, practice: Practice, changes: dict, *, author: str, summary: str = "", source: str = "link",
+) -> ConfigVersion | None:
     changes = {k: v for k, v in changes.items() if k in FIELDS and v != getattr(practice, k)}
     if not changes:
         return None
-    version = ConfigVersion(practice_id=practice.id, status="pending", source="link", author=author,
+    version = ConfigVersion(practice_id=practice.id, status="pending", source=source, author=author,
                             changes=changes, summary=summary or describe(changes, practice.language))
     db.add(version)
     await db.flush()
