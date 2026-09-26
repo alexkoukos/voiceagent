@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     apns_team_id: str = ""
     apns_topic: str = "com.alekos.prankcaller"
 
+    # Operator alerts (OP9): failover, cost caps, blocked spam, failed notifications, emergencies.
+    # Unacknowledged after ALERT_ACK_MINUTES they also go to the backup contact.
+    founder_email: str = ""
+    founder_sms: str = ""
+    backup_email: str = ""
+    backup_sms: str = ""
+    alert_ack_minutes: int = 30
+
     # Call summaries (a cheap text model, after hang-up).
     summary_model: str = "gemini-3.5-flash-lite"
     # Cost estimate per call, EUR per minute.

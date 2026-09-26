@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
 
-from app import booking, finalize, gcal, notifications, receptionist, texts
+from app import alerts, booking, finalize, gcal, notifications, receptionist, texts
 from app.database import async_session
 from app.models import (
     Appointment, AppointmentStatus, Call, CallStatus, Handoff, Notification, Practice, TranscriptEntry,
@@ -91,15 +91,22 @@ async def queue_reminders(db, practice: Practice, local: datetime) -> None:
         await receptionist.queue_reminder(db, practice, appt)
 
 
+# OP7: after offboarding, all recordings and transcripts go within this many days (DPA).
+OFFBOARD_PURGE_DAYS = 30
+
+
 async def retention(db, practice: Practice) -> None:
     now = datetime.utcnow()
-    old_rec = now - timedelta(days=practice.retention_recordings_days)
+    rec_days, tr_days = practice.retention_recordings_days, practice.retention_transcripts_days
+    if practice.offboarded_at and practice.offboarded_at <= now - timedelta(days=OFFBOARD_PURGE_DAYS):
+        rec_days = tr_days = 0
+    old_rec = now - timedelta(days=rec_days)
     for call in (await db.execute(select(Call).where(
         Call.practice_id == practice.id, Call.recording_url.is_not(None), Call.created_at < old_rec,
     ))).scalars():
         await queue_recording_deletion(db, call.recording_url, call.id)
         call.recording_url = None
-    old_tr = now - timedelta(days=practice.retention_transcripts_days)
+    old_tr = now - timedelta(days=tr_days)
     ids = select(Call.id).where(Call.practice_id == practice.id, Call.created_at < old_tr)
     await db.execute(delete(TranscriptEntry).where(TranscriptEntry.call_id.in_(ids)))
 
@@ -119,6 +126,19 @@ async def stale(db) -> None:
         call.ended_at = now
         if call.started_at:
             call.duration_seconds = int((now - call.started_at).total_seconds())
+
+
+async def failed_notifications(db) -> None:
+    """A notification that gave up is an alert (OP9): someone did not hear about a call."""
+    since = datetime.utcnow() - timedelta(days=2)
+    for n in (await db.execute(select(Notification).where(
+        Notification.status == "failed", Notification.created_at >= since, Notification.channel != "none",
+        ~Notification.kind.startswith("alert_"), Notification.last_error != "erased on request",
+    ))).scalars():
+        practice = await db.get(Practice, n.practice_id) if n.practice_id else None
+        await alerts.raise_alert(db, practice, "notification_failed",
+                                 f"{practice.name if practice else '—'}: {n.channel} {n.kind} failed",
+                                 n.last_error or "", call_id=n.call_id, dedupe_key=f"notification:{n.id}")
 
 
 async def recover_finalizations(db) -> None:
@@ -208,6 +228,8 @@ async def tick(now: datetime | None = None) -> None:
     async with async_session() as db:
         practices = list((await db.execute(select(Practice))).scalars())
         for practice in practices:
+            if practice.offboarded_at:
+                continue
             local = now.astimezone(ZoneInfo(practice.timezone))
             await recover_summary_notifications(db, practice)
             if _at(local, (practice.notifications or {}).get("digest_time", "20:00")):
@@ -222,6 +244,8 @@ async def tick(now: datetime | None = None) -> None:
             for practice in practices:
                 await retention(db, practice)
         await stale(db)
+        await failed_notifications(db)
+        await alerts.escalate(db)
         await db.commit()
         if retained:
             _last_retention = now.date()
