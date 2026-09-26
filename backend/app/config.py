@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     # Patient data encryption at rest (app/crypto.py): base64 of 32 random bytes. Keep a copy
     # outside Railway: without it encrypted data can't be read.
     data_encryption_key: str = ""
+    # Encrypt older rows once at startup (app/crypto_backfill.py); unset afterwards.
+    encrypt_backfill: bool = False
     internal_api_token: str = ""
     app_api_token: str = ""
     backend_public_url: str = "http://localhost:8000"

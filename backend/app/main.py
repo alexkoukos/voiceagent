@@ -18,6 +18,9 @@ async def lifespan(_app: FastAPI):
     from app import crypto
     if not crypto.enabled():
         logging.getLogger("app").warning("DATA_ENCRYPTION_KEY is not set: patient data is stored unencrypted")
+    elif get_settings().encrypt_backfill:
+        from app import crypto_backfill
+        await crypto_backfill.run()
     tasks = []
     if get_settings().scheduler_enabled:
         from app import notifications, scheduler
