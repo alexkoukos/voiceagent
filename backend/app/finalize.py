@@ -122,6 +122,10 @@ async def finalize(call_id: str) -> None:
                 call.summary = fallback_summary(call, language)
                 call.flags = [*{*(call.flags or []), "summary_fallback"}]
             call.finalized = True
+            if caller_turns == 0 and call.direction == "inbound":
+                await db.flush()
+                from app import receptionist
+                await receptionist.block_if_spam(db, call)
 
             # One email per call to the business, within 60 s of hang-up (web demos only if asked).
             if wants_business_summary(practice, call):

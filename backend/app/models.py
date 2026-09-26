@@ -99,6 +99,12 @@ class Practice(Base):
     # For the monthly value report and the performance guarantee.
     avg_booking_value: Mapped[float] = mapped_column(Float, default=0)
     guarantee_threshold: Mapped[int] = mapped_column(Integer, default=10)
+    # OP10: no new calls once this month's cost reaches the cap (alert at 80%). None = no cap.
+    monthly_cost_cap_eur: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # OP10: callers the agent never answers (E.164).
+    blocked_numbers: Mapped[list] = mapped_column(JSON, default=list)
+    # OP7: set on offboarding; the agent stops answering.
+    offboarded_at: Mapped[datetime | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 
@@ -293,6 +299,39 @@ class AdminLink(Base):
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     last_used_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class DataRequest(Base):
+    """A patient's export or erasure request, logged for the controller (OP8). The number
+    itself is not kept: after an erasure it must not be stored anywhere."""
+
+    __tablename__ = "data_requests"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
+    phone_hash: Mapped[str] = mapped_column(String, nullable=False)
+    # export, erase
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    counts: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+class Alert(Base):
+    """Something urgent a person must see (urgent message, emergency, unanswered handoff,
+    failover, cost cap). Unacknowledged ones go to the backup contact (OP9)."""
+
+    __tablename__ = "alerts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    practice_id: Mapped[str | None] = mapped_column(ForeignKey("practices.id"), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    call_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    subject: Mapped[str] = mapped_column(String, default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    dedupe_key: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    acked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    escalated_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
 
 class Message(Base):

@@ -22,7 +22,7 @@ router = APIRouter(prefix="/demo", tags=["demo"])
 
 
 async def _practice(db: AsyncSession, slug: str) -> Practice:
-    practice = (await db.execute(select(Practice).where(Practice.slug == slug))).scalar_one_or_none()
+    practice = (await db.execute(select(Practice).where(Practice.slug == slug, Practice.offboarded_at.is_(None)))).scalar_one_or_none()
     if practice is None:
         raise HTTPException(status_code=404, detail="Not found")
     return practice
@@ -57,7 +57,7 @@ async def demo_session(slug: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=429, detail="busy")
     try:
         call, metadata = await receptionist.start_call(db, practice, direction="web", caller_number=None)
-    except receptionist.Busy:
+    except (receptionist.Busy, receptionist.OverCap):
         raise HTTPException(status_code=429, detail="busy")
     room = receptionist.room_of(call)
     try:
