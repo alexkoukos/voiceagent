@@ -50,7 +50,8 @@ def test_emergency_phrases():
 
 def test_greeting_is_only_the_assistant_line():
     p = practice()
-    assert default_greeting(p, language="el") == "Είμαι ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω; Για αγγλικά, πείτε «English»."
+    assert default_greeting(p, language="el") == ("Οδοντιατρείο Δοκιμή. Είμαι ο ψηφιακός βοηθός, "
+                                                    "πώς μπορώ να σας βοηθήσω; For English, say English.")
     assert default_greeting(p, language="en") == "I'm a digital assistant, how can I help you?"
     assert default_greeting(practice(greeting="Γεια σας!"), language="el") == "Γεια σας!"
 
