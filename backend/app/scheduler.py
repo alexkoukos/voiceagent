@@ -91,6 +91,54 @@ async def queue_reminders(db, practice: Practice, local: datetime) -> None:
         await receptionist.queue_reminder(db, practice, appt)
 
 
+# OP1: a daily real test call must connect within this window, or the telephony path is broken.
+TEST_CALL_CONNECT_WITHIN = timedelta(minutes=3)
+
+
+def _midnight_utc(local: datetime) -> datetime:
+    tz = local.tzinfo or ZoneInfo("UTC")
+    return datetime.combine(local.date(), time(0), tz).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+
+async def _todays_test_call(db, practice: Practice, local: datetime) -> Call | None:
+    return (await db.execute(
+        select(Call).where(
+            Call.practice_id == practice.id, Call.purpose == "test", Call.created_at >= _midnight_utc(local),
+        ).order_by(Call.created_at.desc()).limit(1)
+    )).scalars().first()
+
+
+async def test_call(db, practice: Practice, local: datetime) -> None:
+    """OP1: once a day at the configured time, place a real call that exercises the whole path."""
+    cfg = (practice.notifications or {}).get("test_call") or {}
+    if not cfg.get("enabled") or not cfg.get("number"):
+        return
+    if not _at(local, cfg.get("time", "09:00")):
+        return
+    if await _todays_test_call(db, practice, local):
+        return  # already placed today (the _at window spans several ticks)
+    await receptionist.queue_test_call(db, practice, cfg["number"])
+
+
+async def check_test_call(db, practice: Practice, now: datetime) -> None:
+    """OP1: alert (OP9) when today's test call did not connect. A connected call sets started_at."""
+    cfg = (practice.notifications or {}).get("test_call") or {}
+    if not cfg.get("enabled"):
+        return
+    local = now.astimezone(ZoneInfo(practice.timezone))
+    call = await _todays_test_call(db, practice, local)
+    if call is None or call.started_at is not None:
+        return  # no test today yet, or it connected
+    terminal = call.status in (CallStatus.completed, CallStatus.failed, CallStatus.cancelled)
+    if not terminal and datetime.utcnow() - call.created_at <= TEST_CALL_CONNECT_WITHIN:
+        return  # still ringing; give it time before alerting
+    await alerts.raise_alert(
+        db, practice, "test_call_failed", f"{practice.name}: the daily test call did not connect",
+        f"An automated test call did not reach the number ({call.end_reason or call.status.value}). "
+        "Inbound calls may be failing; check the agent, LiveKit and the Telnyx trunk.",
+        call_id=call.id, dedupe_key=f"test_call:{practice.id}:{local.date()}")
+
+
 # OP7: after offboarding, all recordings and transcripts go within this many days (DPA).
 OFFBOARD_PURGE_DAYS = 30
 
@@ -239,6 +287,8 @@ async def tick(now: datetime | None = None) -> None:
             rem = practice.reminders or {}
             if rem.get("enabled") and _at(local, rem.get("time", "18:00")):
                 await queue_reminders(db, practice, local)
+            await test_call(db, practice, local)
+            await check_test_call(db, practice, now)
         retained = _last_retention != now.date()
         if retained:
             for practice in practices:
