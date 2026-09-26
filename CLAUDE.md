@@ -2,6 +2,11 @@
 
 See [README.md](README.md) for layout, setup and deploy, and the PRD for the spec.
 
+## Engine switch (2026-09-26, ElevenLabs only)
+- Got a free ElevenLabs plan for 3 months, so calls now use the `pipeline` engine (ElevenLabs Scribe v2 for the ear, ElevenLabs Flash v2.5 for the voice; the "brain" stays Gemini `gemini-3.5-flash-lite` — ElevenLabs has no LLM). The Gemini Live `realtime` fallback is off by default now (`ENGINE_FALLBACK=off` in `pick_engine`): with paid credits ElevenLabs is the voice for every call and the old "ran out of credits, silent call" risk is gone.
+- **Action needed on Railway:** the agent service still has `AGENT_ENGINE=realtime` set — change it to `pipeline` (or delete it; `pipeline` is the code default) for this to take effect live. `RECEPTIONIST_ENGINE` is already `pipeline` by default.
+- Watch item: Scribe was near-perfect on Greek in the offline recognition test but garbled Greek over real phone audio (2026-09-25). If live Greek calls come back wrong, set `ENGINE_FALLBACK=on` or `AGENT_ENGINE=realtime` to go back to Gemini.
+
 ## Direction change (2026-09-25, not yet deployed)
 - Calls are now professional, not pranks: no reveal, never mentions Alexandros. It still says it's an AI if asked directly, and deletes the recording on request.
 - Receptionist language (2026-09-25, owner's rule): every call starts in Greek, whatever the caller's number. English only when the caller says "English mode" (also "ίνγκλις", "αγγλικά"); "Greek mode"/"ελληνικά" switches back. The agent matches this in code on the Deepgram transcript (`wants_language`), never the model: Gemini Live misheard casual Greek as another language and refused with "I only speak Greek and English". That refusal line is gone. New soft male voice `Algieba`; receptionist practices default to Gemini `Zubenelgenubi` (2026-09-25).

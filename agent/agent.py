@@ -797,6 +797,11 @@ def log_latency(session: AgentSession, call_id: str) -> None:
 # Greek with slang and swearing it was near perfect where Gemini Live's own ear mixed in
 # Italian/Spanish (tested 2026-09-25). "realtime" goes back to Gemini Live.
 RECEPTIONIST_ENGINE = os.environ.get("RECEPTIONIST_ENGINE", "pipeline")
+# Fall back off the ElevenLabs pipeline to a Gemini engine when ElevenLabs is unusable
+# (out of credits or down). Off by default (2026-09-26): with a paid ElevenLabs plan the
+# account is our voice for every call, and diverting to Gemini Live risks its Greek ear
+# drifting languages. Set ENGINE_FALLBACK=on to restore the safety net.
+ENGINE_FALLBACK = os.environ.get("ENGINE_FALLBACK", "off") != "off"
 
 
 async def elevenlabs_usable() -> bool:
@@ -824,10 +829,13 @@ async def pick_engine(call_id: str, receptionist: bool = False) -> str:
     engine = RECEPTIONIST_ENGINE if receptionist else ENGINE
     fallback = "text_pipeline" if receptionist and os.environ.get("GEMINI_API_KEY") else "realtime"
     if engine == "pipeline" and not os.environ.get("ELEVEN_API_KEY"):
+        # No key at all: ElevenLabs can't run, so a Gemini engine beats a dead call.
         logger.warning("call %s: ELEVEN_API_KEY missing, using %s", call_id, fallback)
         engine = fallback
-    # Out of credits (or ElevenLabs down) would mean a silent call.
-    if engine == "pipeline" and not await elevenlabs_usable():
+    # With ENGINE_FALLBACK off (the default) we stay on ElevenLabs even if the probe fails:
+    # a paid plan means it's our voice for every call. Out of credits (or ElevenLabs down)
+    # would mean a silent call, so ENGINE_FALLBACK=on brings the Gemini safety net back.
+    elif engine == "pipeline" and ENGINE_FALLBACK and not await elevenlabs_usable():
         logger.warning("call %s: ElevenLabs unusable, using %s", call_id, fallback)
         engine = fallback
     if engine == "openai" and not os.environ.get("OPENAI_API_KEY"):
