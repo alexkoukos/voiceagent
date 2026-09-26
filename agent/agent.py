@@ -233,7 +233,7 @@ class PrankCallerAgent(Agent):
         if silent:
             await get_job_context().room.disconnect()
             return "call ended"
-        closing = "Ευχαριστούμε που καλέσατε. Γεια σας." if self.language == "el" else "Thank you for calling. Goodbye."
+        closing = "Ευχαριστούμε πολύ που καλέσατε, να έχετε μια όμορφη μέρα. Γεια σας!" if self.language == "el" else "Thank you very much for calling. Have a lovely day. Goodbye!"
         if self._fillers is not None:
             handle = self.session.say(closing, allow_interruptions=False)
         else:
