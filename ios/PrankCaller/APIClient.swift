@@ -167,6 +167,23 @@ struct APIClient {
         _ = try await request("POST", "/devices", body: DeviceRegistration(
             token: token, practiceId: practiceId, environment: sandbox ? "sandbox" : "production"))
     }
+    func staff(_ pid: String) async throws -> [StaffMember] { try await get("/practices/\(pid)/staff") }
+    func versions(_ pid: String) async throws -> [ConfigVersion] { try await get("/practices/\(pid)/versions") }
+    func decide(_ pid: String, _ id: String, approve: Bool) async throws {
+        _ = try await request("POST", "/practices/\(pid)/versions/\(id)/" + (approve ? "approve" : "reject"))
+    }
+    func rollback(_ pid: String, _ id: String) async throws {
+        _ = try await request("POST", "/practices/\(pid)/versions/\(id)/rollback")
+    }
+    func closures(_ pid: String) async throws -> [Closure] { try await get("/practices/\(pid)/closures") }
+    func addClosure(_ pid: String, _ c: NewClosure) async throws -> Closure {
+        try await send("POST", "/practices/\(pid)/closures", body: c)
+    }
+    func deleteClosure(_ pid: String, _ id: String) async throws { _ = try await request("DELETE", "/practices/\(pid)/closures/\(id)") }
+    func createLink(_ pid: String, staffId: String?) async throws -> AdminLink {
+        try await send("POST", "/practices/\(pid)/links", body: ["staff_id": staffId])
+    }
+    func revokeLinks(_ pid: String) async throws { _ = try await request("DELETE", "/practices/\(pid)/links") }
     /// "changed" whenever a call, message or handoff of the practice changes.
     func practiceUpdates(_ pid: String) throws -> URLSessionWebSocketTask {
         try socket("/practices/\(pid)/ws")

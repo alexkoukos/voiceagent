@@ -60,6 +60,14 @@ struct ReceptionistView: View {
                         .accessibilityLabel("Επιχείρηση")
                     }
                 }
+                if let practice {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink { PracticeSettingsView(practice: practice) } label: {
+                            Image(systemName: "slider.horizontal.3")
+                        }
+                        .accessibilityLabel("Ρυθμίσεις επιχείρησης")
+                    }
+                }
                 if let slug = practice?.slug, let url = URL(string: Settings.baseURL + "/demo/\(slug)") {
                     ToolbarItem(placement: .topBarTrailing) {
                         ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
