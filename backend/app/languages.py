@@ -1,6 +1,7 @@
 """Which language a call is in, from the friend's phone prefix.
 
-Calls are only in Greek (Greek and Cypriot numbers) or English (everyone else).
+Calls are only in Greek or English. Every call starts in Greek, whatever the number
+(the owner's receptionist rule); English is reachable only when the caller asks for it.
 Other languages sounded bad, and the model drifted into them on noisy lines.
 The agent keeps the call's language for the whole call.
 """
@@ -11,9 +12,9 @@ LANGUAGES: dict[str, tuple[str, str]] = {
     "en": ("English", "English"),
 }
 
-DEFAULT_LANGUAGE = "en"
+DEFAULT_LANGUAGE = "el"
 
-# International dialling prefix -> language. Longest prefix wins; everyone else gets English.
+# International dialling prefix -> language. Longest prefix wins; everyone else starts in Greek.
 _PREFIXES: dict[str, str] = {"30": "el", "357": "el"}
 
 

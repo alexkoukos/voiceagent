@@ -185,6 +185,19 @@ TIME_UP = {
 # Realtime engine: pin the call's language (calls are only Greek or English).
 REALTIME_LANGUAGE = {"el": "el-GR", "en": "en-US"}
 
+# A caller who swears directly at the agent gets one calm, polite reminder. Directed insults
+# only — casual fillers ("γαμώτο", "ρε", bare "damn") are left alone. Used as a fallback when
+# the call's metadata carries no profanity block (prank/professional flow), matching the backend.
+DEFAULT_PROFANITY_PHRASES = {
+    "el": ["μαλακα", "καριολη", "γαμησου", "να γαμηθεις", "αρχιδι", "πουστη", "ηλιθιε", "βλακα",
+           "χαζε", "κωλοπαιδο"],
+    "en": ["fuck you", "asshole", "bastard", "idiot", "moron", "dickhead", "shut up", "bitch"],
+}
+DEFAULT_PROFANITY_SCRIPT = {
+    "el": "Παρακαλώ, ας μιλήσουμε ευγενικά· δεν χρειάζονται βρισιές. Πώς μπορώ να σας βοηθήσω;",
+    "en": "Please, let's keep things polite — there's no need to swear. How can I help you?",
+}
+
 
 def _for_language(texts: dict[str, str], language: str, language_name: str) -> str:
     return texts["el"] if language == "el" else texts["other"].format(language=language_name)
@@ -937,6 +950,7 @@ class ReceptionistCall:
         self.latencies: list[float] = []
         self.handed_off = False
         self._emergency_said = False
+        self._profanity_said = False
         self._switching_language = False
         self._tasks: set[asyncio.Task] = set()
         self._user_turn = 0
@@ -1074,6 +1088,26 @@ class ReceptionistCall:
             then = ("Μετά κράτα επείγον μήνυμα (take_message με urgent true)." if self.language == "el"
                     else "Then take an urgent message (take_message with urgent true).")
             self.session.generate_reply(instructions=f"{quote}: {script} {then}")
+
+    # --- profanity: one calm, polite reminder when the caller swears at the agent ---
+
+    def check_profanity(self, text: str) -> None:
+        # Falls back to built-in defaults so it also works on the prank/professional flow,
+        # where the metadata carries no profanity block.
+        pr = self.metadata.get("profanity") or {}
+        if self._profanity_said or not pr.get("enabled", True):
+            return
+        key = "el" if self.language == "el" else "en"
+        phrases = pr.get("phrases") or (DEFAULT_PROFANITY_PHRASES["el"] + DEFAULT_PROFANITY_PHRASES["en"])
+        script = (pr.get("script") or DEFAULT_PROFANITY_SCRIPT)[key]
+        plain = _plain(text)
+        if any(_plain(p) in plain for p in phrases):
+            # Only once: after this, repeated abuse falls through to the model's off_topic strikes.
+            self._profanity_said = True
+            logger.info("call %s: profanity heard, one polite reminder", self.call_id)
+            self.session.interrupt()
+            quote = "Πες αμέσως ακριβώς αυτό" if self.language == "el" else "Say exactly this right now"
+            self.session.generate_reply(instructions=f"{quote}: {script}")
 
     # --- recording (G7) ---
 
@@ -1308,6 +1342,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
     def _heard(text: str) -> None:
         rc.heard_user(text)
         rc.check_emergency(text)
+        rc.check_profanity(text)
         rc.check_language(text)
 
     CallerTurns(session, rc.engine, _heard)
