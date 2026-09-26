@@ -58,6 +58,7 @@ Migrations 0016 and 0017. 66 backend tests; each part below has its own test fil
 - **Encryption:** on in production since 2026-09-25 (key in the owner's `~/.config/voiceagent/`); recordings are sealed by the scheduler after upload.
 - **Push notifications** need a paid Apple developer account.
 - **Agent health probe** stays off until the agent has more memory.
+- **Rotate exposed keys before production (2026-09-26).** The Google Maps API key, Google OAuth client secret and client ID were shared in an assistant chat session on 2026-09-26 and are in use for testing only. Before any production/pilot use: regenerate the Google OAuth client secret and rotate/lock down the Maps API key (restrict it to the Places API and to a backend referrer/IP). This is in addition to the still-pending rotation of the LiveKit secret and Railway workspace token (exposed 2026-09-24, tracked in CLAUDE.md's "Security state").
 
 ## Remaining acceptance and onboarding work
 
