@@ -367,10 +367,21 @@ class ReceptionistAgent(PrankCallerAgent):
             before: "νωρίτερα" / "earlier": the earliest time you just offered (HH:MM); only earlier times come back.
                 To check one exact time, set both after and before to that time.
         """
-        return await self._tool("check_availability", {
+        payload = {
             "when": when, "service_id": service_id or None, "staff": staff or None,
             "appointment_id": appointment_id or None, "after": after or None, "before": before or None,
-        })
+        }
+        # On the first inbound lookup, use the recognized caller turn itself. If STT
+        # stopped before the day was spoken, the backend returns no_date instead of
+        # accepting a day the model guessed (observed as "σήμερα" in a demo call).
+        if (not getattr(self._rc, "_availability_checked", False)
+                and self._rc.metadata.get("direction") in ("web", "inbound")
+                and not appointment_id and self._rc._last_user_text):
+            payload["when"] = self._rc._last_user_text
+        reply = await self._tool("check_availability", payload)
+        if json.loads(reply).get("date"):
+            self._rc._availability_checked = True
+        return reply
 
     @function_tool
     async def prepare_action(
@@ -934,6 +945,7 @@ class ReceptionistCall:
         self._confirmation_floor = 0
         self._confirmation_armed = False
         self._prepared_name: str | None = None
+        self._availability_checked = False
 
     def spawn(self, coro) -> None:
         t = asyncio.create_task(coro)
