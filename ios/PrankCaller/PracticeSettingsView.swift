@@ -168,11 +168,13 @@ struct PracticeSettingsView: View {
     }
 
     private func decide(_ v: ConfigVersion, approve: Bool) async {
+        if approve, !(await AppLock.confirm("Έγκριση αλλαγής: \(v.summary)")) { return }
         do { try await api.decide(practice.id, v.id, approve: approve); await load() }
         catch { errorMessage = friendlyMessage(error) }
     }
 
     private func rollback(_ v: ConfigVersion) async {
+        guard await AppLock.confirm("Επαναφορά ρυθμίσεων") else { return }
         do { try await api.rollback(practice.id, v.id); await load() }
         catch { errorMessage = friendlyMessage(error) }
     }
@@ -183,6 +185,7 @@ struct PracticeSettingsView: View {
     }
 
     private func makeLink(staffId: String?) async {
+        guard await AppLock.confirm("Νέος σύνδεσμος για αλλαγές") else { return }
         do { link = try await api.createLink(practice.id, staffId: staffId) }
         catch { errorMessage = friendlyMessage(error) }
     }

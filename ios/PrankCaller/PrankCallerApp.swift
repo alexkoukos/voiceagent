@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct PrankCallerApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @Environment(\.scenePhase) private var phase
 
     var body: some Scene {
         WindowGroup {
@@ -26,13 +27,14 @@ struct PrankCallerApp: App {
         TabView(selection: $tab) {
             NewCallView()
                 .tabItem { Label("Κλήση", systemImage: "phone.fill") }.tag(0)
-            HistoryView()
+            Locked { HistoryView() }
                 .tabItem { Label("Ιστορικό", systemImage: "clock") }.tag(1)
-            ReceptionistView()
+            Locked { ReceptionistView() }
                 .tabItem { Label("Γραμματεία", systemImage: "phone.arrow.down.left") }.tag(2)
         }
         .tint(Palette.ink)
         .environment(PushRouter.shared)
+        .onChange(of: phase) { _, p in AppLock.shared.phaseChanged(p) }
         .onChange(of: tab, initial: true) { _, t in if t == 2 { PushRegistration.shared.askPermission() } }
     }
 }
