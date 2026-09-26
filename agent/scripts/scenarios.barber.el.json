@@ -1,0 +1,31 @@
+[
+  {
+    "name": "barber-prices-and-hours",
+    "lines": [
+      "Καλησπέρα, πόσο κοστίζει το κούρεμα και τα γένια;",
+      "Και τι ώρα κλείνετε την Παρασκευή;",
+      "Ευχαριστώ, γεια σας."
+    ],
+    "expect": {"outcome": "info_given", "path": "call_center"}
+  },
+  {
+    "name": "barber-book-named-staff",
+    "lines": [
+      "Θέλω να κλείσω κούρεμα με τον Νίκο την άλλη Τρίτη το απόγευμα.",
+      "Στις πέντε, αν είναι διαθέσιμος.",
+      "Λέγομαι Γιώργος Παπαδόπουλος.",
+      "Ναι, σωστά.",
+      "Ευχαριστώ, γεια σας."
+    ],
+    "expect": {"outcome": "booked", "service_id": "haircut", "time_local": "17:00", "path": "booking"}
+  },
+  {
+    "name": "barber-walk-in-question",
+    "lines": [
+      "Μπορώ να έρθω χωρίς ραντεβού;",
+      "Πού είναι το μαγαζί;",
+      "Εντάξει, ευχαριστώ."
+    ],
+    "expect": {"outcome": "info_given", "path": "call_center"}
+  }
+]
