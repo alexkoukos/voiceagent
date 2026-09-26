@@ -20,6 +20,10 @@ Spec: `AI Voice Receptionist 2.0 PRD.md`. Migrations 0012 + 0013. Nothing has ru
 - **Live on Railway:** demo practice "Οδοντιατρείο Παπαδοπούλου" (slug only in the local scratch notes, not here: the repo is public), two dentists each with a Google Calendar created by the service account `receptionist@ai-receptionist-59557` and shared with the owner. Telnyx balance was $0.79 on 2026-09-25; Greek mobiles cost ~$0.37/min from the US number.
 - **Needs from the user:** SMTP + Telnyx SMS credentials, Google service account, Greek DID, run `backend/scripts/setup_inbound.py`, a lawyer for the DPA (G2).
 
+## Onboarding checklist (2026-09-26, not deployed)
+- New practice from the app: Γραμματεία → + (vertical template, name, number, email, demo slug). Then Ρυθμίσεις → "Έναρξη λειτουργίας": `GET /practices/<id>/onboarding` lists required/optional items, `PUT` records the DPA and hand confirmations, `POST .../go-live` records `live_at` (a record, not a gate). Migration 0019 (`practices.onboarding`).
+- Creation now rejects a number another active practice uses, unknown verticals, and staff with unknown service ids. Swift is uncompiled. Details in `PRD_STATUS.md` ("Onboarding").
+
 ## Checkpoint (2026-09-25, end of session)
 
 **Live on Railway now**

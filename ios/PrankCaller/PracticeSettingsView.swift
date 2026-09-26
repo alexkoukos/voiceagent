@@ -22,6 +22,9 @@ struct PracticeSettingsView: View {
             AlertsSection(alerts: $alerts) { await load() }
             approvalSection
             Section {
+                NavigationLink { OnboardingView(practice: practice) } label: {
+                    Label("Έναρξη λειτουργίας", systemImage: "checklist")
+                }
                 NavigationLink { ImportView(practice: practice) } label: {
                     Label("Εισαγωγή στοιχείων", systemImage: "square.and.arrow.down")
                 }

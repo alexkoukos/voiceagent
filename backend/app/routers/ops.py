@@ -1,5 +1,6 @@
-"""Running practices after go-live: patient data requests (OP8), blocked numbers and cost
-caps (OP10), offboarding (OP7), and operator alerts (OP9)."""
+"""Onboarding imports and the go-live checklist, then running practices after go-live:
+patient data requests (OP8), blocked numbers and cost caps (OP10), offboarding (OP7), and
+operator alerts (OP9)."""
 
 import csv
 import io
@@ -15,8 +16,8 @@ from app.database import get_db
 from app.models import AdminLink, Alert, Appointment, Call, CallStatus, DataRequest, Practice
 from app.routers.practices import _get
 from app.schemas import (
-    AdminPinIn, AlertOut, AppointmentOut, ConfigVersionOut, CostCapIn, DataRequestOut, GoogleImportIn, PhoneIn, PriceListIn,
-    UsageOut,
+    AdminPinIn, AlertOut, AppointmentOut, ConfigVersionOut, CostCapIn, DataRequestOut, GoogleImportIn, OnboardingIn, PhoneIn,
+    PriceListIn, UsageOut,
 )
 
 router = APIRouter(prefix="/practices", tags=["ops"])
@@ -205,6 +206,49 @@ async def forwarding(practice_id: str, mode: str = "backup", db: AsyncSession = 
     return {"target": target, "mode": mode,
             "codes": onboarding.forwarding_codes(target, "full" if mode == "full" else "backup"),
             "off": FORWARDING_OFF}
+
+
+# --- go-live checklist ---
+
+
+@router.get("/{practice_id}/onboarding")
+async def get_onboarding(practice_id: str, db: AsyncSession = Depends(get_db)):
+    """What is still missing before this practice's calls go to the agent (see onboarding.checklist)."""
+    return await onboarding.readiness(db, await _get(db, practice_id))
+
+
+@router.put("/{practice_id}/onboarding")
+async def update_onboarding(practice_id: str, payload: OnboardingIn, db: AsyncSession = Depends(get_db)):
+    """Confirms what only a person can check: the signed DPA, forwarding dialed, a good test call."""
+    practice = await _get(db, practice_id)
+    state = dict(practice.onboarding or {})
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if "dpa" in payload.model_fields_set:
+        state["dpa"] = payload.dpa.model_dump(mode="json") if payload.dpa else None
+    for field, key in (("forwarding_confirmed", "forwarding_confirmed_at"),
+                       ("test_call_confirmed", "test_call_confirmed_at")):
+        value = getattr(payload, field)
+        if value is not None:
+            state[key] = (state.get(key) or now) if value else None
+    practice.onboarding = state  # new dict so the JSON column is saved
+    await db.commit()
+    return await onboarding.readiness(db, practice)
+
+
+@router.post("/{practice_id}/go-live")
+async def go_live(practice_id: str, db: AsyncSession = Depends(get_db)):
+    """Records the go-live once every required item is done; 409 lists what is missing.
+    Calls are answered either way (the demo practice predates this): it is a record, not a gate."""
+    practice = await _get(db, practice_id)
+    report = await onboarding.readiness(db, practice)
+    if not report["ready"]:
+        missing = [i["id"] for i in report["items"] if i["required"] and i["status"] != "ok"]
+        raise HTTPException(status_code=409, detail={"error": "not_ready", "missing": missing})
+    if not report["live_at"]:
+        practice.onboarding = {**(practice.onboarding or {}),
+                               "live_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        await db.commit()
+    return await onboarding.readiness(db, practice)
 
 
 # --- changes by phone and SMS (OP2) ---

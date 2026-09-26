@@ -242,3 +242,117 @@ def forwarding_codes(target: str, mode: str, no_answer_seconds: int = 20) -> lis
         {"what": "busy", "code": f"**67*{target}#"},
         {"what": "unreachable", "code": f"**62*{target}#"},
     ]
+
+
+# --- go-live checklist ---
+#
+# One list the founder works through during the onboarding visit. Each item says what is
+# missing and whether that is ours to fix (a server credential: "not_configured") or the
+# practice's ("todo"). Required items block go-live; the rest are warnings.
+
+AI_WORDS = ("ψηφιακ", "τεχνητ", "αυτόματ", "a.i.", "digital assistant", "virtual assistant", "artificial",
+            "automated")
+RECORDING_WORDS = ("ηχογραφ", "καταγράφ", "καταγραφ", "record")
+
+
+def discloses_ai(text: str) -> bool:
+    text = text.lower()
+    return any(w in text for w in AI_WORDS) or re.search(r"\bai\b", text) is not None
+
+
+def mentions_recording(text: str) -> bool:
+    return any(w in text.lower() for w in RECORDING_WORDS)
+
+
+def _item(id_: str, prd: str | None, ok: bool, detail: str, *, required: bool = True,
+          not_configured: bool = False) -> dict:
+    if ok:
+        status = "ok"
+    elif not_configured:
+        status = "not_configured"
+    else:
+        status = "todo" if required else "warning"
+    return {"id": id_, "prd": prd, "required": required, "status": status, "detail": "" if ok else detail}
+
+
+def checklist(practice: Practice, staff: list, connected_calendars: set[str], answered_calls: int,
+              settings=None) -> list[dict]:
+    """Pure: everything is passed in, so it is testable without a database."""
+    s = settings or get_settings()
+    state = practice.onboarding or {}
+    notif = practice.notifications or {}
+    active = [p for p in staff if p.active]
+    items = []
+
+    open_days = [d for d, spans in (practice.hours or {}).items() if spans]
+    items.append(_item("hours", "O1", bool(open_days), "No opening hours: import them from Google or set them."))
+    services = practice.services or []
+    items.append(_item("services", "O2", bool(services) and all(x.get("duration_minutes") for x in services),
+                       "Services need a name and a duration (price list import or by hand)."))
+    empty_kb = [k for k, v in (practice.knowledge_base or {}).items() if not str(v).strip()]
+    items.append(_item("knowledge_base", "O1", not empty_kb,
+                       "Empty answers the agent would skip: " + ", ".join(empty_kb[:6]), required=False))
+    items.append(_item("staff", "R2", bool(active),
+                       "No staff: callers can't ask for a person or be handed over.", required=False))
+
+    calendar_ids = {c for c in [practice.calendar_id, *(p.calendar_id for p in active)] if c}
+    unreachable = sorted(c for c in calendar_ids
+                         if c not in connected_calendars and not s.google_service_account_json)
+    items.append(_item(
+        "calendars", "O3", not unreachable,
+        f"{len(unreachable)} calendar(s) not connected: sign in per doctor (O3) or set GOOGLE_SERVICE_ACCOUNT_JSON.",
+        not_configured=not (s.google_service_account_json or s.google_oauth_client_id)))
+
+    items.append(_item("numbers", "O5", bool(practice.phone_numbers),
+                       "No number for the agent: buy a Greek DID, add it here, run scripts/setup_inbound.py."))
+    items.append(_item("forwarding", "O5", bool(state.get("forwarding_confirmed_at")),
+                       "Dial the forwarding codes on the business phone, then confirm here.", required=False))
+
+    greeting = practice.greeting or ""
+    items.append(_item("ai_disclosure", "G1", not greeting.strip() or discloses_ai(greeting),
+                       "The custom greeting must say it is a digital (AI) assistant."))
+    items.append(_item("recording_notice", "G7", mentions_recording(greeting),
+                       "The greeting must say the call is recorded (Greek law) before real use."))
+    dpa = state.get("dpa") or {}
+    items.append(_item("dpa", "G2", bool(dpa.get("signed_on")), "Record the signed data processing agreement."))
+
+    emails = notif.get("emails") or []
+    smtp = bool(s.smtp_host and s.email_from)
+    items.append(_item("email", None, bool(emails) and smtp,
+                       "No business email." if not emails else "SMTP_HOST/EMAIL_FROM not set: emails stay pending.",
+                       not_configured=bool(emails) and not smtp))
+    sms = bool(s.telnyx_api_key and s.sms_from)
+    wants_sms = notif.get("customer_sms", True) or bool(notif.get("urgent_sms"))
+    items.append(_item("sms", None, not wants_sms or sms, "TELNYX_API_KEY/SMS_FROM not set: texts stay pending.",
+                       required=False, not_configured=True))
+    items.append(_item("fallback_number", "OP1", bool(notif.get("fallback_number")),
+                       "No fallback mobile for when the agent is down (scripts/setup_failover.py).", required=False))
+    items.append(_item("alerts", "OP9", bool(s.founder_email or s.founder_sms),
+                       "FOUNDER_EMAIL/FOUNDER_SMS not set: nobody gets operator alerts.",
+                       required=False, not_configured=True))
+    items.append(_item("encryption", "OP8", bool(s.data_encryption_key),
+                       "DATA_ENCRYPTION_KEY not set: patient data is stored unencrypted.",
+                       required=False, not_configured=True))
+    items.append(_item("test_call", "M0", answered_calls > 0 or bool(state.get("test_call_confirmed_at")),
+                       "Make a test call (the /demo page or the number) and check the summary email."))
+    return items
+
+
+def ready(items: list[dict]) -> bool:
+    return all(i["status"] == "ok" for i in items if i["required"])
+
+
+async def readiness(db: AsyncSession, practice: Practice) -> dict:
+    from sqlalchemy import func, select
+
+    from app.models import CalendarConnection, Call, CallStatus, Staff
+
+    staff = list((await db.execute(select(Staff).where(Staff.practice_id == practice.id))).scalars())
+    connected = set((await db.execute(select(CalendarConnection.calendar_id)
+                                      .where(CalendarConnection.practice_id == practice.id))).scalars())
+    answered = (await db.execute(select(func.count()).select_from(Call).where(
+        Call.practice_id == practice.id, Call.direction.in_(("inbound", "web")),
+        Call.status == CallStatus.completed))).scalar_one()
+    items = checklist(practice, staff, connected, answered)
+    state = practice.onboarding or {}
+    return {"ready": ready(items), "live_at": state.get("live_at"), "dpa": state.get("dpa"), "items": items}

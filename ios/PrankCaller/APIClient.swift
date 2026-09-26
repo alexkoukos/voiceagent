@@ -86,13 +86,16 @@ struct APIClient {
         return e
     }()
 
-    private func request(_ method: String, _ path: String, body: (any Encodable)? = nil) async throws -> Data {
+    private func request(_ method: String, _ path: String, body: (any Encodable)? = nil, json: Data? = nil) async throws -> Data {
         guard let url = URL(string: Settings.baseURL + path) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue(Settings.apiKey, forHTTPHeaderField: "x-api-key")
         if let body {
             req.httpBody = try Self.encoder.encode(body)
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        } else if let json {
+            req.httpBody = json
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -194,6 +197,26 @@ struct APIClient {
     func disconnectCalendar(_ pid: String, _ id: String) async throws {
         _ = try await request("DELETE", "/practices/\(pid)/calendar/connections/\(id)")
     }
+
+    // Onboarding: a practice from a vertical template, then the go-live checklist
+    func verticals() async throws -> [VerticalInfo] { try await get("/verticals") }
+    /// The template from /verticals/<id> with the practice's own fields on top, posted as raw
+    /// JSON: its keys are already the server's, and a typed copy would drop what the app doesn't know.
+    func createPractice(vertical: String, fields: [String: Any]) async throws -> Practice {
+        let data = try await request("GET", "/verticals/\(vertical)")
+        var practice = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        practice.merge(fields) { _, new in new }
+        let body = try JSONSerialization.data(withJSONObject: practice)
+        return try Self.decoder.decode(Practice.self, from: try await request("POST", "/practices", json: body))
+    }
+    func addStaff(_ pid: String, _ s: NewStaff) async throws -> StaffMember {
+        try await send("POST", "/practices/\(pid)/staff", body: s)
+    }
+    func onboarding(_ pid: String) async throws -> OnboardingReport { try await get("/practices/\(pid)/onboarding") }
+    func updateOnboarding(_ pid: String, _ u: OnboardingUpdate) async throws -> OnboardingReport {
+        try await send("PUT", "/practices/\(pid)/onboarding", body: u)
+    }
+    func goLive(_ pid: String) async throws -> OnboardingReport { try await send("POST", "/practices/\(pid)/go-live") }
 
     // Operations
     func alerts() async throws -> [OpsAlert] { try await get("/alerts") }

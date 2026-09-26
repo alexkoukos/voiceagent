@@ -68,6 +68,28 @@ Migrations 0016 and 0017. 66 backend tests; each part below has its own test fil
 - Complete Greek DID/forwarding setup, DPA/legal review and vendor residency/account checks before pilot acceptance. Existing repository notes identify these as onboarding dependencies; their external status was not reverified.
 - Validate the iOS receptionist and handoff flows on device, including push entitlements. No iOS code changed in this pass.
 
+## Onboarding, 2026-09-26
+
+The 2.0 PRD file is kept local (gitignored) and was not available in the cloud session, so the IDs below are the ones the code and this file already cite. Check the PRD for onboarding items not listed here.
+
+| PRD item | Status | Notes |
+| --- | --- | --- |
+| Vertical template -> practice | Done | `GET /verticals[/<id>]`, `POST /practices`. New: unknown `vertical` -> 422; a number already used by another active practice -> 409 `number_in_use` (inbound calls are matched by dialed number). iOS "Νέα επιχείρηση" (+ in Γραμματεία, and the empty state) posts the template with name, number, email and demo slug. |
+| Staff (R2) | Done | `POST /practices/<id>/staff` now rejects unknown `service_ids` (422). iOS: add staff from the go-live checklist. |
+| O1 Google profile, O2 price list, O4 approval queue | Done | Unchanged. Need `GOOGLE_MAPS_API_KEY` / `GEMINI_API_KEY`. |
+| O3 calendars | Built, needs credentials | Checklist item `calendars`: every calendar of the practice and its active staff needs a doctor sign-in or the service account. Needs `GOOGLE_OAUTH_CLIENT_ID/SECRET` or `GOOGLE_SERVICE_ACCOUNT_JSON`. |
+| O5 number and forwarding | Blocked on the Greek DID | Checklist `numbers` (required) and `forwarding` (optional, confirmed by hand after dialing the codes). `scripts/setup_inbound.py` still has to be run per number. |
+| G1 AI disclosure | Done | A custom greeting must say it's a digital/AI assistant; the default one does. |
+| G7 recording notice | Open (owner's decision) | Required checklist item: the greeting must say the call is recorded. No greeting says so yet (still testing). |
+| G2 DPA | Record built, text needs a lawyer | `PUT /practices/<id>/onboarding` with `dpa: {signed_on, signed_by}`. The DPA text itself is not written. |
+| Test call (M0) | Done | Counted from a completed inbound/web call, or confirmed by hand. |
+| Notifications, OP1 fallback, OP9 alerts, OP8 encryption | Built, needs credentials | Shown as `not_configured` when SMTP, Telnyx SMS, `FOUNDER_*` or `DATA_ENCRYPTION_KEY` are missing. Email is required, the rest are warnings. |
+| Go-live | Done | `GET /practices/<id>/onboarding` (checklist), `POST /practices/<id>/go-live` (409 lists what is missing). It records `live_at`; it does not stop calls, so the live demo practice keeps answering. |
+
+- Migration 0019 adds `practices.onboarding` (JSON). Checked on a local Postgres 16: upgrade, downgrade, upgrade. Not deployed.
+- Tests: `backend/tests/test_go_live.py` (5 unit, 2 Postgres). 85 tests pass against Postgres. Endpoints also checked over HTTP with a local server.
+- iOS: `OnboardingView.swift` (new business, checklist, DPA, confirmations, staff) plus entries in Γραμματεία and Ρυθμίσεις. Not compiled (Linux session): build it in Xcode before installing.
+
 ## Deployment: move backend + Postgres to EU West (before Greek go-live), 2026-09-26
 
 Follow-up for when the service goes live in Greece (Alex to do on return). Not started.

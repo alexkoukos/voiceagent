@@ -185,6 +185,49 @@ struct StaffMember: Codable, Identifiable, Hashable {
     let role: String
 }
 
+struct NewStaff: Encodable {
+    var name = ""
+    var role = "doctor"
+    var phone: String?
+    var email: String?
+}
+
+// MARK: Onboarding
+
+struct VerticalInfo: Codable, Identifiable, Hashable {
+    let id: String
+    let label: String
+    let wave: Int
+}
+
+struct OnboardingItem: Codable, Identifiable {
+    let id: String
+    let prd: String?
+    let required: Bool
+    /// ok, todo (the business), not_configured (a server credential) or warning (optional)
+    let status: String
+    let detail: String
+}
+
+struct DpaRecord: Codable {
+    let signedOn: String  // yyyy-MM-dd
+    let signedBy: String
+}
+
+struct OnboardingReport: Codable {
+    let ready: Bool
+    let liveAt: String?
+    let dpa: DpaRecord?
+    let items: [OnboardingItem]
+}
+
+/// Nil fields are left out of the JSON, so the server keeps them as they are.
+struct OnboardingUpdate: Encodable {
+    var dpa: DpaRecord?
+    var forwardingConfirmed: Bool?
+    var testCallConfirmed: Bool?
+}
+
 struct Closure: Decodable, Identifiable {
     let id: String
     let dateFrom: Date

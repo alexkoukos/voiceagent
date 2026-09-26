@@ -108,6 +108,10 @@ class Practice(Base):
     offboarded_at: Mapped[datetime | None] = mapped_column(nullable=True)
     # OP2: PBKDF2 of the 4-6 digit PIN for changes by phone. None turns phone changes off.
     admin_pin_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Go-live checklist state (app/onboarding.py): {"dpa": {"signed_on", "signed_by"},
+    # "forwarding_confirmed_at", "test_call_confirmed_at", "live_at"}. Not part of PracticeIn,
+    # so a full practice update never clears it.
+    onboarding: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 

@@ -542,6 +542,19 @@ class GoogleImportIn(BaseModel):
     query: str = Field(min_length=2, max_length=2000)
 
 
+class DpaIn(BaseModel):
+    signed_on: dt.date
+    signed_by: str = Field(min_length=1, max_length=SHORT_TEXT)
+
+
+class OnboardingIn(BaseModel):
+    """Go-live checklist items only a person can confirm. Omitted fields stay as they are;
+    `dpa: null` clears the signature, `false` clears a confirmation."""
+    dpa: DpaIn | None = None
+    forwarding_confirmed: bool | None = None
+    test_call_confirmed: bool | None = None
+
+
 class PriceListIn(BaseModel):
     # A photo/PDF (base64) or the website page with the prices.
     data_base64: str | None = Field(default=None, max_length=17_000_000)

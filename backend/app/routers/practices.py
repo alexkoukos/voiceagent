@@ -70,8 +70,33 @@ async def get_vertical(vertical: str):
 # --- practices ---
 
 
+async def _check_numbers(db: AsyncSession, numbers: list[str], practice_id: str | None = None) -> None:
+    """An inbound call is matched to its practice by the dialed number, so a number belongs to
+    one active practice only."""
+    taken = []
+    for other in (await db.execute(select(Practice).where(Practice.offboarded_at.is_(None)))).scalars():
+        if other.id != practice_id:
+            taken += [n for n in numbers if n in (other.phone_numbers or [])]
+    if taken:
+        raise HTTPException(status_code=409, detail={"error": "number_in_use", "numbers": sorted(set(taken))})
+
+
+def _check_vertical(vertical: str) -> None:
+    if vertical and not (vertical.isalnum() and (VERTICALS_DIR / f"{vertical}.json").is_file()):
+        raise HTTPException(status_code=422, detail={"error": "unknown_vertical", "vertical": vertical})
+
+
+def _check_staff_services(practice: Practice, payload: StaffIn) -> None:
+    known = {s["id"] for s in practice.services or []}
+    unknown = [i for i in payload.service_ids if i not in known]
+    if unknown:
+        raise HTTPException(status_code=422, detail={"error": "unknown_service", "service_ids": unknown})
+
+
 @router.post("", response_model=PracticeOut)
 async def create_practice(payload: PracticeIn, db: AsyncSession = Depends(get_db)):
+    _check_vertical(payload.vertical)
+    await _check_numbers(db, payload.phone_numbers)
     practice = Practice(**payload.to_columns())
     db.add(practice)
     return await _save(db, practice)
@@ -90,6 +115,9 @@ async def get_practice(practice_id: str, db: AsyncSession = Depends(get_db)):
 @router.put("/{practice_id}", response_model=PracticeOut)
 async def update_practice(practice_id: str, payload: PracticeIn, db: AsyncSession = Depends(get_db)):
     practice = await _get(db, practice_id)
+    if payload.vertical != practice.vertical:
+        _check_vertical(payload.vertical)
+    await _check_numbers(db, payload.phone_numbers, practice.id)
     columns = payload.to_columns()
     # Closures have their own calls; a full update never drops them.
     columns["rules"]["closures"] = (practice.rules or {}).get("closures") or []
@@ -127,7 +155,7 @@ async def list_staff(practice_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{practice_id}/staff", response_model=StaffOut)
 async def create_staff(practice_id: str, payload: StaffIn, db: AsyncSession = Depends(get_db)):
-    await _get(db, practice_id)
+    _check_staff_services(await _get(db, practice_id), payload)
     person = Staff(practice_id=practice_id, **payload.to_columns())
     db.add(person)
     return await _save(db, person)
@@ -138,6 +166,7 @@ async def update_staff(practice_id: str, staff_id: str, payload: StaffIn, db: As
     person = await db.get(Staff, staff_id)
     if person is None or person.practice_id != practice_id:
         raise HTTPException(status_code=404, detail="Staff not found")
+    _check_staff_services(await _get(db, practice_id), payload)
     for k, v in payload.to_columns().items():
         setattr(person, k, v)
     return await _save(db, person)

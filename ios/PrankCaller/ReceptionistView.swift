@@ -15,6 +15,7 @@ struct ReceptionistView: View {
     @State private var loaded = false
     @State private var errorMessage: String?
     @State private var joining: Handoff?
+    @State private var creating = false
     @Environment(PushRouter.self) private var push
 
     enum Tab: String, CaseIterable, Identifiable {
@@ -60,6 +61,10 @@ struct ReceptionistView: View {
                         .accessibilityLabel("Επιχείρηση")
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { creating = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("Νέα επιχείρηση")
+                }
                 if let practice {
                     ToolbarItem(placement: .topBarTrailing) {
                         NavigationLink { PracticeSettingsView(practice: practice) } label: {
@@ -77,6 +82,12 @@ struct ReceptionistView: View {
             }
             .navigationDestination(for: String.self) { id in
                 if let pid = practice?.id { ReceptionistCallView(practiceId: pid, callId: id) }
+            }
+            .sheet(isPresented: $creating) {
+                NewPracticeView { p in
+                    practices.append(p)
+                    practiceId = p.id
+                }
             }
             .fullScreenCover(item: $joining) { h in
                 if let pid = practice?.id { HandoffView(practiceId: pid, handoff: h) }
@@ -182,8 +193,13 @@ struct ReceptionistView: View {
     @ViewBuilder private var emptyState: some View {
         if loaded && errorMessage == nil {
             if practices.isEmpty {
-                ContentUnavailableView("Καμία επιχείρηση", systemImage: "building.2",
-                                       description: Text("Πρόσθεσε μια επιχείρηση από τον server (POST /practices)."))
+                ContentUnavailableView {
+                    Label("Καμία επιχείρηση", systemImage: "building.2")
+                } description: {
+                    Text("Ξεκίνα από έναν κλάδο και συμπλήρωσε τα υπόλοιπα στη λίστα έναρξης.")
+                } actions: {
+                    Button("Νέα επιχείρηση") { creating = true }.buttonStyle(.borderedProminent).tint(Palette.ink)
+                }
             } else if tab == .calls && calls.isEmpty {
                 ContentUnavailableView("Καμία κλήση", systemImage: "phone.arrow.down.left",
                                        description: Text("Οι κλήσεις που απαντά ο βοηθός θα εμφανίζονται εδώ."))
