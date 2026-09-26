@@ -69,6 +69,8 @@ def cost(call: Call) -> float | None:
 
 
 def wants_business_summary(practice: Practice, call: Call) -> bool:
+    if call.purpose == "test":
+        return False  # OP1 daily test calls are health checks, not something to email about.
     return {
         "inbound": True,
         "web": bool((practice.notifications or {}).get("web_summaries")),
