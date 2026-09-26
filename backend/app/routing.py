@@ -127,14 +127,7 @@ async def route(
     intent = intent if intent in INTENTS else "unclear"
     out: dict = {}
 
-    # R7: language switch, decided here so it's logged and bounded to el/en.
-    if language in ("el", "en") and language != (call.language or practice.language):
-        if rules["language_switch"]:
-            call.language = language
-            out["switch_language"] = language
-            await log(db, call, "language", language, "R7 caller language")
-        else:
-            await log(db, call, "language", language, "R7 switch disabled")
+    # R7: the model never switches the language; only "English mode" does (tool_set_language).
 
     # R8: department.
     if department.strip():

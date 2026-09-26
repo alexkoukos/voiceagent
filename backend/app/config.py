@@ -61,8 +61,9 @@ class Settings(BaseSettings):
     backup_sms: str = ""
     alert_ack_minutes: int = 30
     # OP1 health checks: LiveKit every 5 minutes; a no-op agent job every N minutes (0 = off).
-    # Each agent job starts a ~400 MB process, so keep this sparse on a small instance.
-    health_agent_check_minutes: int = 30
+    # Off by default: each agent job starts a ~400 MB process, and a probe during a live call
+    # got the Railway agent OOM-killed before. Turn on (e.g. 15) once the agent has more memory.
+    health_agent_check_minutes: int = 0
 
     # Call summaries (a cheap text model, after hang-up).
     summary_model: str = "gemini-3.5-flash-lite"
