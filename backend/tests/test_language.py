@@ -5,8 +5,17 @@ from datetime import datetime, timezone
 import pytest
 
 from app import receptionist, routing
+from app.languages import language_for_phone
 from app.models import Call, CallStatus, Practice
 from app.schemas import LanguageArgs
+
+
+def test_language_for_phone_defaults_to_greek():
+    # Every call starts in Greek now, whatever the number (owner's receptionist rule).
+    assert language_for_phone("+302100000001") == "el"  # Greek
+    assert language_for_phone("+35799123456") == "el"  # Cypriot
+    assert language_for_phone("+447700900123") == "el"  # UK, no longer English
+    assert language_for_phone("+15551234567") == "el"  # US, no longer English
 
 
 @pytest.mark.asyncio
