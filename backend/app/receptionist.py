@@ -257,6 +257,11 @@ async def build_metadata(
             "phrases": rules["emergency"]["phrases"],
             "script": routing.EMERGENCY_SCRIPT,
         },
+        "profanity": {
+            "enabled": rules["profanity"]["enabled"],
+            "phrases": rules["profanity"]["phrases"],
+            "script": routing.PROFANITY_SCRIPT,
+        },
         "handoff_timeout_seconds": rules["handoff"]["timeout_seconds"],
         # Words the transcriber should expect: staff, services, departments.
         "vocabulary": _vocabulary(practice, staff),

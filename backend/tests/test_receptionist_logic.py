@@ -8,7 +8,7 @@ import pytest
 from app import booking
 from app.booking import hours_state, match_staff
 from app.prompts import default_greeting
-from app.routing import is_emergency
+from app.routing import PROFANITY_SCRIPT, is_emergency, is_profanity
 from app.texts import customer_sms
 
 ATH = ZoneInfo("Europe/Athens")
@@ -50,6 +50,30 @@ def test_emergency_phrases():
     assert is_emergency(p, "έχω πόνο στο στήθος... πόνος στο στήθος")
     assert not is_emergency(p, "θέλω ραντεβού για καθαρισμό")
     assert not is_emergency(practice(vertical="barber"), "δεν αναπνέει")
+
+
+def test_profanity_directed_insults():
+    # Directed insults/curses, accents and case folded, trigger the polite reminder.
+    assert is_profanity("είσαι μαλάκας ρε", "el")
+    assert is_profanity("ΓΑΜΉΣΟΥ", "el")
+    assert is_profanity("να γαμηθείς", "el")
+    assert is_profanity("you idiot", "en")
+    assert is_profanity("fuck you", "en")
+    assert is_profanity("just shut up", "en")
+
+
+def test_profanity_leaves_casual_talk_alone():
+    # Casual fillers and normal appointment phrasing are never flagged.
+    assert not is_profanity("γαμώτο με πονάει το δόντι", "el")
+    assert not is_profanity("ρε συ, θέλω ένα ραντεβού", "el")
+    assert not is_profanity("θέλω ραντεβού για καθαρισμό", "el")
+    assert not is_profanity("damn it, I forgot the time", "en")
+    assert not is_profanity("I'd like to book an appointment", "en")
+
+
+def test_profanity_script_has_both_languages():
+    assert set(PROFANITY_SCRIPT) == {"el", "en"}
+    assert PROFANITY_SCRIPT["el"] and PROFANITY_SCRIPT["en"]
 
 
 def test_greeting_is_only_the_assistant_line():
