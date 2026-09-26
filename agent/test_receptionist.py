@@ -76,3 +76,30 @@ async def test_web_pipeline_greeting_waits_for_playout():
     )
     await worker.ReceptionistAgent.greet(receiver, wait_for_playout=True)
     assert played == [greeting, "finished"]
+
+
+@pytest.mark.asyncio
+async def test_first_availability_lookup_uses_the_recognized_caller_day():
+    sent = []
+
+    async def call_tool(name, payload):
+        sent.append(payload)
+        return '{"error":"no_date"}' if len(sent) == 1 else '{"date":"2026-09-29"}'
+
+    rc = SimpleNamespace(
+        metadata={"direction": "web"}, _last_user_text="Θέλω κούρεμα με τον Νίκο",
+        _availability_checked=False,
+    )
+    receiver = SimpleNamespace(_rc=rc, _tool=call_tool)
+    await worker.ReceptionistAgent.check_availability.__wrapped__(
+        receiver, when="σήμερα", service_id="haircut", staff="Νίκος",
+    )
+    assert sent[0]["when"] == "Θέλω κούρεμα με τον Νίκο"
+    assert rc._availability_checked is False
+
+    rc._last_user_text = "Την άλλη Τρίτη το απόγευμα"
+    await worker.ReceptionistAgent.check_availability.__wrapped__(
+        receiver, when="σήμερα", service_id="haircut", staff="Νίκος",
+    )
+    assert sent[1]["when"] == "Την άλλη Τρίτη το απόγευμα"
+    assert rc._availability_checked is True
