@@ -91,11 +91,13 @@ async def inbound_call(payload: InboundStart, db: AsyncSession = Depends(get_db)
     caller = normalize_phone(payload.caller_number) if payload.caller_number else None
     try:
         call, metadata = await receptionist.start_call(db, practice, direction="inbound", caller_number=caller)
-    except receptionist.Busy:
+    except receptionist.Blocked:
+        # The agent hangs up on any error, without a word.
+        raise HTTPException(status_code=403, detail="blocked")
+    except (receptionist.Busy, receptionist.OverCap) as e:
         language = receptionist.call_language(practice, caller)
-        return JSONResponse(status_code=429, content={
-            "busy_line": receptionist.busy_line(practice, language), "language": language, "voice": practice.voice,
-        })
+        line = (receptionist.cap_line if isinstance(e, receptionist.OverCap) else receptionist.busy_line)(practice, language)
+        return JSONResponse(status_code=429, content={"busy_line": line, "language": language, "voice": practice.voice})
     return metadata
 
 

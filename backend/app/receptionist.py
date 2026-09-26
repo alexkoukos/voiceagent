@@ -13,11 +13,12 @@ from livekit import api
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import booking, events, notifications, routing, texts
+from app import alerts, booking, events, notifications, routing, texts
 from app.config import get_settings
 from app.languages import english_name, language_for_phone
 from app.models import (
-    Appointment, Call, CallStatus, Customer, Handoff, Message, Practice, RoutingEvent, WaitlistEntry,
+    Appointment, Call, CallStatus, Customer, Handoff, Message, Practice, RoutingEvent, TranscriptEntry, TranscriptRole,
+    WaitlistEntry,
 )
 from app.prompts import build_receptionist_prompt, default_greeting
 
@@ -31,6 +32,19 @@ DIALING_STALE_SECONDS = 120
 
 class Busy(Exception):
     pass
+
+
+class Blocked(Exception):
+    """The caller is on the practice's blocked list (OP10): hang up without a word."""
+
+
+class OverCap(Exception):
+    """This month's cost reached the practice's cap (OP10)."""
+
+
+# OP10: this many short, silent calls from one number in a day blocks it.
+SPAM_CALLS = 3
+SPAM_SECONDS = 8
 
 
 def utcnow() -> datetime:
@@ -55,7 +69,7 @@ def call_language(practice: Practice, caller_number: str | None) -> str:
 
 
 async def practice_for_number(db: AsyncSession, dialed_number: str) -> Practice | None:
-    for practice in (await db.execute(select(Practice))).scalars():
+    for practice in (await db.execute(select(Practice).where(Practice.offboarded_at.is_(None)))).scalars():
         if dialed_number in (practice.phone_numbers or []):
             return practice
     return None
@@ -74,6 +88,64 @@ async def active_calls(db: AsyncSession, practice_id: str | None = None) -> int:
     return (await db.execute(q)).scalar_one()
 
 
+async def month_cost(db: AsyncSession, practice: Practice, now: datetime | None = None) -> float:
+    now = now or datetime.utcnow()
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    return float((await db.execute(select(func.coalesce(func.sum(Call.cost_estimate), 0)).where(
+        Call.practice_id == practice.id, Call.created_at >= start))).scalar_one())
+
+
+async def check_cost_cap(db: AsyncSession, practice: Practice) -> None:
+    """Alert at 80% of the cap, refuse new calls at 100% (OP10)."""
+    cap = practice.monthly_cost_cap_eur
+    if not cap:
+        return
+    spent = await month_cost(db, practice)
+    month = datetime.utcnow().strftime("%Y-%m")
+    if spent >= 0.8 * cap:
+        full = spent >= cap
+        await alerts.raise_alert(
+            db, practice, "cost_cap",
+            f"{practice.name}: {'cost cap reached' if full else '80% of cost cap'} ({spent:.2f}€ / {cap:.2f}€)",
+            "New calls are refused until next month or a higher cap." if full else "",
+            dedupe_key=f"cost:{practice.id}:{month}:{'100' if full else '80'}",
+        )
+        await db.commit()
+        if full:
+            raise OverCap()
+
+
+async def block_if_spam(db: AsyncSession, call: Call) -> bool:
+    """Repeated short, silent calls from one number get it blocked (OP10). True if blocked now."""
+    if not call.caller_number or call.practice_id is None:
+        return False
+    since = datetime.utcnow() - timedelta(days=1)
+    calls = list((await db.execute(select(Call).where(
+        Call.practice_id == call.practice_id, Call.caller_number == call.caller_number, Call.created_at >= since,
+    ))).scalars())
+    spoke = set((await db.execute(select(TranscriptEntry.call_id).where(
+        TranscriptEntry.call_id.in_([c.id for c in calls]), TranscriptEntry.role == TranscriptRole.friend,
+    ))).scalars())
+    silent = [c for c in calls if c.id not in spoke and (c.duration_seconds or 0) <= SPAM_SECONDS
+              and c.status in (CallStatus.completed, CallStatus.failed)]
+    if len(silent) < SPAM_CALLS:
+        return False
+    practice = await db.get(Practice, call.practice_id)
+    if call.caller_number in (practice.blocked_numbers or []):
+        return False
+    practice.blocked_numbers = [*(practice.blocked_numbers or []), call.caller_number]
+    await alerts.raise_alert(db, practice, "spam_blocked", f"{practice.name}: blocked {call.caller_number}",
+                             f"{len(silent)} silent calls under {SPAM_SECONDS}s in 24h. Unblock in the app if wrong.",
+                             dedupe_key=f"spam:{practice.id}:{call.caller_number}")
+    return True
+
+
+def cap_line(practice: Practice, language: str) -> str:
+    if language == "el":
+        return f"{practice.name}. Δεν μπορούμε να απαντήσουμε αυτή τη στιγμή. Παρακαλούμε καλέστε ξανά αργότερα."
+    return f"{practice.name}. We can't take your call right now. Please call again later."
+
+
 def busy_line(practice: Practice, language: str) -> str:
     if language == "el":
         return f"{practice.name}. Όλες οι γραμμές είναι απασχολημένες. Παρακαλούμε καλέστε ξανά σε λίγα λεπτά."
@@ -87,7 +159,11 @@ async def start_call(
     db: AsyncSession, practice: Practice, *, direction: str, caller_number: str | None
 ) -> tuple[Call, dict]:
     """Creates the call record for an inbound or web call and returns the agent's metadata.
-    Raises Busy when the practice is at its concurrent-call cap (G8)."""
+    Raises Busy when the practice is at its concurrent-call cap (G8), Blocked for a blocked
+    caller and OverCap past the monthly cost cap (OP10)."""
+    if caller_number and caller_number in (practice.blocked_numbers or []):
+        raise Blocked()
+    await check_cost_cap(db, practice)
     if await active_calls(db, practice.id) >= practice.max_concurrent_calls:
         raise Busy()
     now = utcnow()
@@ -290,9 +366,17 @@ def _outbound_call(practice: Practice, phone: str, purpose: str, appointment_id:
     )
 
 
+async def outbound_allowed(db: AsyncSession, practice: Practice) -> bool:
+    """No reminder or waitlist calls after offboarding or past the cost cap (OP7, OP10)."""
+    if practice.offboarded_at:
+        return False
+    cap = practice.monthly_cost_cap_eur
+    return not cap or await month_cost(db, practice) < cap
+
+
 async def queue_reminder(db: AsyncSession, practice: Practice, appt: Appointment) -> Call | None:
     """Only customers with an existing appointment are ever called (G9)."""
-    if not appt.customer_phone or appt.status != "booked":
+    if not appt.customer_phone or appt.status != "booked" or not await outbound_allowed(db, practice):
         return None
     appt.reminder_status = "calling"
     call = _outbound_call(practice, appt.customer_phone, "reminder", appt.id)
@@ -302,7 +386,7 @@ async def queue_reminder(db: AsyncSession, practice: Practice, appt: Appointment
 
 async def offer_freed_slot(db: AsyncSession, practice: Practice, appt: Appointment) -> Call | None:
     """A cancellation freed a slot: call the oldest matching waitlist entry."""
-    if not (practice.reminders or {}).get("waitlist"):
+    if not (practice.reminders or {}).get("waitlist") or not await outbound_allowed(db, practice):
         return None
     local = appt.starts_at.astimezone(ZoneInfo(practice.timezone))
     # A repeated cancellation must not call another person for the same freed slot.
@@ -401,6 +485,8 @@ async def _emergency(db: AsyncSession, practice: Practice, call: Call) -> None:
     subject, body = texts.emergency_email(practice, call)
     await notifications.queue_business(db, practice, kind="urgent", subject=subject, body=body, call_id=call.id,
                                        urgent=True, dedupe_key=f"emergency:{call.id}")
+    await alerts.raise_alert(db, practice, "emergency", subject, body, call_id=call.id,
+                             dedupe_key=f"emergency:{call.id}")
 
 
 async def tool_emergency(db: AsyncSession, call: Call) -> dict:

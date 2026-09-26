@@ -211,8 +211,10 @@ class PracticeIn(BaseModel):
     retention_transcripts_days: int = Field(default=90, ge=1, le=3650)
     avg_booking_value: float = Field(default=0, ge=0)
     guarantee_threshold: int = Field(default=10, ge=0)
+    monthly_cost_cap_eur: float | None = Field(default=None, gt=0)
+    blocked_numbers: list[str] = []
 
-    @field_validator("phone_numbers")
+    @field_validator("phone_numbers", "blocked_numbers")
     @classmethod
     def _numbers(cls, v):
         out = [normalize_phone(n) for n in v]
@@ -485,6 +487,52 @@ class AdminLinkIn(BaseModel):
 class AdminLinkOut(BaseModel):
     url: str
     expires_at: datetime
+
+
+class DataRequestOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    kind: str
+    counts: dict
+    created_at: datetime
+
+
+class AlertOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    practice_id: str | None
+    kind: str
+    call_id: str | None
+    subject: str
+    body: str
+    created_at: datetime
+    acked_at: datetime | None
+    escalated_at: datetime | None
+
+
+class PhoneIn(BaseModel):
+    phone: str
+
+    @field_validator("phone")
+    @classmethod
+    def _phone(cls, v):
+        v = normalize_phone(v)
+        if not re.fullmatch(r"\+\d{8,15}", v):
+            raise ValueError("bad phone number")
+        return v
+
+
+class CostCapIn(BaseModel):
+    monthly_cost_cap_eur: float | None = Field(default=None, gt=0)
+
+
+class UsageOut(BaseModel):
+    month_cost_eur: float
+    monthly_cost_cap_eur: float | None
+    blocked_numbers: list[str]
+    offboarded_at: datetime | None
 
 
 class WaitlistOut(BaseModel):
