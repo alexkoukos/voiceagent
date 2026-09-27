@@ -871,8 +871,7 @@ def track_transcript(
     caller_identity: str | None = None, language: Callable[[], str] | None = None,
 ) -> None:
     def _line(role: str, text: str) -> None:
-        # What each side said, to judge recognition and language from the logs.
-        logger.info("call %s %s: %s", call_id, role, text)
+        logger.info("call %s: %s transcript received", call_id, role)
         asyncio.create_task(report(call_id, transcript_role=role, transcript_text=text))
         if room is not None and caller_identity and language:
             asyncio.create_task(publish_web_transcript(room, role, text, caller_identity, language()))
@@ -1007,7 +1006,7 @@ class ReceptionistCall:
             logger.exception("call %s: tool %s failed", self.call_id, name)
             self.flags.add("tool_error")
             result = {"error": "tool_error"}
-        logger.info("call %s tool %s %s -> %s", self.call_id, name, args, result)
+        logger.info("call %s tool %s completed", self.call_id, name)
         return result
 
     def make_agent(self, language: str, parts: dict | None = None) -> ReceptionistAgent:
@@ -1286,7 +1285,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
             r.raise_for_status()
             metadata = r.json()
         except Exception:
-            logger.exception("inbound call to %s from %s: no practice, hanging up", dialed, caller_number)
+            logger.exception("inbound call could not be initialized; hanging up")
             await ctx.room.disconnect()
             ctx.shutdown(reason="no practice")
             return
@@ -1496,8 +1495,7 @@ async def entrypoint(ctx: JobContext) -> None:
         if ev.new_state == "speaking":
             callee_spoke.set()
 
-    logger.info("call %s: engine %s, language %s, dialing %s via trunk %s",
-                call_id, engine, language, friend_phone_number, sip_trunk_id)
+    logger.info("call %s: engine %s, language %s, dialing", call_id, engine, language)
 
     # Warm up the model connection during the ring: start the session concurrently with the
     # dial so the (Gemini) cold start is hidden behind the ringing, not paid after pickup.
