@@ -65,8 +65,8 @@ async def list_verticals():
 @misc.get("/verticals/{vertical}")
 async def get_vertical(vertical: str):
     """A starting PracticeIn for this vertical: fill in name, numbers and the knowledge base, then POST it."""
-    path = VERTICALS_DIR / f"{vertical}.json"
-    if not path.is_file() or not vertical.isalnum():
+    path = next((f for f in VERTICALS_DIR.glob("*.json") if f.stem == vertical), None)
+    if path is None:
         raise HTTPException(status_code=404, detail="Unknown vertical")
     v = json.loads(path.read_text(encoding="utf-8"))
     return {k: v[k] for k in ("hours", "services", "routing_rules", "knowledge_base") if k in v} | {
