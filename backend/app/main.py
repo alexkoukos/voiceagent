@@ -2,10 +2,12 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Header
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import require_app_token, require_admin_token
+from app.auth import is_master, require_app_token, require_admin_token, require_any_token
 from app.config import get_settings
+from app.database import get_db
 from app.languages import LANGUAGES
 from app.routers import calls, demo, friends, internal, manage, oauth, ops, practices, recordings, templates, webhooks
 
@@ -59,10 +61,12 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/options", dependencies=[Depends(require_app_token)])
-async def options():
+@app.get("/options", dependencies=[Depends(require_any_token)])
+async def options(db: AsyncSession = Depends(get_db), x_api_key: str = Header(default="")):
     """What the app may offer; never exposes the numbers themselves."""
+    tenant = bool(db.info.get("tenant_id"))
     return {
-        "own_number_available": bool(get_settings().own_caller_number),
+        "account_scope": "practice" if tenant else "founder" if is_master(x_api_key) else "dialer",
+        "own_number_available": not tenant and bool(get_settings().own_caller_number),
         "languages": [{"code": c, "name": n} for c, (n, _) in LANGUAGES.items()],
     }
