@@ -15,3 +15,5 @@ requests>=2.32
 tzdata>=2024.1
 pyjwt[crypto]>=2.9
 h2>=4.1
+icalendar>=6.3,<8
+recurring-ical-events>=3.8,<4

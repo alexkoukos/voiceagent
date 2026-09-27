@@ -19,7 +19,8 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+import uuid
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -90,6 +91,7 @@ class AgentEar:
                 self.spoke = False
                 return
             await asyncio.sleep(0.1)
+        raise TimeoutError("Agent did not complete an audible turn")
 
 
 async def say(source: rtc.AudioSource, pcm: np.ndarray, sample_rate: int) -> None:
@@ -105,7 +107,13 @@ async def say(source: rtc.AudioSource, pcm: np.ndarray, sample_rate: int) -> Non
 
 
 async def run_scenario(args, sc: dict, http: httpx.AsyncClient, caller: CallerVoice) -> dict:
-    r = await http.post(f"{args.backend}/demo/{args.slug}/session", timeout=20)
+    audio = [await caller.synthesize(line) for line in sc["lines"]]
+    headers = {"x-api-key": os.environ.get("ADMIN_API_TOKEN") or os.environ["APP_API_TOKEN"]}
+    if args.isolated:
+        await prepare_fixture(args, sc, http, headers)
+        r = await http.post(f"{args.backend}/practices/{args.practice}/test-session", headers=headers, timeout=20)
+    else:
+        r = await http.post(f"{args.backend}/demo/{args.slug}/session", timeout=20)
     r.raise_for_status()
     s = r.json()
     room = rtc.Room()
@@ -122,7 +130,6 @@ async def run_scenario(args, sc: dict, http: httpx.AsyncClient, caller: CallerVo
         source = rtc.AudioSource(caller.sample_rate, 1)
         track = rtc.LocalAudioTrack.create_audio_track("caller", source)
         await room.local_participant.publish_track(track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
-        audio = [await caller.synthesize(line) for line in sc["lines"]]
         await ear.wait_turn_end()  # greeting
         for line, pcm in zip(sc["lines"], audio):
             print(f"    caller: {line}")
@@ -133,12 +140,14 @@ async def run_scenario(args, sc: dict, http: httpx.AsyncClient, caller: CallerVo
         await room.disconnect()
         for task in tasks:
             task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    headers = {"x-api-key": os.environ["APP_API_TOKEN"]}
+    headers = {"x-api-key": os.environ.get("ADMIN_API_TOKEN") or os.environ["APP_API_TOKEN"]}
     call = None
     for _ in range(30):  # wait for the call to be finalized (outcome + summary)
         await asyncio.sleep(2)
         practice_calls = await http.get(f"{args.backend}/practices/{args.practice}/calls/{s['call_id']}", headers=headers)
+        practice_calls.raise_for_status()
         call = practice_calls.json()
         if call.get("outcome") and call.get("status") in ("completed", "failed"):
             break
@@ -148,9 +157,16 @@ async def run_scenario(args, sc: dict, http: httpx.AsyncClient, caller: CallerVo
 def check(sc: dict, call: dict) -> dict:
     exp = sc.get("expect", {})
     problems = []
+    if not call or call.get("status") != "completed":
+        problems.append("Call did not complete successfully")
+    call = call or {}
+    if not call.get("outcome"):
+        problems.append("Call has no finalized outcome")
     if exp.get("outcome") and call.get("outcome") != exp["outcome"]:
         problems.append(f"outcome {call.get('outcome')} != {exp['outcome']}")
     appt = call.get("appointment") or {}
+    if exp.get("no_appointment") and appt:
+        problems.append("An appointment was created without caller approval")
     if exp.get("service_id") and appt.get("service_id") != exp["service_id"]:
         problems.append(f"service {appt.get('service_id')} != {exp['service_id']}")
     if exp.get("time") and exp["time"] not in (appt.get("starts_at") or ""):
@@ -176,22 +192,56 @@ def check(sc: dict, call: dict) -> dict:
             "summary": call.get("summary")}
 
 
+async def prepare_fixture(args, sc, http, headers):
+    today = datetime.now(ZoneInfo("Europe/Athens")).date()
+    hours = {day: [["09:00", "21:00"]] for day in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")}
+    if sc["name"] == "book-afternoon-none-then-other-day":
+        hours["tue"] = [["09:00", "14:00"]]
+    values = {
+        "name": "Δοκιμαστικό Ιατρείο", "slug": "test-" + uuid.uuid4().hex,
+        "hours": hours, "vertical": "dentist", "language": "el",
+        "services": [{"id": "checkup", "name": "Έλεγχος", "duration_minutes": 30, "price": "40€"},
+                     {"id": "cleaning", "name": "Καθαρισμός", "duration_minutes": 30, "price": "50€"}],
+        "rules": {"min_notice_minutes": 0, "holidays": [f"{today.year}-10-28"]},
+        "knowledge_base": {"Διεύθυνση": "Σόλωνος 10, Αθήνα", "Πάρκινγκ": "Ιδιωτικό πάρκινγκ δίπλα.",
+                           "Πληρωμές": "Μετρητά και κάρτα"},
+        "notifications": {"emails": [], "customer_sms": False}, "reminders": {"enabled": False},
+    }
+    r = await http.post(f"{args.backend}/practices", headers=headers, json=values)
+    r.raise_for_status()
+    practice = r.json()
+    args.practice, args.slug = practice["id"], practice["slug"]
+    r = await http.post(f"{args.backend}/practices/{args.practice}/staff", headers=headers,
+                        json={"name": "Γιατρός", "role": "doctor", "aliases": ["γιατρό"], "service_ids": []})
+    r.raise_for_status()
+    if sc["name"] in ("reschedule", "cancel"):
+        r = await http.post(f"{args.backend}/practices/{args.practice}/appointments", headers=headers,
+                            json={"date": (today+timedelta(days=2)).isoformat(), "time": "10:00", "service_id": "checkup",
+                                  "customer_name": "Δοκιμαστικός Πελάτης", "customer_phone": "+306900000001"})
+        r.raise_for_status()
+
+
 async def main() -> None:
     load_dotenv()
     p = argparse.ArgumentParser()
     p.add_argument("--backend", required=True)
-    p.add_argument("--slug", required=True)
-    p.add_argument("--practice", required=True, help="practice id (to read its call log)")
+    p.add_argument("--slug")
+    p.add_argument("--practice", help="practice id (to read its call log)")
     p.add_argument("--scenarios", default="scripts/scenarios.el.json")
     p.add_argument("--only", help="run scenarios whose name contains this")
     p.add_argument("--caller-tts", choices=("auto", "gemini", "elevenlabs"), default="auto")
+    p.add_argument("--isolated", action="store_true", help="Create synthetic fixtures; backend must enable TEST_SESSIONS_ENABLED")
     args = p.parse_args()
+    if not args.isolated and not (args.slug and args.practice):
+        p.error("Supply --isolated or both --slug and --practice")
     provider = ("gemini" if os.environ.get("GEMINI_API_KEY") else "elevenlabs") if args.caller_tts == "auto" else args.caller_tts
     if not os.environ.get("GEMINI_API_KEY" if provider == "gemini" else "ELEVEN_API_KEY"):
         p.error(f"{provider} caller voice needs its API key")
     scenarios = json.load(open(args.scenarios, encoding="utf-8"))
     if args.only:
         scenarios = [s for s in scenarios if args.only in s["name"]]
+    if not scenarios:
+        p.error("No scenarios selected")
     results = []
     async with httpx.AsyncClient() as http:
         caller = CallerVoice(provider, http)

@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, Float, ForeignKey, ForeignKeyConstraint, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.crypto import SecretLookup, SecretText
@@ -108,6 +108,76 @@ class Practice(Base):
     offboarded_at: Mapped[datetime | None] = mapped_column(nullable=True)
     # OP2: PBKDF2 of the 4-6 digit PIN for changes by phone. None turns phone changes off.
     admin_pin_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    publish_frozen: Mapped[bool] = mapped_column(Boolean, default=False)
+    google_place_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    google_refreshed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+class HealthCheck(Base):
+    __tablename__ = "health_checks"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    number: Mapped[str | None] = mapped_column(String, nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    detail: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, index=True)
+
+
+class BillingAccount(Base):
+    __tablename__ = "billing_accounts"
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), primary_key=True)
+    pilot_started_on: Mapped[date] = mapped_column(Date, nullable=False)
+    monthly_fee: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+
+
+class BillingDraft(Base):
+    __tablename__ = "billing_drafts"
+    __table_args__ = (UniqueConstraint("practice_id", "period_start", name="uq_billing_period"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    bookings: Mapped[int] = mapped_column(Integer, nullable=False)
+    threshold: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    call_ids: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+class CalendarFeed(Base):
+    __tablename__ = "calendar_feeds"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
+    staff_id: Mapped[str | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    url: Mapped[str] = mapped_column(SecretText, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+class TenantApiKey(Base):
+    __tablename__ = "tenant_api_keys"
+    token_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class ImportRecord(Base):
+    """Source evidence and confidence for an unpublished onboarding import (O1/O2/O4)."""
+
+    __tablename__ = "imports"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), nullable=False, index=True)
+    version_id: Mapped[str | None] = mapped_column(ForeignKey("config_versions.id"), nullable=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    source_ref: Mapped[str] = mapped_column(SecretText, default="")
+    raw_payload: Mapped[str] = mapped_column(SecretText, default="{}")
+    extracted: Mapped[dict] = mapped_column(JSON, default=dict)
+    confidence: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 
@@ -485,3 +555,14 @@ class Device(Base):
     # sandbox or production APNs
     environment: Mapped[str] = mapped_column(String, default="sandbox")
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+
+
+# Single-column IDs remain convenient, but tenant-owned references must agree on practice_id.
+from app.tenant_constraints import PARENTS, REFERENCES
+for _parent in PARENTS:
+    Base.metadata.tables[_parent].append_constraint(UniqueConstraint(
+        "practice_id", "id", name=f"uq_{_parent}_tenant_id"))
+for _child, _column, _parent in REFERENCES:
+    Base.metadata.tables[_child].append_constraint(ForeignKeyConstraint(
+        ["practice_id", _column], [f"{_parent}.practice_id", f"{_parent}.id"],
+        name=f"fk_{_child}_{_column}_tenant", use_alter=True))

@@ -7,7 +7,7 @@ done here, so a booking is never a model's guess.
 
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -15,7 +15,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import gcal
+from app import gcal, ical_feed
 from app.models import Appointment, AppointmentStatus, Customer, Practice, Staff
 
 WEEKDAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -33,6 +33,7 @@ DEFAULT_RULES = {
     # Dated closures (OP3): [{"id", "from", "to", "staff_id"?, "reason"?}], ISO dates, both ends
     # included. With a staff_id it is that person's leave; without, the whole business is closed.
     "closures": [],
+    "date_hours": {},
 }
 
 # Parts of the day as callers say them -> (from, to) in local time.
@@ -208,6 +209,17 @@ def _hhmm(s: str) -> time:
     return time(int(h), int(m))
 
 
+def hours_on(practice: Practice, day: date, staff_hours: dict | None = None) -> list:
+    overrides = rules_for(practice)["date_hours"] or {}
+    normal = (staff_hours or practice.hours or {}).get(WEEKDAY_KEYS[day.weekday()], [])
+    if day.isoformat() not in overrides:
+        return normal
+    special = overrides[day.isoformat()]
+    if not staff_hours:
+        return special
+    return [(max(a, c), min(b, d)) for a, b in normal for c, d in special if max(a, c) < min(b, d)]
+
+
 def free_slots(
     practice: Practice,
     day: date,
@@ -230,7 +242,7 @@ def free_slots(
     buffer = timedelta(minutes=rules["buffer_minutes"])
     earliest = now + timedelta(minutes=rules["min_notice_minutes"])
     slots = []
-    for start_s, end_s in (hours if hours else practice.hours or {}).get(WEEKDAY_KEYS[day.weekday()], []):
+    for start_s, end_s in hours_on(practice, day, hours):
         start = datetime.combine(day, _hhmm(start_s), tz)
         end = datetime.combine(day, _hhmm(end_s), tz)
         t = start
@@ -261,7 +273,7 @@ def hours_state(practice: Practice, now: datetime) -> tuple[str, datetime | None
             return []
         return [
             (datetime.combine(d, _hhmm(a), tz), datetime.combine(d, _hhmm(b), tz))
-            for a, b in (practice.hours or {}).get(WEEKDAY_KEYS[d.weekday()], [])
+            for a, b in hours_on(practice, d)
         ]
 
     today = spans(local.date())
@@ -370,6 +382,10 @@ async def busy_intervals(
             busy += await gcal.busy_except(calendar_id, start, end, excluded.gcal_event_id)
         else:
             busy += await gcal.busy(calendar_id, start, end)
+    try:
+        busy += await ical_feed.busy(db, practice, resource.staff_id if resource else None, start, end)
+    except Exception as exc:
+        raise BookingError("calendar_error") from exc
     return busy
 
 
@@ -534,6 +550,7 @@ class BookingError(Exception):
 async def _lock(db: AsyncSession, practice: Practice) -> None:
     # One calendar write at a time per practice; released at commit or rollback.
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"book:{practice.id}"})
+    await db.refresh(practice)
 
 
 def _slot_start(practice: Practice, day: date, start_time: str) -> datetime:
@@ -593,6 +610,7 @@ async def book(
     the slot inside the lock (B2), and is idempotent per call + slot (B8). With no staff
     named, the first staff member free at that time gets it (R2). Raises
     BookingError("slot_taken", alternatives=[...]) when the slot is gone."""
+    await _lock(db, practice)
     service = find_service(practice, service_id)
     if service is None:
         raise BookingError("unknown_service")
@@ -603,10 +621,9 @@ async def book(
     # Same call, slot, service and person = a retry of the same booking (B8).
     key = f"{call_id}:{starts_at.isoformat()}:{service['id']}:{_plain(staff_name or '')}" if call_id else None
 
-    await _lock(db, practice)
     if key:
         existing = (
-            await db.execute(select(Appointment).where(Appointment.idempotency_key == key))
+            await db.execute(select(Appointment).where(Appointment.practice_id == practice.id, Appointment.idempotency_key == key))
         ).scalar_one_or_none()
         if existing:
             await db.commit()  # nothing written; ends the transaction and frees the lock
@@ -689,8 +706,8 @@ async def reschedule(
 ) -> tuple[Appointment, datetime]:
     """Moves a booked appointment to a new free slot with the same person (B5).
     Returns the appointment and its old start."""
-    starts_at = _slot_start(practice, day, start_time)
     await _lock(db, practice)
+    starts_at = _slot_start(practice, day, start_time)
     appt = await _booked(db, practice, appointment_id)
     if appt.starts_at == starts_at:
         await db.commit()

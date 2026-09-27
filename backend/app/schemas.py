@@ -159,6 +159,16 @@ class BookingRules(BaseModel):
     max_days_ahead: int = Field(default=60, gt=0, le=365)
     min_notice_minutes: int = Field(default=60, ge=0)
     holidays: list[date] = []
+    date_hours: dict[date, list[tuple[str, str]]] = {}
+
+    @field_validator("date_hours")
+    @classmethod
+    def _dated_hours(cls, value):
+        for spans in value.values():
+            for start, end in spans:
+                if not (re.fullmatch(HHMM, start) and re.fullmatch(HHMM, end) and start < end):
+                    raise ValueError("invalid dated opening hours")
+        return value
 
 
 class Department(BaseModel):
@@ -252,6 +262,15 @@ class PracticeOut(PracticeIn):
 
     id: str
     services: list[Service]
+    publish_frozen: bool = False
+
+
+class PublishFreezeIn(BaseModel):
+    frozen: bool
+
+
+class ConfigVersionEdit(BaseModel):
+    changes: dict
 
 
 class AppointmentOut(BaseModel):

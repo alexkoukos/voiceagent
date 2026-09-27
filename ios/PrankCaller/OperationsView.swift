@@ -2,6 +2,8 @@ import AuthenticationServices
 import PhotosUI
 import SwiftUI
 import VisionKit
+import PDFKit
+import UniformTypeIdentifiers
 
 // Running a practice after go-live: imports (O1, O2), forwarding (O5), patient data (OP8),
 // cost cap and blocking (OP10), phone PIN (OP2), offboarding (OP7), alerts (OP9).
@@ -56,6 +58,7 @@ struct ImportView: View {
     @State private var website = ""
     @State private var photo: PhotosPickerItem?
     @State private var scanning = false
+    @State private var choosingFile = false
     @State private var busy: String?
     @State private var result: String?
     @State private var errorMessage: String?
@@ -77,6 +80,7 @@ struct ImportView: View {
                     Button { scanning = true } label: { Label("Σκανάρισμα τιμοκαταλόγου", systemImage: "doc.viewfinder") }
                         .disabled(busy != nil)
                 }
+                Button("Αρχείο PDF ή εικόνα") { choosingFile = true }.disabled(busy != nil)
                 PhotosPicker(selection: $photo, matching: .images) {
                     Label("Φωτογραφία από τη συλλογή", systemImage: "photo")
                 }
@@ -104,11 +108,28 @@ struct ImportView: View {
         .sheet(isPresented: $scanning) {
             DocumentScanner { images in
                 scanning = false
-                if let jpeg = images.first?.jpegData(compressionQuality: 0.7) {
-                    Task { await priceList(data: jpeg, mime: "image/jpeg") }
+                let pdf = PDFDocument()
+                for image in images {
+                    if let page = PDFPage(image: image) { pdf.insert(page, at: pdf.pageCount) }
+                }
+                if pdf.pageCount > 0, let data = pdf.dataRepresentation() {
+                    Task { await priceList(data: data, mime: "application/pdf") }
                 }
             }
             .ignoresSafeArea()
+        }
+        .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.pdf, .image]) { selection in
+            do {
+                let url = try selection.get()
+                let access = url.startAccessingSecurityScopedResource()
+                defer { if access { url.stopAccessingSecurityScopedResource() } }
+                let data = try Data(contentsOf: url)
+                if url.pathExtension.lowercased() == "pdf" {
+                    Task { await priceList(data: data, mime: "application/pdf") }
+                } else if let jpeg = UIImage(data: data)?.jpegData(compressionQuality: 0.7) {
+                    Task { await priceList(data: jpeg, mime: "image/jpeg") }
+                }
+            } catch { errorMessage = friendlyMessage(error) }
         }
         .onChange(of: photo) { _, item in
             guard let item else { return }
@@ -132,6 +153,9 @@ struct ImportView: View {
     }
 
     private func priceList(data: Data? = nil, mime: String? = nil, url: String? = nil) async {
+        guard (data?.count ?? 0) <= 12 * 1024 * 1024 else {
+            errorMessage = "Το αρχείο πρέπει να είναι μικρότερο από 12 MB."; return
+        }
         busy = "prices"; defer { busy = nil }
         do {
             let v = try await APIClient().importPriceList(practice.id, PriceListUpload(
