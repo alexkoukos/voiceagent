@@ -547,10 +547,15 @@ class BookingError(Exception):
         self.details = details
 
 
-async def _lock(db: AsyncSession, practice: Practice) -> None:
+async def _lock(db: AsyncSession, practice: Practice) -> Practice:
     # One calendar write at a time per practice; released at commit or rollback.
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"book:{practice.id}"})
-    await db.refresh(practice)
+    # Callers may pass a Practice loaded in another session. Read the current row
+    # under the lock instead of refreshing a detached instance.
+    current = await db.get(Practice, practice.id, populate_existing=True)
+    if current is None:
+        raise BookingError("unknown_practice")
+    return current
 
 
 def _slot_start(practice: Practice, day: date, start_time: str) -> datetime:
@@ -610,7 +615,7 @@ async def book(
     the slot inside the lock (B2), and is idempotent per call + slot (B8). With no staff
     named, the first staff member free at that time gets it (R2). Raises
     BookingError("slot_taken", alternatives=[...]) when the slot is gone."""
-    await _lock(db, practice)
+    practice = await _lock(db, practice)
     service = find_service(practice, service_id)
     if service is None:
         raise BookingError("unknown_service")
@@ -706,7 +711,7 @@ async def reschedule(
 ) -> tuple[Appointment, datetime]:
     """Moves a booked appointment to a new free slot with the same person (B5).
     Returns the appointment and its old start."""
-    await _lock(db, practice)
+    practice = await _lock(db, practice)
     starts_at = _slot_start(practice, day, start_time)
     appt = await _booked(db, practice, appointment_id)
     if appt.starts_at == starts_at:
@@ -741,7 +746,7 @@ async def reschedule(
 
 
 async def cancel(db: AsyncSession, practice: Practice, *, appointment_id: str) -> Appointment:
-    await _lock(db, practice)
+    practice = await _lock(db, practice)
     appt = await _booked(db, practice, appointment_id, allow_cancelled=True)
     if appt.status == AppointmentStatus.cancelled:
         await db.commit()
