@@ -103,6 +103,7 @@ struct NewCall: Encodable {
 }
 
 struct ServerOptions: Decodable {
+    let accountScope: String?
     let ownNumberAvailable: Bool
     let languages: [LanguageOption]?
 }

@@ -49,3 +49,12 @@ async def require_admin_token(connection: HTTPConnection, db: AsyncSession = Dep
     if connection.url.path.rstrip("/") == "/practices" and connection.scope.get("method") != "GET":
         raise HTTPException(status_code=403, detail="Founder API key required")
     db.info["tenant_id"] = key.practice_id
+
+
+async def require_any_token(connection: HTTPConnection, db: AsyncSession = Depends(get_db)) -> None:
+    """Authenticate the shared app endpoint without granting dialer access to a tenant."""
+    value = connection.headers.get("x-api-key", "")
+    if is_master(value) or _matches(value, get_settings().app_api_token):
+        db.info["tenant_id"] = None
+        return
+    await require_admin_token(connection, db)
