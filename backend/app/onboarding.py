@@ -10,22 +10,23 @@ import json
 import logging
 import re
 from html import unescape
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
+from datetime import date, datetime, time, timedelta
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import config_changes
+from app import config_changes, public_fetch
 from app.booking import WEEKDAY_KEYS
 from app.config import get_settings
-from app.models import ConfigVersion, Practice
+from app.models import ConfigVersion, ImportRecord, Practice
 
 logger = logging.getLogger(__name__)
 
 PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 PLACES_FIELDS = ",".join(f"places.{f}" for f in (
     "id", "displayName", "formattedAddress", "nationalPhoneNumber", "internationalPhoneNumber", "websiteUri",
-    "regularOpeningHours", "googleMapsUri",
+    "regularOpeningHours", "currentOpeningHours", "googleMapsUri",
 ))
 # Google's day numbers start on Sunday.
 GOOGLE_DAYS = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
@@ -49,10 +50,9 @@ async def _query_from(text: str) -> str:
         return text
     url = text
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            url = str((await client.get(text)).url)
-    except httpx.HTTPError:
-        pass
+        _, url = await public_fetch.get(text)
+    except (httpx.HTTPError, ValueError, OSError, TimeoutError):
+        raise ImportError_("unreadable_maps_link")
     m = re.search(r"/place/([^/@?]+)", url)
     if m:
         return unquote(m.group(1)).replace("+", " ")
@@ -68,14 +68,40 @@ def hours_from_google(opening: dict | None) -> dict:
     for p in (opening or {}).get("periods") or []:
         o, c = p.get("open") or {}, p.get("close")
         if c is None:  # open 24 hours
-            hours[GOOGLE_DAYS[o.get("day", 0)]].append(["00:00", "23:59"])
-            continue
+            return {day: [["00:00", "23:59"]] for day in WEEKDAY_KEYS}
         start = f"{o.get('hour', 0):02d}:{o.get('minute', 0):02d}"
         end = f"{c.get('hour', 0):02d}:{c.get('minute', 0):02d}"
-        if c.get("day") != o.get("day") or end <= start:
-            end = "23:59"
-        hours[GOOGLE_DAYS[o.get("day", 0)]].append([start, end])
+        opened, closed = o.get("day", 0), c.get("day", 0)
+        if closed != opened:
+            hours[GOOGLE_DAYS[opened]].append([start, "23:59"])
+            day = (opened + 1) % 7
+            while day != closed:
+                hours[GOOGLE_DAYS[day]].append(["00:00", "23:59"])
+                day = (day + 1) % 7
+            if end != "00:00":
+                hours[GOOGLE_DAYS[closed]].append(["00:00", end])
+        elif end > start:
+            hours[GOOGLE_DAYS[opened]].append([start, end])
     return {k: sorted(v) for k, v in hours.items()}
+
+
+def special_hours_from_google(opening: dict) -> dict:
+    def day(value):
+        return date(value["year"], value["month"], value["day"])
+    result = {day(item["date"]).isoformat(): [] for item in opening.get("specialDays", [])}
+    for period in opening.get("periods", []):
+        opened, closed = period.get("open", {}), period.get("close", {})
+        if not opened.get("date") or not closed.get("date"):
+            continue
+        start = datetime.combine(day(opened["date"]), time(opened.get("hour", 0), opened.get("minute", 0)))
+        end = datetime.combine(day(closed["date"]), time(closed.get("hour", 0), closed.get("minute", 0)))
+        for value, spans in result.items():
+            lo = datetime.combine(date.fromisoformat(value), time.min)
+            hi = lo + timedelta(days=1)
+            if start < hi and end > lo:
+                spans.append([max(start, lo).strftime("%H:%M"),
+                              "23:59" if end >= hi else end.strftime("%H:%M")])
+    return result
 
 
 async def import_google(db: AsyncSession, practice: Practice, text: str) -> ConfigVersion | None:
@@ -93,6 +119,10 @@ async def import_google(db: AsyncSession, practice: Practice, text: str) -> Conf
     if not places:
         raise ImportError_("not_found")
     place = places[0]
+    return await _propose_google(db, practice, place, source_ref=text)
+
+
+async def _propose_google(db: AsyncSession, practice: Practice, place: dict, *, source_ref: str) -> ConfigVersion | None:
     greek = practice.language == "el"
     kb = dict(practice.knowledge_base or {})
     labels = (("Διεύθυνση", "Τηλέφωνο", "Ιστοσελίδα", "Χάρτης") if greek
@@ -102,13 +132,38 @@ async def import_google(db: AsyncSession, practice: Practice, text: str) -> Conf
         if value:
             kb[label] = value
     changes: dict = {"knowledge_base": kb}
+    name = (place.get("displayName") or {}).get("text")
+    if name:
+        changes["name"] = name
     hours = hours_from_google(place.get("regularOpeningHours"))
-    if any(hours.values()):
+    if "periods" in (place.get("regularOpeningHours") or {}):
         changes["hours"] = hours
+    special = special_hours_from_google(place.get("currentOpeningHours") or {})
+    if special:
+        changes["rules"] = {**(practice.rules or {}), "date_hours": {
+            **(practice.rules or {}).get("date_hours", {}), **special}}
     valid = config_changes.validated(practice, changes)
-    name = (place.get("displayName") or {}).get("text", query)
+    name = name or practice.name
     summary = (f"Google: {name}" + ("" if "hours" in valid else " (χωρίς ωράριο)" if greek else " (no hours)"))
-    return await config_changes.propose(db, practice, valid, author="Google", summary=summary, source="import")
+    version = await config_changes.propose(db, practice, valid, author="Google", summary=summary, source="import")
+    practice.google_place_id = place.get("id") or practice.google_place_id
+    practice.google_refreshed_at = datetime.utcnow()
+    db.add(ImportRecord(practice_id=practice.id, version_id=version.id if version else None,
+                        source="google", source_ref=source_ref, raw_payload=json.dumps(place, ensure_ascii=False),
+                        extracted=valid, confidence={"review_required": True}))
+    return version
+
+
+async def refresh_google(db: AsyncSession, practice: Practice, now: datetime) -> ConfigVersion | None:
+    if (not practice.google_place_id or not get_settings().google_maps_api_key
+            or (practice.google_refreshed_at and now.replace(tzinfo=None) - practice.google_refreshed_at < timedelta(days=7))):
+        return None
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.get(f"https://places.googleapis.com/v1/places/{quote(practice.google_place_id, safe='')}",
+                                    headers={"X-Goog-Api-Key": get_settings().google_maps_api_key,
+                                             "X-Goog-FieldMask": PLACES_FIELDS.replace("places.", "")})
+        response.raise_for_status()
+    return await _propose_google(db, practice, response.json(), source_ref=practice.google_place_id)
 
 
 # --- O2: price list ---
@@ -160,11 +215,11 @@ async def _gemini_json(parts: list[dict]) -> dict:
 
 
 async def _page_text(url: str) -> str:
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-    if r.status_code != 200:
+    try:
+        data, _ = await public_fetch.get(url)
+    except (httpx.HTTPError, ValueError, OSError, TimeoutError):
         raise ImportError_("website_unreachable")
-    html = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", r.text)
+    html = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", data.decode("utf-8", errors="replace"))
     return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", html)))[:30000]
 
 
@@ -226,7 +281,12 @@ async def import_price_list(
     summary = (f"Τιμοκατάλογος: {len(extracted)} υπηρεσίες" if greek else f"Price list: {len(extracted)} services")
     if check:
         summary += (" · έλεγξε: " if greek else " · check: ") + ", ".join(check[:8])
-    return await config_changes.propose(db, practice, valid, author="price list", summary=summary, source="import")
+    version = await config_changes.propose(db, practice, valid, author="price list", summary=summary, source="import")
+    db.add(ImportRecord(practice_id=practice.id, version_id=version.id if version else None,
+                        source="price_list", source_ref=url or mime_type or "upload",
+                        raw_payload=json.dumps(extracted, ensure_ascii=False), extracted=valid,
+                        confidence={"review_names": check, "services": extracted}))
+    return version
 
 
 # --- O5: call forwarding codes ---

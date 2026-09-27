@@ -26,12 +26,12 @@ _TAG = re.compile(r"\[[^\]]{1,30}\]\s*")
 _INSTRUCTION = {
     "el": (
         "Ο άλλος μόλις σήκωσε το τηλέφωνο και είπε «Εμπρός;». Γράψε ΜΟΝΟ την πρώτη σου ατάκα: "
-        "μία ή δύο σύντομες, φυσικές φράσεις, στον ρόλο σου. Μπορείς να βάλεις στην αρχή ένα "
+        "Πρώτα δήλωσε ότι είσαι βοηθός τεχνητής νοημοσύνης και ότι η κλήση καταγράφεται. Μετά μία σύντομη φράση στον ρόλο σου. Μπορείς να βάλεις στην αρχή ένα "
         "συναίσθημα στα αγγλικά σε αγκύλες, π.χ. [calm], [friendly], [warm]."
     ),
     "other": (
         "They just picked up and said hello. Write ONLY your very first line, in {language}: "
-        "one or two short, natural phrases, in your role. You may start with one emotion tag in "
+        "First disclose that you are an AI assistant and this call is recorded, then one short phrase in your role. You may start with one emotion tag in "
         "English in square brackets, e.g. [calm], [friendly], [warm]."
     ),
 }

@@ -1325,6 +1325,10 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
         rc.caller_identity = caller.identity
 
     await rc.start_recording()
+    if not rc.recording_key:
+        metadata["greeting"] = metadata.get("greeting_without_recording", metadata["greeting"])
+        if metadata.get("greeting_instruction"):
+            metadata["greeting_instruction"] += " Recording is not active. Do not say the call is recorded."
     await report(call_id, status="active")
 
     agent = rc.make_agent(rc.language)

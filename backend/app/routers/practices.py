@@ -1,24 +1,29 @@
 """Founder-side setup and the receptionist call log (manual onboarding, PRD scope)."""
 
 import json
+import hashlib
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field, ValidationError
 
+from app.tenant_resources import validate_assignments
+from app.auth import require_master_token
 from app import booking, config_changes, events, finalize, metrics, notifications, receptionist, texts
 from app.config import CONFIG_DIR, get_settings
 from app.database import get_db
 from app.models import (
-    AdminLink, Appointment, Call, ConfigVersion, Device, Handoff, Message, Notification, Practice, RoutingEvent, Staff, TranscriptEntry,
+    AdminLink, TenantApiKey, CalendarFeed, Appointment, Call, ConfigVersion, Device, Handoff, ImportRecord, Message, Notification, Practice, RoutingEvent, Staff, TranscriptEntry,
     TranscriptRole, WaitlistEntry,
 )
 from app.schemas import (
     AppointmentCreate, AppointmentMove, AppointmentOut, AdminLinkIn, AdminLinkOut, CallReview, ClosureIn, ClosureOut, ConfigVersionOut, DeviceIn, HandoffJoin, HandoffOut,
     MessageOut, MessageUpdate, PracticeIn, PracticeOut, ReceptionistCallDetail, ReceptionistCallOut, StaffIn,
-    StaffOut, WaitlistOut,
+    StaffOut, WaitlistOut, ConfigVersionEdit, PublishFreezeIn,
 )
 
 router = APIRouter(prefix="/practices", tags=["practices"])
@@ -27,6 +32,8 @@ VERTICALS_DIR = CONFIG_DIR / "verticals"
 
 
 async def _get(db: AsyncSession, practice_id: str) -> Practice:
+    if db.info.get("tenant_id") and db.info["tenant_id"] != practice_id:
+        raise HTTPException(status_code=404, detail="Practice not found")
     practice = await db.get(Practice, practice_id)
     if practice is None:
         raise HTTPException(status_code=404, detail="Practice not found")
@@ -72,6 +79,7 @@ async def get_vertical(vertical: str):
 
 @router.post("", response_model=PracticeOut)
 async def create_practice(payload: PracticeIn, db: AsyncSession = Depends(get_db)):
+    await validate_assignments(db, "", numbers=payload.phone_numbers, calendar_id=payload.calendar_id)
     practice = Practice(**payload.to_columns())
     db.add(practice)
     return await _save(db, practice)
@@ -79,7 +87,10 @@ async def create_practice(payload: PracticeIn, db: AsyncSession = Depends(get_db
 
 @router.get("", response_model=list[PracticeOut])
 async def list_practices(db: AsyncSession = Depends(get_db)):
-    return (await db.execute(select(Practice).order_by(Practice.created_at))).scalars().all()
+    query = select(Practice).order_by(Practice.created_at)
+    if db.info.get("tenant_id"):
+        query = query.where(Practice.id == db.info["tenant_id"])
+    return (await db.execute(query)).scalars().all()
 
 
 @router.get("/{practice_id}", response_model=PracticeOut)
@@ -90,11 +101,19 @@ async def get_practice(practice_id: str, db: AsyncSession = Depends(get_db)):
 @router.put("/{practice_id}", response_model=PracticeOut)
 async def update_practice(practice_id: str, payload: PracticeIn, db: AsyncSession = Depends(get_db)):
     practice = await _get(db, practice_id)
+    if db.info.get("tenant_id") and any(getattr(payload, key) != getattr(practice, key)
+                                        for key in ("phone_numbers", "calendar_id", "outbound_number")):
+        raise HTTPException(status_code=403, detail="Number and calendar provisioning requires founder access or Google connect")
+    await validate_assignments(db, practice_id, numbers=payload.phone_numbers, calendar_id=payload.calendar_id)
+    await config_changes.lock_config(db, practice)
     columns = payload.to_columns()
     # Closures have their own calls; a full update never drops them.
     columns["rules"]["closures"] = (practice.rules or {}).get("closures") or []
-    await config_changes.publish(db, practice, {k: columns.pop(k) for k in config_changes.FIELDS},
-                                 source="app", author="founder")
+    try:
+        await config_changes.publish(db, practice, {k: columns.pop(k) for k in config_changes.FIELDS},
+                                     source="app", author="founder")
+    except config_changes.ChangeError as exc:
+        raise _change_error(exc)
     for k, v in columns.items():
         setattr(practice, k, v)
     return await _save(db, practice)
@@ -128,6 +147,9 @@ async def list_staff(practice_id: str, db: AsyncSession = Depends(get_db)):
 @router.post("/{practice_id}/staff", response_model=StaffOut)
 async def create_staff(practice_id: str, payload: StaffIn, db: AsyncSession = Depends(get_db)):
     await _get(db, practice_id)
+    if db.info.get("tenant_id") and payload.calendar_id:
+        raise HTTPException(status_code=403, detail="Use Google connect to assign a calendar")
+    await validate_assignments(db, practice_id, calendar_id=payload.calendar_id)
     person = Staff(practice_id=practice_id, **payload.to_columns())
     db.add(person)
     return await _save(db, person)
@@ -138,6 +160,9 @@ async def update_staff(practice_id: str, staff_id: str, payload: StaffIn, db: As
     person = await db.get(Staff, staff_id)
     if person is None or person.practice_id != practice_id:
         raise HTTPException(status_code=404, detail="Staff not found")
+    if db.info.get("tenant_id") and payload.calendar_id != person.calendar_id:
+        raise HTTPException(status_code=403, detail="Use Google connect to assign a calendar")
+    await validate_assignments(db, practice_id, calendar_id=payload.calendar_id)
     for k, v in payload.to_columns().items():
         setattr(person, k, v)
     return await _save(db, person)
@@ -179,7 +204,8 @@ async def get_practice_call(practice_id: str, call_id: str, db: AsyncSession = D
     detail["routing"] = [r for r in await rows(RoutingEvent, RoutingEvent.created_at) if r.kind not in ("found", "action")]
     detail["messages"] = await rows(Message, Message.created_at)
     detail["handoffs"] = await rows(Handoff, Handoff.created_at)
-    detail["appointment"] = await db.get(Appointment, call.appointment_id) if call.appointment_id else None
+    appointment = await db.get(Appointment, call.appointment_id) if call.appointment_id else None
+    detail["appointment"] = appointment if appointment and appointment.practice_id == practice_id else None
     return ReceptionistCallDetail.model_validate(detail)
 
 
@@ -437,6 +463,40 @@ async def delete_closure(practice_id: str, closure_id: str, db: AsyncSession = D
 # --- config versions, approval queue and doctor links (OP2) ---
 
 
+@router.put("/{practice_id}/publish-freeze")
+async def publish_freeze(practice_id: str, payload: PublishFreezeIn, db: AsyncSession = Depends(get_db)):
+    practice = await _get(db, practice_id)
+    await config_changes.lock_config(db, practice)
+    practice.publish_frozen = payload.frozen
+    await db.commit()
+    events.publish(f"practice:{practice.id}")
+    return {"frozen": practice.publish_frozen}
+
+
+@router.get("/{practice_id}/imports")
+async def list_imports(practice_id: str, db: AsyncSession = Depends(get_db)):
+    await _get(db, practice_id)
+    rows = (await db.execute(select(ImportRecord).where(ImportRecord.practice_id == practice_id)
+                             .order_by(ImportRecord.created_at.desc()).limit(100))).scalars()
+    return [{"id": r.id, "version_id": r.version_id, "source": r.source, "extracted": r.extracted,
+             "confidence": r.confidence, "created_at": r.created_at} for r in rows]
+
+
+@router.patch("/{practice_id}/versions/{version_id}", response_model=ConfigVersionOut)
+async def edit_version(practice_id: str, version_id: str, payload: ConfigVersionEdit,
+                       db: AsyncSession = Depends(get_db)):
+    practice = await _get(db, practice_id)
+    try:
+        version = await config_changes.edit_pending(db, practice, version_id, payload.changes)
+    except config_changes.ChangeError as exc:
+        raise _change_error(exc)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    await db.commit()
+    events.publish(f"practice:{practice.id}")
+    return version
+
+
 @router.get("/{practice_id}/versions", response_model=list[ConfigVersionOut])
 async def list_versions(practice_id: str, status: str | None = None, db: AsyncSession = Depends(get_db)):
     """Newest first. `status=pending` is the approval queue."""
@@ -510,9 +570,112 @@ async def list_waitlist(practice_id: str, db: AsyncSession = Depends(get_db)):
 
 @misc.post("/devices", status_code=204)
 async def register_device(payload: DeviceIn, db: AsyncSession = Depends(get_db)):
+    tenant = db.info.get("tenant_id")
+    if tenant and payload.practice_id != tenant:
+        raise HTTPException(status_code=403, detail="Device must belong to this practice")
+    if payload.practice_id:
+        await _get(db, payload.practice_id)
+    if payload.staff_id:
+        person = await db.get(Staff, payload.staff_id)
+        if not person or person.practice_id != payload.practice_id:
+            raise HTTPException(status_code=404, detail="Staff not found")
     device = await db.get(Device, payload.token)
+    if device and tenant and device.practice_id != tenant:
+        raise HTTPException(status_code=409, detail="Device already registered")
     if device is None:
         db.add(Device(**payload.model_dump()))
     else:
         device.practice_id, device.staff_id, device.environment = payload.practice_id, payload.staff_id, payload.environment
     await db.commit()
+
+
+@router.post("/{practice_id}/api-keys", dependencies=[Depends(require_master_token)])
+async def create_api_key(practice_id: str, db: AsyncSession = Depends(get_db)):
+    await _get(db, practice_id)
+    token = secrets.token_urlsafe(32)
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    db.add(TenantApiKey(token_hash=digest, practice_id=practice_id))
+    await db.commit()
+    return {"id": digest, "token": token, "practice_id": practice_id}
+
+
+@router.delete("/{practice_id}/api-keys/{key_id}", status_code=204,
+               dependencies=[Depends(require_master_token)])
+async def revoke_api_key(practice_id: str, key_id: str, db: AsyncSession = Depends(get_db)):
+    key = await db.get(TenantApiKey, key_id)
+    if not key or key.practice_id != practice_id:
+        raise HTTPException(status_code=404, detail="Not found")
+    key.revoked_at = datetime.utcnow()
+    await db.commit()
+
+
+class FeedIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    url: str = Field(max_length=4000)
+    staff_id: str | None = None
+
+
+@router.get("/{practice_id}/calendar/feeds")
+async def list_feeds(practice_id: str, db: AsyncSession = Depends(get_db)):
+    await _get(db, practice_id)
+    feeds = (await db.execute(select(CalendarFeed).where(CalendarFeed.practice_id == practice_id))).scalars()
+    return [{"id": f.id, "name": f.name, "staff_id": f.staff_id} for f in feeds]
+
+
+@router.post("/{practice_id}/calendar/feeds")
+async def add_feed(practice_id: str, payload: FeedIn, db: AsyncSession = Depends(get_db)):
+    from app import ical_feed, public_fetch
+    from datetime import timedelta
+    practice = await _get(db, practice_id)
+    if payload.staff_id:
+        person = await db.get(Staff, payload.staff_id)
+        if not person or person.practice_id != practice_id:
+            raise HTTPException(status_code=404, detail="Staff not found")
+    try:
+        data, _ = await public_fetch.get(payload.url)
+        now = datetime.now(timezone.utc)
+        ical_feed.intervals(data, now, now + timedelta(days=7), practice.timezone)
+    except Exception:
+        raise HTTPException(status_code=422, detail="Calendar feed unavailable or invalid")
+    feed = CalendarFeed(practice_id=practice_id, **payload.model_dump())
+    db.add(feed)
+    await db.commit()
+    return {"id": feed.id, "name": feed.name, "staff_id": feed.staff_id}
+
+
+@router.delete("/{practice_id}/calendar/feeds/{feed_id}", status_code=204)
+async def remove_feed(practice_id: str, feed_id: str, db: AsyncSession = Depends(get_db)):
+    feed = await db.get(CalendarFeed, feed_id)
+    if not feed or feed.practice_id != practice_id:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.delete(feed)
+    await db.commit()
+
+
+@router.post("/{practice_id}/test-session", dependencies=[Depends(require_master_token)])
+async def test_session(practice_id: str, db: AsyncSession = Depends(get_db)):
+    """Opt-in isolated voice harness. Never enabled on a production backend."""
+    if not get_settings().test_sessions_enabled:
+        raise HTTPException(status_code=404, detail="Not found")
+    practice = await _get(db, practice_id)
+    staff = await booking.staff_of(db, practice_id)
+    if (not (practice.slug or "").startswith("test-") or practice.phone_numbers or practice.calendar_id
+            or any(p.calendar_id or p.phone for p in staff)
+            or (practice.notifications or {}).get("customer_sms", True)
+            or (practice.notifications or {}).get("emails") or (practice.reminders or {}).get("enabled")):
+        raise HTTPException(status_code=409, detail="Use an isolated test practice without external recipients")
+    try:
+        call, metadata = await receptionist.start_call(db, practice, direction="web", caller_number="+306900000001")
+    except (receptionist.Busy, receptionist.OverCap):
+        raise HTTPException(status_code=429, detail="busy")
+    room = receptionist.room_of(call)
+    try:
+        await receptionist.dispatch(room, metadata)
+    except Exception:
+        from app.models import CallStatus
+        call.status = CallStatus.failed
+        call.end_reason = "error"
+        await db.commit()
+        raise HTTPException(status_code=502, detail="Could not start test session")
+    return {"url": get_settings().livekit_url,
+            "token": receptionist.room_token(room, f"caller-{call.id}", "Synthetic caller"), "call_id": call.id}

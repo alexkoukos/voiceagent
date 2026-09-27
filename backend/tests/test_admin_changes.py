@@ -53,23 +53,23 @@ async def test_sms_closure_needs_yes_and_staff_only_own_leave(sessions, monkeypa
 
         # Staff: "I'm off" means them; other people's leave and prices are refused.
         parse.return_value = {"action": "closure", "date_from": later.isoformat(), "date_to": later.isoformat()}
-        await admin_changes.handle_sms(db, NURSE, "", "λείπω", now)
+        await admin_changes.handle_sms(db, NURSE, "+302100000000", "λείπω", now)
         req = await admin_changes.pending_for(db, practice, NURSE)
         assert req.parsed["staff_id"] == nurse.id
         parse.return_value = {"action": "closure", "date_from": later.isoformat(), "staff_name": "Μαρία"}
-        assert "μόνο τη δική σας" in await admin_changes.handle_sms(db, NURSE, "", "η Μαρία λείπει", now)
+        assert "μόνο τη δική σας" in await admin_changes.handle_sms(db, NURSE, "+302100000000", "η Μαρία λείπει", now)
         parse.return_value = {"action": "price", "service_name": "καθαρισμός", "price": "55€"}
-        assert "μόνο τη δική σας" in await admin_changes.handle_sms(db, NURSE, "", "55€", now)
+        assert "μόνο τη δική σας" in await admin_changes.handle_sms(db, NURSE, "+302100000000", "55€", now)
 
         # Owner: price goes to approval, not live.
-        await admin_changes.handle_sms(db, OWNER, "", "ο καθαρισμός 55€", now)
-        assert "έλεγχο" in await admin_changes.handle_sms(db, OWNER, "", "ναι", now)
+        await admin_changes.handle_sms(db, OWNER, "+302100000000", "ο καθαρισμός 55€", now)
+        assert "έλεγχο" in await admin_changes.handle_sms(db, OWNER, "+302100000000", "ναι", now)
         assert (await db.get(Practice, practice.id)).services[0]["price"] == "50€"
         pending = (await db.execute(select(ConfigVersion).where(ConfigVersion.status == "pending"))).scalars().all()
         assert pending[0].changes["services"][0]["price"] == "55€" and pending[0].source == "sms"
 
         parse.return_value = {"action": "closure", "date_from": "2020-01-01", "date_to": "2020-01-02"}
-        assert "Δεν κατάλαβα" in await admin_changes.handle_sms(db, OWNER, "", "παλιό", now)
+        assert "Δεν κατάλαβα" in await admin_changes.handle_sms(db, OWNER, "+302100000000", "παλιό", now)
 
 
 @pytest.mark.asyncio

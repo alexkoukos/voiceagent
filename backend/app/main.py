@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 
-from app.auth import require_app_token
+from app.auth import require_app_token, require_admin_token
 from app.config import get_settings
 from app.languages import LANGUAGES
 from app.routers import calls, demo, friends, internal, manage, oauth, ops, practices, recordings, templates, webhooks
@@ -39,13 +39,13 @@ app = FastAPI(
 )
 
 app.include_router(friends.router, dependencies=[Depends(require_app_token)])
-app.include_router(calls.router, dependencies=[Depends(require_app_token)])
+app.include_router(calls.router)
 app.include_router(templates.router, dependencies=[Depends(require_app_token)])
-app.include_router(practices.router, dependencies=[Depends(require_app_token)])
-app.include_router(practices.misc, dependencies=[Depends(require_app_token)])
-app.include_router(ops.router, dependencies=[Depends(require_app_token)])
-app.include_router(oauth.router, dependencies=[Depends(require_app_token)])
-app.include_router(ops.alerts_router, dependencies=[Depends(require_app_token)])
+app.include_router(practices.router, dependencies=[Depends(require_admin_token)])
+app.include_router(practices.misc, dependencies=[Depends(require_admin_token)])
+app.include_router(ops.router, dependencies=[Depends(require_admin_token)])
+app.include_router(oauth.router, dependencies=[Depends(require_admin_token)])
+app.include_router(ops.alerts_router, dependencies=[Depends(require_admin_token)])
 app.include_router(internal.router)
 app.include_router(demo.router)
 app.include_router(manage.router)

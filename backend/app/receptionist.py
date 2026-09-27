@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from livekit import api
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import admin_changes, alerts, booking, events, notifications, routing, texts
@@ -68,10 +68,9 @@ def call_language(practice: Practice, caller_number: str | None) -> str:
 
 
 async def practice_for_number(db: AsyncSession, dialed_number: str) -> Practice | None:
-    for practice in (await db.execute(select(Practice).where(Practice.offboarded_at.is_(None)))).scalars():
-        if dialed_number in (practice.phone_numbers or []):
-            return practice
-    return None
+    matches = [p for p in (await db.execute(select(Practice).where(Practice.offboarded_at.is_(None)))).scalars()
+               if dialed_number in (p.phone_numbers or [])]
+    return matches[0] if len(matches) == 1 else None
 
 
 async def active_calls(db: AsyncSession, practice_id: str | None = None) -> int:
@@ -163,6 +162,9 @@ async def start_call(
     if caller_number and caller_number in (practice.blocked_numbers or []):
         raise Blocked()
     await check_cost_cap(db, practice)
+    # Count and reserve a line in one transaction so simultaneous inbound calls
+    # cannot both observe the final free slot.
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"admission:{practice.id}"})
     if await active_calls(db, practice.id) >= practice.max_concurrent_calls:
         raise Busy()
     now = utcnow()
@@ -234,10 +236,12 @@ async def build_metadata(
         return prompt
 
     record = call.direction != "web"
-    greeting = default_greeting(practice, language=language)
+    greeting = default_greeting(practice, language=language, record=record)
     instruction = None
     if purpose:
         instruction = purpose["greeting_" + ("el" if language == "el" else "en")]
+        instruction += (" Πες επίσης ότι η κλήση καταγράφεται και μπορείς να σταματήσεις αν το ζητήσει." if language == "el"
+                        else " Also disclose that this call is recorded and you can stop if requested.")
     meta = {
         "mode": "receptionist",
         "call_id": call.id,
@@ -246,6 +250,7 @@ async def build_metadata(
         "prompt": prompt_for(language),
         "prompts": {"el": prompt_for("el"), "en": prompt_for("en")},
         "greeting": greeting,
+        "greeting_without_recording": default_greeting(practice, language=language),
         "greeting_instruction": instruction,
         "voice": practice.voice,
         "language": language,
@@ -303,7 +308,7 @@ async def _purpose(db: AsyncSession, practice: Practice, call: Call, staff, lang
         }
     if call.purpose == "reminder":
         appt = await db.get(Appointment, call.appointment_id)
-        if appt is None:
+        if appt is None or appt.practice_id != practice.id:
             return None
         el, en = booking.describe(practice, appt, staff, "el"), booking.describe(practice, appt, staff, "en")
         return {
@@ -326,7 +331,7 @@ async def _purpose(db: AsyncSession, practice: Practice, call: Call, staff, lang
     if call.purpose.startswith("waitlist:"):
         _, entry_id, slot = call.purpose.split(":", 2)
         entry = await db.get(WaitlistEntry, entry_id)
-        if entry is None:
+        if entry is None or entry.practice_id != practice.id:
             return None
         day, hhmm = slot.split("T")
         d = date_cls.fromisoformat(day)
@@ -807,7 +812,7 @@ async def tool_confirm(db: AsyncSession, call: Call, args) -> dict:
     if args.appointment_id not in await _found_ids(db, call):
         return {"error": "call find_appointments first"}
     appt = await db.get(Appointment, args.appointment_id)
-    if appt is None or appt.status != "booked":
+    if appt is None or appt.practice_id != call.practice_id or appt.status != "booked":
         return {"confirmed": False, "error": "unknown_appointment"}
     appt.reminder_status = "confirmed"
     set_outcome(call, "confirmed")
@@ -875,7 +880,7 @@ async def tool_transfer(db: AsyncSession, call: Call, args) -> dict:
 
 async def tool_handoff_result(db: AsyncSession, call: Call, args) -> dict:
     handoff = await db.get(Handoff, args.handoff_id)
-    if handoff is None or handoff.call_id != call.id:
+    if handoff is None or handoff.call_id != call.id or handoff.practice_id != call.practice_id:
         return {"error": "unknown_handoff"}
     practice = await _practice(db, call)
     handoff.status = args.status

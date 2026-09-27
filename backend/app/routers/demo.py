@@ -9,7 +9,7 @@ from html import escape
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, Response
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import receptionist
@@ -53,6 +53,7 @@ async def demo_page(slug: str, db: AsyncSession = Depends(get_db)):
 async def demo_session(slug: str, db: AsyncSession = Depends(get_db)):
     practice = await _practice(db, slug)
     settings = get_settings()
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('global-demo-admission'))"))
     if await active_count(db) >= settings.max_concurrent_calls:
         raise HTTPException(status_code=429, detail="busy")
     try:
@@ -155,6 +156,7 @@ const lines = new Map();
 function setStatus(t) {{ statusEl.textContent = t; }}
 function idle() {{ room = null; btn.textContent = "{call}"; btn.className = ""; btn.disabled = false; }}
 function show(segments, participant) {{
+  if (!room) return;
   const agent = !participant || participant.identity !== room.localParticipant.identity;
   for (const s of segments) {{
     let el = lines.get(s.id);
@@ -165,23 +167,38 @@ function show(segments, participant) {{
 }}
 async function start() {{
   btn.disabled = true; setStatus("{s_connecting}"); log.innerHTML = ""; lines.clear();
-  const res = await fetch("/demo/{slug}/session", {{ method: "POST" }});
-  if (!res.ok) {{ setStatus(res.status === 429 ? "{s_busy}" : "{s_error}"); idle(); return; }}
-  const {{ url, token }} = await res.json();
-  room = new LK.Room();
-  room.on(LK.RoomEvent.TrackSubscribed, (track) => {{
-    if (track.kind === "audio") document.body.appendChild(track.attach());
-  }});
-  room.on(LK.RoomEvent.TranscriptionReceived, show);
-  room.on(LK.RoomEvent.Disconnected, () => {{ setStatus("{s_ended}"); idle(); }});
+  let activeRoom = null;
+  const media = new Set();
+  function cleanup() {{ for (const el of media) el.remove(); media.clear(); }}
   try {{
-    await room.connect(url, token);
-    await room.localParticipant.setMicrophoneEnabled(true);
+    const res = await fetch("/demo/{slug}/session", {{ method: "POST", signal: AbortSignal.timeout(15000) }});
+    if (!res.ok) {{ setStatus(res.status === 429 ? "{s_busy}" : "{s_error}"); idle(); return; }}
+    const {{ url, token }} = await res.json();
+    activeRoom = new LK.Room();
+    room = activeRoom;
+    activeRoom.on(LK.RoomEvent.TrackSubscribed, (track) => {{
+      if (track.kind === "audio") {{ const el = track.attach(); media.add(el); document.body.appendChild(el); }}
+    }});
+    activeRoom.on(LK.RoomEvent.TrackUnsubscribed, (track) => {{
+      for (const el of track.detach()) {{ el.remove(); media.delete(el); }}
+    }});
+    activeRoom.on(LK.RoomEvent.TranscriptionReceived, show);
+    activeRoom.on(LK.RoomEvent.Disconnected, () => {{
+      cleanup();
+      if (room === activeRoom) {{ setStatus("{s_ended}"); idle(); }}
+    }});
+    await activeRoom.connect(url, token);
+    await activeRoom.localParticipant.setMicrophoneEnabled(true);
+    if (room !== activeRoom) return;
     setStatus("{s_live}"); btn.textContent = "{hang_up}"; btn.className = "end"; btn.disabled = false;
   }} catch (e) {{
-    console.error(e); setStatus("{s_error}"); if (room) room.disconnect(); idle();
+    console.error(e);
+    if (activeRoom) await activeRoom.disconnect();
+    cleanup(); setStatus("{s_error}"); idle();
   }}
 }}
+window.addEventListener("pagehide", () => {{ if (room) room.disconnect(); }});
+
 btn.onclick = () => room ? room.disconnect() : start();
 </script>
 </body>

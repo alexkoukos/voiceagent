@@ -23,7 +23,18 @@ final class AppLock {
 
     @MainActor
     func unlock() async {
-        if await Self.confirm("Ξεκλείδωμα κλήσεων και στοιχείων πελατών") { unlocked = true }
+        let context = LAContext()
+        guard (try? await context.evaluatePolicy(.deviceOwnerAuthentication,
+                localizedReason: "Ξεκλείδωμα κλήσεων και στοιχείων πελατών")) == true else { return }
+        Keychain.context = context
+        // Upgrade existing device-only entries to the biometric access policy.
+        for key in ["apiKey", "adminKey"] {
+            if let value = Keychain.get(key) {
+                do { try Keychain.set(value, for: key) }
+                catch { Keychain.lock(); return }
+            }
+        }
+        unlocked = true
     }
 
     func phaseChanged(_ phase: ScenePhase) {
@@ -31,7 +42,10 @@ final class AppLock {
         case .background:
             backgroundedAt = Date()
         case .active:
-            if let t = backgroundedAt, Date().timeIntervalSince(t) > Self.relockAfter { unlocked = false }
+            if let t = backgroundedAt, Date().timeIntervalSince(t) >= Self.relockAfter {
+                unlocked = false
+                Keychain.lock()
+            }
             backgroundedAt = nil
         default:
             break

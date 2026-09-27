@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import events, notifications
 from app.config import get_settings
-from app.models import Alert, Practice
+from app.models import Alert, Device, Practice
 
 
 async def _send(db: AsyncSession, alert: Alert, email: str, sms: str, prefix: str = "") -> None:
@@ -45,6 +45,11 @@ async def raise_alert(
         await db.flush()
     s = get_settings()
     await _send(db, alert, s.founder_email, s.founder_sms)
+    # Founder devices are explicitly unassigned. Never broadcast another tenant's alert.
+    for device in (await db.execute(select(Device).where(Device.practice_id.is_(None)))).scalars():
+        await notifications.queue(db, practice_id=alert.practice_id, kind=f"alert_{alert.kind}", channel="push",
+                                  recipient=device.token, subject=alert.subject, body=alert.body[:180],
+                                  call_id=alert.call_id, data={"environment": device.environment, "alert_id": alert.id})
     events.publish("alerts")
     return alert
 

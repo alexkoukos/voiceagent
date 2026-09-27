@@ -5,6 +5,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var baseURL = Settings.baseURL
     @State private var apiKey = Settings.apiKey
+    @State private var adminKey = Settings.adminKey
     @State private var testing = false
     @State private var result: (ok: Bool, text: String)?
 
@@ -16,7 +17,8 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
-                    SecureField("Κλειδί", text: $apiKey)
+                    SecureField("Κλειδί Dialer", text: $apiKey)
+                    SecureField("Κλειδί διαχειριστή", text: $adminKey)
                 } header: {
                     Text("Σύνδεση με τον server")
                 } footer: {
@@ -45,20 +47,27 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Τέλος") { save(); dismiss() }
+                    Button("Τέλος") { if save() { dismiss() } }
                 }
             }
         }
     }
 
-    private func save() {
-        Settings.baseURL = baseURL
-        Settings.apiKey = apiKey
-        baseURL = Settings.baseURL
+    private func save() -> Bool {
+        do {
+            try Keychain.set(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "apiKey")
+            try Keychain.set(adminKey.trimmingCharacters(in: .whitespacesAndNewlines), for: "adminKey")
+            Settings.baseURL = baseURL
+            baseURL = Settings.baseURL
+            return true
+        } catch {
+            result = (false, "Δεν αποθηκεύτηκε το κλειδί. Ξεκλείδωσε με Face ID ή κωδικό και δοκίμασε ξανά.")
+            return false
+        }
     }
 
     private func test() async {
-        save()
+        guard save() else { return }
         testing = true
         defer { testing = false }
         do {

@@ -240,7 +240,11 @@ async def decide(db: AsyncSession, practice: Practice, req: AdminRequest, yes: b
     if not yes:
         req.status = "cancelled"
         return _t(practice, "Εντάξει, δεν άλλαξε τίποτα.", "OK, nothing changed.")
+    if req.practice_id != practice.id:
+        raise Rejected("Not found")
     sender = await db.get(Staff, req.staff_id) if req.staff_id else None
+    if sender and sender.practice_id != practice.id:
+        raise Rejected("Not found")
     author, source = (sender.name if sender else req.sender), req.channel
     c = req.parsed
     if c["action"] == "closure":
@@ -295,8 +299,10 @@ async def handle_sms(db: AsyncSession, sender: str, to: str, text: str, now: dat
         Staff.phone == sender, Staff.active.is_(True), Practice.offboarded_at.is_(None)))).all()
     if not rows:
         return None
-    staff, practice = next(((s, p) for s, p in rows if to in (p.phone_numbers or []) or to == p.outbound_number),
-                           rows[0])
+    matches = [(s, p) for s, p in rows if to and (to in (p.phone_numbers or []) or to == p.outbound_number)]
+    if len(matches) != 1:
+        return None
+    staff, practice = matches[0]
     yes = answer(text)
     if yes is not None:
         req = await pending_for(db, practice, sender)

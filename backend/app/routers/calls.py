@@ -6,6 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
 from fastapi.concurrency import run_in_threadpool
 
+from starlette.requests import HTTPConnection
+
+from app.auth import require_admin_token, require_app_token, is_master
 from app import events
 from app.routers import recordings
 from app.database import get_db
@@ -17,7 +20,24 @@ from app.models import Call, CallStatus, Friend, TranscriptEntry
 from app.schemas import CallCreate, CallDetailOut, CallOut
 from app.storage import SEALED, presigned_recording_url, queue_recording_deletion, recording_exists
 
-router = APIRouter(prefix="/calls", tags=["calls"])
+async def protect_practice_call(connection: HTTPConnection, db: AsyncSession = Depends(get_db)):
+    value = connection.headers.get("x-api-key", "")
+    call_id = connection.path_params.get("call_id")
+    if not call_id:
+        require_app_token(value)
+        return
+    call = await db.get(Call, call_id)
+    if call is None:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if call.practice_id:
+        await require_admin_token(connection, db)
+        if db.info.get("tenant_id") and db.info["tenant_id"] != call.practice_id:
+            raise HTTPException(status_code=404, detail="Call not found")
+    else:
+        require_app_token(value)
+
+
+router = APIRouter(prefix="/calls", tags=["calls"], dependencies=[Depends(protect_practice_call)])
 
 
 @router.post("", response_model=CallOut)
