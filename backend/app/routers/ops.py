@@ -224,6 +224,8 @@ async def set_admin_pin(practice_id: str, payload: AdminPinIn, db: AsyncSession 
 @alerts_router.get("", response_model=list[AlertOut])
 async def list_alerts(open_only: bool = True, db: AsyncSession = Depends(get_db)):
     q = select(Alert)
+    if db.info.get("tenant_id"):
+        q = q.where(Alert.practice_id == db.info["tenant_id"])
     if open_only:
         q = q.where(Alert.acked_at.is_(None))
     return (await db.execute(q.order_by(Alert.created_at.desc()).limit(200))).scalars().all()
@@ -232,9 +234,96 @@ async def list_alerts(open_only: bool = True, db: AsyncSession = Depends(get_db)
 @alerts_router.post("/{alert_id}/ack", response_model=AlertOut)
 async def ack_alert(alert_id: str, db: AsyncSession = Depends(get_db)):
     alert = await db.get(Alert, alert_id)
-    if alert is None:
+    if alert is None or (db.info.get("tenant_id") and alert.practice_id != db.info["tenant_id"]):
         raise HTTPException(status_code=404, detail="Alert not found")
     alert.acked_at = alert.acked_at or datetime.utcnow()
     await db.commit()
     events.publish("alerts")
     return alert
+
+
+from datetime import date, timedelta
+from decimal import Decimal
+from pydantic import BaseModel, Field
+from app.auth import require_master_token
+from app.models import BillingAccount, BillingDraft
+from app import billing
+
+
+class BillingIn(BaseModel):
+    pilot_started_on: date
+    monthly_fee: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
+
+
+@router.put("/{practice_id}/billing", dependencies=[Depends(require_master_token)])
+async def configure_billing(practice_id: str, payload: BillingIn, db: AsyncSession = Depends(get_db)):
+    await _get(db, practice_id)
+    account = await db.get(BillingAccount, practice_id)
+    if account:
+        if account.pilot_started_on != payload.pilot_started_on:
+            raise HTTPException(status_code=409, detail="Pilot start is immutable once configured")
+        account.monthly_fee = payload.monthly_fee
+    else:
+        db.add(BillingAccount(practice_id=practice_id, **payload.model_dump()))
+    await db.commit()
+    return await billing_status(practice_id, db)
+
+
+@router.get("/{practice_id}/billing")
+async def billing_status(practice_id: str, db: AsyncSession = Depends(get_db)):
+    practice = await _get(db, practice_id)
+    account = await db.get(BillingAccount, practice_id)
+    drafts = (await db.execute(select(BillingDraft).where(BillingDraft.practice_id == practice_id)
+                               .order_by(BillingDraft.period_start.desc()))).scalars()
+    return {"pilot_started_on": account.pilot_started_on if account else None,
+            "paid_period_starts_on": account.pilot_started_on + timedelta(days=30) if account else None,
+            "monthly_fee": str(account.monthly_fee) if account else None,
+            "guarantee_threshold": practice.guarantee_threshold,
+            "provider_configured": False,
+            "drafts": [{"id": d.id, "period_start": d.period_start, "period_end": d.period_end,
+                        "bookings": d.bookings, "threshold": d.threshold, "amount": str(d.amount),
+                        "status": d.status, "call_ids": d.call_ids} for d in drafts]}
+
+
+@router.post("/{practice_id}/billing/prepare", dependencies=[Depends(require_master_token)])
+async def prepare_billing(practice_id: str, db: AsyncSession = Depends(get_db)):
+    practice = await _get(db, practice_id)
+    await billing.prepare_due(db, practice, datetime.now(timezone.utc))
+    await db.commit()
+    return await billing_status(practice_id, db)
+
+
+from typing import Literal
+from app.models import HealthCheck
+from app import alerts
+
+
+class HealthReportIn(BaseModel):
+    kind: Literal["web", "phone"]
+    number: str | None = None
+    success: bool
+    detail: str = Field(default="", max_length=300)
+
+
+@router.post("/{practice_id}/health-checks")
+async def report_health(practice_id: str, payload: HealthReportIn, db: AsyncSession = Depends(get_db)):
+    practice = await _get(db, practice_id)
+    if (payload.kind == "phone" and payload.number not in (practice.phone_numbers or [])) or (payload.kind == "web" and payload.number):
+        raise HTTPException(status_code=422, detail="Check target does not belong to this practice")
+    check = HealthCheck(practice_id=practice_id, **payload.model_dump())
+    db.add(check)
+    if not payload.success:
+        await alerts.raise_alert(db, practice, "synthetic_failed", f"{practice.name}: {payload.kind} call check failed",
+                                 payload.detail, dedupe_key=f"synthetic:{practice_id}:{payload.kind}:{datetime.utcnow():%Y-%m-%dT%H}")
+    await db.commit()
+    notifications.kick()
+    return {"id": check.id}
+
+
+@router.get("/{practice_id}/health-checks")
+async def recent_health(practice_id: str, db: AsyncSession = Depends(get_db)):
+    await _get(db, practice_id)
+    rows = (await db.execute(select(HealthCheck).where(HealthCheck.practice_id == practice_id)
+                             .order_by(HealthCheck.created_at.desc()).limit(100))).scalars()
+    return [{"kind": x.kind, "number": x.number, "success": x.success, "detail": x.detail,
+             "created_at": x.created_at} for x in rows]

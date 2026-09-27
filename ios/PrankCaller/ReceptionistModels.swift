@@ -219,7 +219,7 @@ struct AdminLink: Decodable {
 }
 
 /// Any JSON value (the changed fields of a config version).
-indirect enum JSONValue: Decodable, Hashable {
+indirect enum JSONValue: Codable, Hashable {
     case string(String), number(Double), bool(Bool), array([JSONValue]), object([String: JSONValue]), null
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -229,6 +229,17 @@ indirect enum JSONValue: Decodable, Hashable {
         else if let s = try? c.decode(String.self) { self = .string(s) }
         else if let a = try? c.decode([JSONValue].self) { self = .array(a) }
         else { self = .object(try c.decode([String: JSONValue].self)) }
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try c.encode(value)
+        case .number(let value): try c.encode(value)
+        case .bool(let value): try c.encode(value)
+        case .array(let value): try c.encode(value)
+        case .object(let value): try c.encode(value)
+        case .null: try c.encodeNil()
+        }
     }
     var text: String {
         switch self {

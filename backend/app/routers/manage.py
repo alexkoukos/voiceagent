@@ -71,7 +71,8 @@ async def page(token: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
     _, practice = found
     greek = practice.language == "el"
-    cfg = json.dumps({"lang": "el" if greek else "en", "name": practice.name}).replace("</", "<\\/")
+    cfg = json.dumps({"lang": "el" if greek else "en", "name": practice.name,
+                      "timezone": practice.timezone}).replace("</", "<\\/")
     return HTMLResponse(PAGE.replace("__LANG__", "el" if greek else "en").replace("__CONFIG__", cfg),
                         headers=NO_STORE)
 
@@ -314,7 +315,10 @@ function closuresSection(s) {
       canRemove ? el("button", {class: "ghost", text: T.remove, on: {click: () =>
         run(`${T.remove}: ${text}`, () => api("DELETE", "/closures/" + encodeURIComponent(c.id))).then(r => r && toast(T.saved))}}) : null));
   }
-  const today = new Date().toISOString().slice(0, 10);
+  const dateParts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: CFG.timezone, year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(new Date()).map(p => [p.type, p.value]));
+  const today = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
   const from = el("input", {type: "date", min: today, value: today});
   const to = el("input", {type: "date", min: today, value: today});
   from.addEventListener("change", () => { if (to.value < from.value) to.value = from.value; });

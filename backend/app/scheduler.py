@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
 
-from app import alerts, booking, health, finalize, gcal, notifications, receptionist, texts
+from app import billing, alerts, booking, health, finalize, gcal, notifications, onboarding, receptionist, reconciliation, texts
 from app.database import async_session
 from app.models import (
     Appointment, AppointmentStatus, Call, CallStatus, Handoff, Notification, Practice, TranscriptEntry,
@@ -267,11 +267,39 @@ async def reconcile_calendar_events(db, practice: Practice, now: datetime) -> No
 
 
 _last_retention: date | None = None
-_last_calendar_reconciliation: date | None = None
+_last_calendar_reconciliation: dict[str, datetime] = {}
+CALENDAR_RECONCILIATION_EVERY = timedelta(minutes=5)
+
+
+async def reconcile_due(practice_ids: list[str], now: datetime) -> None:
+    if not gcal.configured():
+        return
+    for practice_id in practice_ids:
+        last = _last_calendar_reconciliation.get(practice_id)
+        if last and now - last < CALENDAR_RECONCILIATION_EVERY:
+            continue
+        async with async_session() as db:
+            try:
+                practice = await db.get(Practice, practice_id)
+                if practice is None or practice.offboarded_at:
+                    continue
+                await booking._lock(db, practice)
+                await reconcile_calendar_events(db, practice, now)
+                await reconciliation.check(db, practice, now)
+                await db.commit()
+                _last_calendar_reconciliation[practice_id] = now
+            except Exception:
+                await db.rollback()
+                logger.exception("Calendar reconciliation failed for %s; will retry", practice_id)
+                practice = await db.get(Practice, practice_id)
+                await alerts.raise_alert(db, practice, "calendar_unavailable", "Calendar check failed",
+                                         "Check the calendar connection and permissions.",
+                                         dedupe_key=f"calendar-check:{practice_id}:{now:%Y-%m-%dT%H}")
+                await db.commit()
 
 
 async def tick(now: datetime | None = None) -> None:
-    global _last_retention, _last_calendar_reconciliation
+    global _last_retention
     now = now or datetime.now(ZoneInfo("UTC"))
     async with async_session() as db:
         practices = list((await db.execute(select(Practice))).scalars())
@@ -280,6 +308,16 @@ async def tick(now: datetime | None = None) -> None:
                 continue
             local = now.astimezone(ZoneInfo(practice.timezone))
             await recover_summary_notifications(db, practice)
+            await billing.prepare_due(db, practice, now)
+            await health.check_synthetic_reports(db, practice, now)
+            # Imports remain drafts; a weekly refresh never changes the live agent.
+            refresh_practice_id = practice.id
+            try:
+                async with db.begin_nested():
+                    await onboarding.refresh_google(db, practice, now)
+            except Exception:
+                logger.exception("Google profile refresh failed for %s", refresh_practice_id)
+                await db.refresh(practice)
             if _at(local, (practice.notifications or {}).get("digest_time", "20:00")):
                 await digest(db, practice, local)
             if local.day == 1 and _at(local, "09:00"):
@@ -300,19 +338,12 @@ async def tick(now: datetime | None = None) -> None:
         await db.commit()
         if retained:
             _last_retention = now.date()
-        if gcal.configured() and _last_calendar_reconciliation != now.date():
-            try:
-                for practice in practices:
-                    await reconcile_calendar_events(db, practice, now)
-                await db.commit()
-                _last_calendar_reconciliation = now.date()
-            except Exception:
-                await db.rollback()
-                logger.exception("Calendar reconciliation failed; will retry")
         # Finalizers use their own sessions and must see committed terminal state.
         await recover_finalizations(db)
         from app.dispatcher import start_next_queued
         await start_next_queued(db)
+        practice_ids = [p.id for p in practices]
+    await reconcile_due(practice_ids, now)
     notifications.kick()
     await process_recording_deletions()
     async with async_session() as db:

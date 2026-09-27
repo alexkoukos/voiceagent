@@ -19,7 +19,7 @@ from app.models import AdminLink, Appointment, ConfigVersion, Practice, Staff
 from app.schemas import PracticeIn, PracticeOut
 
 # What a version snapshots and a rollback restores.
-FIELDS = ("hours", "services", "rules", "knowledge_base")
+FIELDS = ("name", "hours", "services", "rules", "knowledge_base")
 # From a doctor's link these need the founder's approval.
 NEEDS_APPROVAL = ("services", "knowledge_base")
 LINK_HOURS = 72
@@ -47,14 +47,18 @@ def validated(practice: Practice, changes: dict) -> dict:
 
 
 LABELS = {
-    "el": {"hours": "ωράριο", "services": "υπηρεσίες και τιμές", "rules": "κανόνες", "knowledge_base": "πληροφορίες"},
-    "en": {"hours": "hours", "services": "services and prices", "rules": "rules", "knowledge_base": "information"},
+    "el": {"name": "όνομα", "hours": "ωράριο", "services": "υπηρεσίες και τιμές", "rules": "κανόνες", "knowledge_base": "πληροφορίες"},
+    "en": {"name": "name", "hours": "hours", "services": "services and prices", "rules": "rules", "knowledge_base": "information"},
 }
 
 
 def describe(changes: dict, language: str = "en") -> str:
     labels = LABELS["el" if language == "el" else "en"]
     return ", ".join(labels[k] for k in FIELDS if k in changes)
+
+
+async def lock_config(db: AsyncSession, practice: Practice) -> None:
+    await booking._lock(db, practice)
 
 
 async def _ensure_baseline(db: AsyncSession, practice: Practice) -> None:
@@ -73,9 +77,12 @@ async def publish(
     version: ConfigVersion | None = None,
 ) -> ConfigVersion | None:
     """Applies `changes` (already valid columns) and records the version. None if nothing changed."""
+    await lock_config(db, practice)
     changes = {k: v for k, v in changes.items() if k in FIELDS and v != getattr(practice, k)}
     if not changes:
         return None
+    if practice.publish_frozen and source != "rollback" and any(k in changes for k in ("name", *NEEDS_APPROVAL)):
+        raise ChangeError("publishing_frozen")
     await _ensure_baseline(db, practice)
     for k, v in changes.items():
         setattr(practice, k, v)
@@ -94,6 +101,7 @@ async def publish(
 async def propose(
     db: AsyncSession, practice: Practice, changes: dict, *, author: str, summary: str = "", source: str = "link",
 ) -> ConfigVersion | None:
+    await lock_config(db, practice)
     changes = {k: v for k, v in changes.items() if k in FIELDS and v != getattr(practice, k)}
     if not changes:
         return None
@@ -105,7 +113,8 @@ async def propose(
 
 
 async def _version(db: AsyncSession, practice: Practice, version_id: str) -> ConfigVersion:
-    version = await db.get(ConfigVersion, version_id)
+    await lock_config(db, practice)
+    version = await db.get(ConfigVersion, version_id, populate_existing=True)
     if version is None or version.practice_id != practice.id:
         raise ChangeError("not_found")
     return version
@@ -122,6 +131,18 @@ async def approve(db: AsyncSession, practice: Practice, version_id: str) -> Conf
         # Already true today: nothing to apply, but it leaves the queue.
         version.status, version.decided_at = "published", datetime.utcnow()
         version.snapshot = snapshot(practice)
+    return version
+
+
+async def edit_pending(db: AsyncSession, practice: Practice, version_id: str, changes: dict) -> ConfigVersion:
+    version = await _version(db, practice, version_id)
+    if version.status != "pending":
+        raise ChangeError("not_pending")
+    if not changes or any(k not in FIELDS for k in changes):
+        raise ChangeError("invalid_fields")
+    version.changes = validated(practice, changes)
+    version.summary = describe(version.changes, practice.language)
+    await db.flush()
     return version
 
 
@@ -166,6 +187,7 @@ async def add_closure(
 ) -> dict:
     """The agent stops offering these days at once; appointments already in the range are
     emailed to the business for rebooking."""
+    await lock_config(db, practice)
     if date_to < date_from:
         raise ChangeError("bad_range")
     person = None
@@ -200,6 +222,7 @@ async def add_closure(
 
 
 async def remove_closure(db: AsyncSession, practice: Practice, closure_id: str, *, source: str, author: str = "") -> None:
+    await lock_config(db, practice)
     rules = dict(practice.rules or {})
     closures = rules.get("closures") or []
     gone = [c for c in closures if c["id"] == closure_id]

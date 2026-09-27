@@ -8,12 +8,14 @@ def test_google_hours_split_days_and_24h():
         {"open": {"day": 1, "hour": 9, "minute": 0}, "close": {"day": 1, "hour": 14, "minute": 0}},
         {"open": {"day": 1, "hour": 17, "minute": 30}, "close": {"day": 1, "hour": 21, "minute": 0}},
         {"open": {"day": 5, "hour": 20, "minute": 0}, "close": {"day": 6, "hour": 2, "minute": 0}},
-        {"open": {"day": 0, "hour": 0, "minute": 0}},
     ]}
     h = hours_from_google(opening)
     assert h["mon"] == [["09:00", "14:00"], ["17:30", "21:00"]]
     assert h["fri"] == [["20:00", "23:59"]]
-    assert h["sun"] == [["00:00", "23:59"]]
+    assert h["sat"] == [["00:00", "02:00"]]
+    assert h["sun"] == []
+    assert all(v == [["00:00", "23:59"]] for v in hours_from_google(
+        {"periods": [{"open": {"day": 0, "hour": 0}}]}).values())
     assert h["tue"] == []
 
 
@@ -44,3 +46,18 @@ def test_forwarding_codes():
     backup = forwarding_codes("+302100000000", "backup")
     assert [c["code"] for c in backup] == ["**61*+302100000000**20#", "**67*+302100000000#", "**62*+302100000000#"]
     assert forwarding_codes("+302100000000", "full")[0]["code"] == "**21*+302100000000#"
+
+
+def test_google_special_hours_override_weekly_hours_and_staff():
+    from datetime import date
+    from app.booking import hours_on
+    from app.models import Practice
+    from app.onboarding import special_hours_from_google
+    special = special_hours_from_google({
+        "specialDays": [{"date": {"year":2030,"month":1,"day":7}}, {"date":{"year":2030,"month":1,"day":8}}],
+        "periods": [{"open":{"date":{"year":2030,"month":1,"day":7},"hour":10},
+                     "close":{"date":{"year":2030,"month":1,"day":7},"hour":12}}]})
+    p = Practice(name="Test",hours={"mon":[["09:00","17:00"]],"tue":[["09:00","17:00"]]},rules={"date_hours":special})
+    assert hours_on(p,date(2030,1,7)) == [["10:00","12:00"]]
+    assert hours_on(p,date(2030,1,8)) == []
+    assert hours_on(p,date(2030,1,7),{"mon":[["11:00","17:00"]]}) == [("11:00","12:00")]

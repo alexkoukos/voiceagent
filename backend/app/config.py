@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     # Off by default: each agent job starts a ~400 MB process, and a probe during a live call
     # got the Railway agent OOM-killed before. Turn on (e.g. 15) once the agent has more memory.
     health_agent_check_minutes: int = 0
+    health_synthetic_checks_enabled: bool = False
 
     # Call summaries (a cheap text model, after hang-up).
     summary_model: str = "gemini-3.5-flash-lite"
@@ -93,9 +94,11 @@ class Settings(BaseSettings):
     encrypt_backfill: bool = False
     internal_api_token: str = ""
     app_api_token: str = ""
+    admin_api_token: str = ""
     backend_public_url: str = "http://localhost:8000"
     # Swagger UI / OpenAPI schema; off by default so a deployed backend doesn't publish its API.
     enable_docs: bool = False
+    test_sessions_enabled: bool = False
 
     @field_validator("database_url")
     @classmethod

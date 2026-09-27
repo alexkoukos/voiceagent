@@ -126,3 +126,21 @@ async def test_staff_link_only_sets_own_leave_and_links_expire(sessions):
         await practices_router.revoke_links(practice.id, db)
         with pytest.raises(HTTPException):
             await manage.state(fresh, db)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_closures_preserve_both_changes(sessions):
+    import asyncio
+    async with sessions() as db:
+        practice=await _practice(db)
+        pid=practice.id
+    async def close(day):
+        async with sessions() as db:
+            practice=await db.get(Practice,pid)
+            await config_changes.add_closure(db,practice,date_from=date(2030,8,day),date_to=date(2030,8,day),
+                                             staff_id=None,reason=None,source="app")
+            await db.commit()
+    await asyncio.gather(close(10),close(11))
+    async with sessions() as db:
+        practice=await db.get(Practice,pid)
+        assert sorted(c["from"] for c in practice.rules["closures"])==["2030-08-10","2030-08-11"]

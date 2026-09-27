@@ -15,6 +15,8 @@ struct PracticeSettingsView: View {
     @State private var errorMessage: String?
     @State private var loaded = false
     @State private var alerts: [OpsAlert] = []
+    @State private var editing: ConfigVersion?
+    @State private var frozen = false
 
     var body: some View {
         List {
@@ -22,11 +24,28 @@ struct PracticeSettingsView: View {
             AlertsSection(alerts: $alerts) { await load() }
             approvalSection
             Section {
+                Toggle("Παύση δημοσίευσης αλλαγών", isOn: Binding(get: { frozen }, set: { value in
+                    Task {
+                        guard await AppLock.confirm("Αλλαγή παύσης δημοσιεύσεων") else { return }
+                        do { try await api.freezePublishing(practice.id, frozen: value); frozen = value }
+                        catch { errorMessage = friendlyMessage(error) }
+                    }
+                }))
+            } footer: {
+                Text("Τιμές, υπηρεσίες και πληροφορίες περιμένουν. Ωράρια, άδειες και επαναφορά συνεχίζουν να λειτουργούν.")
+            }
+            Section {
                 NavigationLink { ImportView(practice: practice) } label: {
                     Label("Εισαγωγή στοιχείων", systemImage: "square.and.arrow.down")
                 }
                 NavigationLink { CalendarView(practice: practice) } label: {
                     Label("Ημερολόγια Google", systemImage: "calendar")
+                }
+                NavigationLink { CalendarFeedsView(practice: practice) } label: {
+                    Label("Ημερολόγια iCal", systemImage: "calendar.badge.clock")
+                }
+                NavigationLink { BillingView(practice: practice) } label: {
+                    Label("Χρέωση και εγγύηση", systemImage: "eurosign.circle")
                 }
                 NavigationLink { ForwardingView(practice: practice) } label: {
                     Label("Προώθηση κλήσεων", systemImage: "phone.arrow.right")
@@ -49,6 +68,9 @@ struct PracticeSettingsView: View {
         .refreshable { await load() }
         .sheet(isPresented: $addingClosure) {
             AddClosureView(practiceId: practice.id, staff: staff) { Task { await load() } }
+        }
+        .sheet(item: $editing) { version in
+            DraftReviewView(practiceId: practice.id, version: version) { Task { await load() } }
         }
         .confirmationDialog("Επαναφορά σε αυτή την έκδοση;", isPresented: Binding(
             get: { rollingBack != nil }, set: { if !$0 { rollingBack = nil } }
@@ -78,6 +100,7 @@ struct PracticeSettingsView: View {
                     }
                     ForEach(v.previewLines, id: \.self) { Text($0).font(.subheadline) }
                     HStack(spacing: Space.m) {
+                        Button("Επεξεργασία") { editing = v }.buttonStyle(.bordered)
                         Button("Έγκριση") { Task { await decide(v, approve: true) } }
                             .buttonStyle(.borderedProminent).tint(Palette.ink)
                         Button("Απόρριψη", role: .destructive) { Task { await decide(v, approve: false) } }
@@ -178,6 +201,8 @@ struct PracticeSettingsView: View {
             async let c = api.closures(practice.id)
             async let s = api.staff(practice.id)
             let versions = try await v
+            let config = try await api.practiceConfig(practice.id)
+            if case .bool(let value)? = config["publish_frozen"] ?? config["publishFrozen"] { frozen = value }
             alerts = (try? await api.alerts()) ?? []
             (closures, staff) = try await (c, s)
             pending = versions.filter { $0.status == "pending" }

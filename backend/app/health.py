@@ -81,8 +81,29 @@ async def check(db, now: datetime | None = None) -> None:
     if every and (_last_agent is None or now - _last_agent >= timedelta(minutes=every)):
         _last_agent = now
         token = secrets.token_urlsafe(16)
+        _pending[token] = [now, False]
         try:
-            await _dispatch_probe(token)
-            _pending[token] = [now, False]
+            await asyncio.wait_for(_dispatch_probe(token), timeout=10)
         except Exception as e:
+            _pending.pop(token, None)
             logger.warning("health probe dispatch failed: %r", e)
+            await alerts.raise_alert(db, None, "agent_down", "Could not dispatch agent health check",
+                                     type(e).__name__, dedupe_key=f"agent_down:{hour}")
+
+
+async def check_synthetic_reports(db, practice, now):
+    """An independent monitor must report actual audio checks, not just API reachability."""
+    from sqlalchemy import select
+    from app.models import HealthCheck
+    if not get_settings().health_synthetic_checks_enabled:
+        return
+    expected = [("web", None, timedelta(minutes=10))]
+    expected += [("phone", number, timedelta(hours=25)) for number in practice.phone_numbers or []]
+    for kind, number, age in expected:
+        last = (await db.execute(select(HealthCheck).where(
+            HealthCheck.practice_id == practice.id, HealthCheck.kind == kind, HealthCheck.number == number,
+        ).order_by(HealthCheck.created_at.desc()).limit(1))).scalar_one_or_none()
+        if not last or now.replace(tzinfo=None) - last.created_at > age:
+            await alerts.raise_alert(db, practice, "synthetic_stale", f"{practice.name}: {kind} check overdue",
+                                     "The independent call monitor has stopped reporting. Check the monitor service.",
+                                     dedupe_key=f"synthetic-stale:{practice.id}:{kind}:{number}:{now:%Y-%m-%dT%H}")

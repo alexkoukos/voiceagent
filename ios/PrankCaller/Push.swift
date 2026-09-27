@@ -31,7 +31,7 @@ final class PushRegistration {
     }
 
     private func send() {
-        guard let token, !Settings.apiKey.isEmpty else { return }
+        guard let token, !Settings.adminKey.isEmpty else { return }
         #if DEBUG
         let sandbox = true
         #else

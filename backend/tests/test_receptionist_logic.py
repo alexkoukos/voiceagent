@@ -76,12 +76,16 @@ def test_profanity_script_has_both_languages():
     assert PROFANITY_SCRIPT["el"] and PROFANITY_SCRIPT["en"]
 
 
-def test_greeting_is_only_the_assistant_line():
+
+def test_greeting_discloses_ai_and_recording_even_with_custom_text():
     p = practice()
-    assert default_greeting(p, language="el") == ("Οδοντιατρείο Δοκιμή. Είμαι ο ψηφιακός βοηθός, "
-                                                    "πώς μπορώ να σας βοηθήσω; For English, say English.")
-    assert default_greeting(p, language="en") == "I'm a digital assistant, how can I help you?"
-    assert default_greeting(practice(greeting="Γεια σας!"), language="el") == "Γεια σας!"
+    assert "τεχνητή νοημοσύνη" in default_greeting(p, language="el")
+    assert "καταγράφεται" not in default_greeting(p, language="el")
+    assert "καταγράφεται" in default_greeting(p, language="el", record=True)
+    assert "AI digital assistant" in default_greeting(p, language="en")
+    assert "recorded" in default_greeting(p, language="en", record=True)
+    custom = default_greeting(practice(greeting="Γεια σας!"), language="el", record=True)
+    assert "τεχνητή νοημοσύνη" in custom and "καταγράφεται" in custom and custom.endswith("Γεια σας!")
 
 
 def test_customer_sms():

@@ -1,6 +1,8 @@
 """Google sign-in for calendars (O3). The callback is public: Google's browser redirect has no
 API key, so the signed, 10-minute `state` carries which practice and staff member it is for."""
 
+from app.tenant_resources import validate_assignments
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -68,7 +70,7 @@ async def disconnect(practice_id: str, connection_id: str, db: AsyncSession = De
 async def _unassign(db: AsyncSession, conn: CalendarConnection) -> None:
     if conn.staff_id:
         person = await db.get(Staff, conn.staff_id)
-        if person and person.calendar_id == conn.calendar_id:
+        if person and person.practice_id == conn.practice_id and person.calendar_id == conn.calendar_id:
             person.calendar_id = None
     else:
         practice = await db.get(Practice, conn.practice_id)
@@ -88,10 +90,20 @@ async def callback(state: str = "", code: str = "", error: str = "", db: AsyncSe
         refresh_token, email = await google_oauth.exchange(code)
     except google_oauth.OAuthError as e:
         return back(e.code)
+    practice = await db.get(Practice, practice_id)
+    person = await db.get(Staff, staff_id) if staff_id else None
+    if not practice or practice.offboarded_at or (staff_id and (not person or person.practice_id != practice_id)):
+        return back("not_found")
+    try:
+        await validate_assignments(db, practice_id, calendar_id=email)
+    except HTTPException:
+        return back("calendar_already_assigned")
     # The primary calendar's id is the account's email.
+    replaced_calendar_ids = []
     for old in (await db.execute(select(CalendarConnection).where(
         CalendarConnection.practice_id == practice_id, CalendarConnection.staff_id == staff_id,
     ))).scalars():
+        replaced_calendar_ids.append(old.calendar_id)
         await db.delete(old)
     db.add(CalendarConnection(practice_id=practice_id, staff_id=staff_id, google_email=email,
                               calendar_id=email, refresh_token=refresh_token))
@@ -104,6 +116,8 @@ async def callback(state: str = "", code: str = "", error: str = "", db: AsyncSe
         if practice:
             practice.calendar_id = email
     await db.commit()
+    for calendar_id in replaced_calendar_ids:
+        gcal._oauth_tokens.pop(calendar_id, None)
     gcal._oauth_tokens.pop(email, None)
     events.publish(f"practice:{practice_id}")
     return back("ok")

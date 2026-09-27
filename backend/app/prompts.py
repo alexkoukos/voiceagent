@@ -151,11 +151,14 @@ def build_receptionist_prompt(
     return out
 
 
-def default_greeting(practice, *, language: str) -> str:
-    """Opening line in the practice's language. A custom greeting replaces it."""
-    if practice.greeting.strip():
-        return practice.greeting.strip()
+def default_greeting(practice, *, language: str, record: bool = False) -> str:
+    """Custom greetings follow the mandatory AI and (when enabled) recording disclosure."""
     if language == "el":
-        return (f"{practice.name}. Είμαι ο ψηφιακός βοηθός, πώς μπορώ να σας βοηθήσω; "
-                "For English, say English.")
-    return "I'm a digital assistant, how can I help you?"
+        disclosure = "Είμαι ο ψηφιακός βοηθός με τεχνητή νοημοσύνη."
+        if record:
+            disclosure += " Η κλήση καταγράφεται. Αν δεν το επιθυμείτε, πείτε μου να σταματήσω την καταγραφή."
+        return f"{practice.name}. {disclosure} " + (practice.greeting.strip() or "Πώς μπορώ να σας βοηθήσω; For English, say English mode.")
+    disclosure = "I'm an AI digital assistant."
+    if record:
+        disclosure += " This call is recorded. Please tell me if you'd like recording stopped."
+    return f"{practice.name}. {disclosure} " + (practice.greeting.strip() or "How can I help you?")

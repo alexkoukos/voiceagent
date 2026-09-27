@@ -19,6 +19,7 @@ from app.config import get_settings
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 SCOPES = " ".join([
     "openid", "email",
     "https://www.googleapis.com/auth/calendar.events",
@@ -73,18 +74,31 @@ async def exchange(code: str) -> tuple[str, str]:
     """(refresh token, the Google account's email)."""
     s = get_settings()
     async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.post(TOKEN_URL, data={
-            "code": code, "client_id": s.google_oauth_client_id, "client_secret": s.google_oauth_client_secret,
-            "redirect_uri": redirect_uri(), "grant_type": "authorization_code",
-        })
-    if r.status_code != 200:
-        raise OAuthError("exchange_failed")
-    data = r.json()
-    if not data.get("refresh_token"):
-        raise OAuthError("no_refresh_token")
-    email = jwt.decode(data["id_token"], options={"verify_signature": False}).get("email", "") if data.get("id_token") else ""
-    if not email:
-        raise OAuthError("no_email")
+        try:
+            r = await client.post(TOKEN_URL, data={
+                "code": code, "client_id": s.google_oauth_client_id, "client_secret": s.google_oauth_client_secret,
+                "redirect_uri": redirect_uri(), "grant_type": "authorization_code",
+            })
+        except httpx.RequestError as exc:
+            raise OAuthError("exchange_failed") from exc
+        if r.status_code != 200:
+            raise OAuthError("exchange_failed")
+        data = r.json()
+        if not data.get("refresh_token"):
+            raise OAuthError("no_refresh_token")
+        access_token = data.get("access_token")
+        if not access_token:
+            raise OAuthError("exchange_failed")
+        try:
+            user = await client.get(USERINFO_URL, headers={"Authorization": f"Bearer {access_token}"})
+        except httpx.RequestError as exc:
+            raise OAuthError("userinfo_failed") from exc
+    if user.status_code != 200:
+        raise OAuthError("userinfo_failed")
+    profile = user.json()
+    email = profile.get("email", "")
+    if not email or profile.get("email_verified") is not True:
+        raise OAuthError("unverified_email")
     return data["refresh_token"], email
 
 

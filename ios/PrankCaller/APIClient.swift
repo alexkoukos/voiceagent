@@ -5,7 +5,8 @@ enum APIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .badStatus(401, _): return "Λάθος κλειδί. Έλεγξε τις Ρυθμίσεις (⚙︎)."
-        case .badStatus(409, _): return "Η ηχογράφηση ανεβαίνει ακόμα. Δοκίμασε ξανά σε λίγα δευτερόλεπτα."
+        case .badStatus(403, _): return "Χρειάζεται το κλειδί διαχειριστή. Έλεγξε τις Ρυθμίσεις."
+        case .badStatus(409, let body): return body.contains("publishing_frozen") ? "Η δημοσίευση είναι παγωμένη. Ξεπάγωσέ την στις ρυθμίσεις." : "Η ενέργεια δεν μπορεί να ολοκληρωθεί τώρα. Ανανέωσε και δοκίμασε ξανά."
         case .badStatus(404, _): return "Δεν βρέθηκε. Μπορεί να έχει διαγραφεί."
         case .badStatus(422, _): return "Κάποιο πεδίο δεν είναι σωστό. Έλεγξε τι έγραψες."
         case .badStatus(let code, _): return "Κάτι πήγε στραβά στον server (\(code)). Δοκίμασε ξανά."
@@ -32,12 +33,17 @@ enum Settings {
     static var apiKey: String {
         get {
             if let legacy = UserDefaults.standard.string(forKey: "apiKey") {
-                Keychain.set(legacy, for: "apiKey")
-                UserDefaults.standard.removeObject(forKey: "apiKey")
+                if (try? Keychain.set(legacy, for: "apiKey")) != nil {
+                    UserDefaults.standard.removeObject(forKey: "apiKey")
+                }
             }
             return Keychain.get("apiKey") ?? ""
         }
-        set { Keychain.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), for: "apiKey") }
+
+    }
+    static var adminKey: String {
+        get { Keychain.get("adminKey") ?? "" }
+
     }
     static var baseURL: String {
         get { UserDefaults.standard.string(forKey: "baseURL") ?? "http://localhost:8000" }
@@ -90,7 +96,7 @@ struct APIClient {
         guard let url = URL(string: Settings.baseURL + path) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        req.setValue(Settings.apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue(Settings.adminKey.isEmpty ? Settings.apiKey : Settings.adminKey, forHTTPHeaderField: "x-api-key")
         if let body {
             req.httpBody = try Self.encoder.encode(body)
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -129,7 +135,7 @@ struct APIClient {
         else if wsBase.hasPrefix("http://") { wsBase = "ws://" + wsBase.dropFirst(7) }
         guard let url = URL(string: wsBase + "/calls/\(id)/ws") else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
-        req.setValue(Settings.apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue(Settings.adminKey.isEmpty ? Settings.apiKey : Settings.adminKey, forHTTPHeaderField: "x-api-key")
         return URLSession.shared.webSocketTask(with: req)
     }
     func hangUp(_ id: String) async throws -> Call { try await send("POST", "/calls/\(id)/hangup") }
@@ -143,6 +149,31 @@ struct APIClient {
     // MARK: Receptionist (2.0)
 
     func practices() async throws -> [Practice] { try await get("/practices") }
+    func billing(_ pid: String) async throws -> BillingState { try await get("/practices/\(pid)/billing") }
+    func configureBilling(_ pid: String, start: String, fee: String) async throws -> BillingState {
+        try await send("PUT", "/practices/\(pid)/billing", body: ["pilot_started_on": start, "monthly_fee": fee])
+    }
+    func calendarFeeds(_ pid: String) async throws -> [CalendarFeedItem] { try await get("/practices/\(pid)/calendar/feeds") }
+    func addCalendarFeed(_ pid: String, name: String, url: String, staffId: String) async throws {
+        var body = ["name": name, "url": url]
+        if !staffId.isEmpty { body["staff_id"] = staffId }
+        _ = try await request("POST", "/practices/\(pid)/calendar/feeds", body: body)
+    }
+    func removeCalendarFeed(_ pid: String, _ id: String) async throws {
+        _ = try await request("DELETE", "/practices/\(pid)/calendar/feeds/\(id)")
+    }
+    func practiceConfig(_ pid: String) async throws -> [String: JSONValue] { try await get("/practices/\(pid)") }
+    func verticals() async throws -> [VerticalTemplate] { try await get("/verticals") }
+    func vertical(_ id: String) async throws -> [String: JSONValue] { try await get("/verticals/\(id)") }
+    func createPractice(_ values: [String: JSONValue]) async throws -> Practice {
+        try await send("POST", "/practices", body: values)
+    }
+    func editDraft(_ pid: String, _ version: String, changes: [String: JSONValue]) async throws -> ConfigVersion {
+        try await send("PATCH", "/practices/\(pid)/versions/\(version)", body: ["changes": changes])
+    }
+    func freezePublishing(_ pid: String, frozen: Bool) async throws {
+        _ = try await request("PUT", "/practices/\(pid)/publish-freeze", body: ["frozen": frozen])
+    }
     func practiceCalls(_ pid: String, outcome: String? = nil) async throws -> [ReceptionistCall] {
         try await get("/practices/\(pid)/calls" + (outcome.map { "?outcome=\($0)" } ?? ""))
     }
@@ -242,7 +273,7 @@ struct APIClient {
         else if wsBase.hasPrefix("http://") { wsBase = "ws://" + wsBase.dropFirst(7) }
         guard let url = URL(string: wsBase + path) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
-        req.setValue(Settings.apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue(Settings.adminKey.isEmpty ? Settings.apiKey : Settings.adminKey, forHTTPHeaderField: "x-api-key")
         return URLSession.shared.webSocketTask(with: req)
     }
 }

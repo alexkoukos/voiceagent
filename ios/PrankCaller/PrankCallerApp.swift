@@ -25,7 +25,7 @@ struct PrankCallerApp: App {
 
     private var tabs: some View {
         TabView(selection: $tab) {
-            NewCallView()
+            Locked { NewCallView() }
                 .tabItem { Label("Κλήση", systemImage: "phone.fill") }.tag(0)
             Locked { HistoryView() }
                 .tabItem { Label("Ιστορικό", systemImage: "clock") }.tag(1)

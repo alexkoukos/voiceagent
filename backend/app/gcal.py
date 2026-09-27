@@ -118,14 +118,40 @@ async def busy_except(
             if (event["id"] == event_id or event.get("status") == "cancelled"
                     or event.get("transparency") == "transparent"):
                 continue
-            def when(value):
-                if "dateTime" in value:
-                    return datetime.fromisoformat(value["dateTime"])
-                return datetime.fromisoformat(value["date"]).replace(tzinfo=tz)
-            intervals.append((when(event["start"]), when(event["end"])))
+            intervals.append(event_interval(event, tz))
         if not data.get("nextPageToken"):
             return intervals
         params["pageToken"] = data["nextPageToken"]
+
+
+def event_interval(event: dict, timezone: ZoneInfo) -> tuple[datetime, datetime]:
+    def when(value: dict) -> datetime:
+        result = datetime.fromisoformat(value.get("dateTime") or value["date"])
+        return result if result.tzinfo else result.replace(tzinfo=ZoneInfo(value.get("timeZone", str(timezone))))
+    return when(event["start"]), when(event["end"])
+
+
+async def calendar_events(calendar_id: str, start: datetime, end: datetime) -> list[dict]:
+    """Expanded, paginated events with a calendar timezone for all-day dates."""
+    params = {"timeMin": start.isoformat(), "timeMax": end.isoformat(),
+              "singleEvents": "true", "showDeleted": "false", "maxResults": 2500}
+    result = []
+    while True:
+        data = await _request("GET", f"/calendars/{quote(calendar_id, safe='')}/events", calendar_id, params=params)
+        for event in data.get("items", []):
+            result.append({**event, "calendar_timezone": data.get("timeZone", "UTC")})
+        if not data.get("nextPageToken"):
+            return result
+        params["pageToken"] = data["nextPageToken"]
+
+
+async def get_event(calendar_id: str, event_id: str) -> dict | None:
+    try:
+        return await _request("GET", f"/calendars/{quote(calendar_id, safe='')}/events/{quote(event_id, safe='')}", calendar_id)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (404, 410):
+            return None
+        raise
 
 
 async def create_event(

@@ -15,6 +15,7 @@ struct ReceptionistView: View {
     @State private var loaded = false
     @State private var errorMessage: String?
     @State private var joining: Handoff?
+    @State private var addingPractice = false
     @Environment(PushRouter.self) private var push
 
     enum Tab: String, CaseIterable, Identifiable {
@@ -50,6 +51,10 @@ struct ReceptionistView: View {
             .navigationTitle(practice?.name ?? "Γραμματεία")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { addingPractice = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("Νέα επιχείρηση")
+                }
                 if practices.count > 1 {
                     ToolbarItem(placement: .topBarLeading) {
                         Menu {
@@ -80,6 +85,12 @@ struct ReceptionistView: View {
             }
             .fullScreenCover(item: $joining) { h in
                 if let pid = practice?.id { HandoffView(practiceId: pid, handoff: h) }
+            }
+            .sheet(isPresented: $addingPractice) {
+                NewPracticeView { created in
+                    practices.append(created)
+                    practiceId = created.id
+                }
             }
             .task(id: practice?.id) { await follow() }
             .refreshable { await load() }
@@ -183,7 +194,7 @@ struct ReceptionistView: View {
         if loaded && errorMessage == nil {
             if practices.isEmpty {
                 ContentUnavailableView("Καμία επιχείρηση", systemImage: "building.2",
-                                       description: Text("Πρόσθεσε μια επιχείρηση από τον server (POST /practices)."))
+                                       description: Text("Πάτησε + για να προσθέσεις την πρώτη επιχείρηση."))
             } else if tab == .calls && calls.isEmpty {
                 ContentUnavailableView("Καμία κλήση", systemImage: "phone.arrow.down.left",
                                        description: Text("Οι κλήσεις που απαντά ο βοηθός θα εμφανίζονται εδώ."))
@@ -213,7 +224,7 @@ struct ReceptionistView: View {
     }
 
     private func load() async {
-        guard !Settings.apiKey.isEmpty else { loaded = true; return }
+        guard !Settings.adminKey.isEmpty else { loaded = true; return }
         do {
             if practices.isEmpty || practice == nil { practices = try await api.practices() }
             guard let pid = practice?.id else { loaded = true; return }
