@@ -22,19 +22,23 @@ struct PrankCallerApp: App {
 
     // DEBUG: `-startTab 2` opens a tab directly (for simulator screenshots).
     @State private var tab = UserDefaults.standard.integer(forKey: "startTab")
+    @AppStorage("accountScope") private var accountScope = "dialer"
 
     private var tabs: some View {
         TabView(selection: $tab) {
-            Locked { NewCallView() }
-                .tabItem { Label("Κλήση", systemImage: "phone.fill") }.tag(0)
-            Locked { HistoryView() }
-                .tabItem { Label("Ιστορικό", systemImage: "clock") }.tag(1)
+            if accountScope != "practice" {
+                Locked { NewCallView() }
+                    .tabItem { Label("Κλήση", systemImage: "phone.fill") }.tag(0)
+                Locked { HistoryView() }
+                    .tabItem { Label("Ιστορικό", systemImage: "clock") }.tag(1)
+            }
             Locked { ReceptionistView() }
                 .tabItem { Label("Γραμματεία", systemImage: "phone.arrow.down.left") }.tag(2)
         }
         .tint(Palette.ink)
         .environment(PushRouter.shared)
         .onChange(of: phase) { _, p in AppLock.shared.phaseChanged(p) }
+        .onChange(of: accountScope, initial: true) { _, scope in if scope == "practice" { tab = 2 } }
         .onChange(of: tab, initial: true) { _, t in if t == 2 { PushRegistration.shared.askPermission() } }
     }
 }

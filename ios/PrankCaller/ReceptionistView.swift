@@ -4,6 +4,7 @@ import SwiftUI
 struct ReceptionistView: View {
     private let api = APIClient()
     @AppStorage("practiceId") private var practiceId = ""
+    @AppStorage("accountScope") private var accountScope = "dialer"
     @State private var practices: [Practice] = []
     @State private var tab: Tab = .calls
     @State private var calls: [ReceptionistCall] = []
@@ -51,9 +52,15 @@ struct ReceptionistView: View {
             .navigationTitle(practice?.name ?? "Γραμματεία")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { addingPractice = true } label: { Image(systemName: "plus") }
-                        .accessibilityLabel("Νέα επιχείρηση")
+                if accountScope == "founder" {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { addingPractice = true } label: { Image(systemName: "plus") }
+                            .accessibilityLabel("Νέα επιχείρηση")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink { SettingsView() } label: { Image(systemName: "gearshape") }
+                        .accessibilityLabel("Ρυθμίσεις σύνδεσης")
                 }
                 if practices.count > 1 {
                     ToolbarItem(placement: .topBarLeading) {
