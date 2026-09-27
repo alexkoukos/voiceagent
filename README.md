@@ -49,6 +49,12 @@ The API health endpoint is `http://localhost:8000/health`. Interactive API docs 
 
 For the iOS app, run `cd ios && xcodegen && open PrankCaller.xcodeproj`, then set the backend URL and API key in the app. See [ios/README.md](ios/README.md) for the project layout. The app's displayed name and some internal identifiers still reflect the original AI Caller project.
 
+## Practice access
+
+Keep `ADMIN_API_TOKEN` on the founder's device and server only. With that key, `POST /practices/{practice_id}/api-keys` issues a random key for one practice; the response shows the key only once. Give each practice its own key for the iOS app. Its practice list contains only that practice, and another practice's URLs return 404. The legacy `APP_API_TOKEN` cannot open practice administration or patient records. Revoke a lost key with `DELETE /practices/{practice_id}/api-keys/{key_id}` using the founder key, then issue a replacement. Never send the founder or worker key to a practice.
+
+The public `/demo/{slug}` link intentionally lets anyone place a test call. Treat the slug as a shareable caller link, not as an administration credential.
+
 ## Tests
 
 Backend tests mock external providers. Database integration tests use a separate schema in local Postgres when `TEST_DATABASE_URL` is set; otherwise they skip.

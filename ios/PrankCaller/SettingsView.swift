@@ -71,7 +71,8 @@ struct SettingsView: View {
         testing = true
         defer { testing = false }
         do {
-            _ = try await APIClient().options()
+            let options = try await APIClient().options()
+            UserDefaults.standard.set(options.accountScope ?? "dialer", forKey: "accountScope")
             result = (true, "Συνδέθηκε")
         } catch { result = (false, friendlyMessage(error)) }
     }
