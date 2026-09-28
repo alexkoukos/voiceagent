@@ -67,6 +67,10 @@ uv run --python 3.12 --with-requirements requirements.txt \
 
 The scripted voice scenarios in `agent/scripts/` require a running backend and worker plus provider credentials. See the usage notes at the top of [scripted_calls.py](agent/scripts/scripted_calls.py).
 
+## Continuous integration and deployment
+
+GitHub Actions runs backend tests against Postgres, agent tests, and an iOS Simulator build for changes proposed to `main`. The branch is protected so its required checks must pass before merge. Railway follows `main` and automatically deploys the backend and agent after a merge; a green build confirms the code passed automated checks, while live voice and provider acceptance remain separate pilot gates.
+
 ## Deployment notes
 
 Both `backend/` and `agent/` have Dockerfiles. The backend runs migrations on startup and needs Postgres; the agent needs the same LiveKit project and the backend URL. Set secrets in your host's secret manager, not in the repository. Keep the backend at one replica until the in-memory live update and scheduler behavior is adapted for multiple instances.
