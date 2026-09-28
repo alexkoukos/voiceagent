@@ -2,6 +2,15 @@
 
 The receptionist 2.0 PRD is the current target. This pass improves existing backend behavior around P0 booking, notifications, and call reporting. It does not establish pilot readiness or the PRD's real-call accuracy and latency targets.
 
+## Pilot readiness checkpoint — 2026-09-27
+
+- The public repository has a protected `main` branch, secret scanning with push protection, Dependabot, CodeQL, and pull-request CI for the backend, agent, and iOS build. Railway deploys backend and agent changes from `main`.
+- A production WebRTC barber-demo call using the Greek price-and-hours scenario passed the scripted expectation (1/1). This verifies one safe information-only voice path. It does not exercise PSTN, bookings, Google Calendar writes, notifications, or handoff.
+- The Telnyx account currently has one active US number and no assigned Greek number. The pilot still needs a Greek DID, a practice forwarding destination, and a fallback mobile before inbound PSTN and failover tests can run.
+- The backend has SMTP and Telnyx credentials, but `EMAIL_FROM` and `SMS_FROM` are unset. Notification delivery cannot pass acceptance until sender identities are configured and tested. The Google Maps and OAuth client ID variable names were corrected; provider behavior still needs verification after a healthy redeploy.
+- Backend and Postgres are still in US West. Move both to EU West together and verify the recordings bucket's residency before Greek callers' data is accepted. Rotate the previously exposed LiveKit, Railway, Maps, and Google OAuth credentials before the pilot.
+- Next acceptance sequence: isolated ten-call Calendar set (M0), thirty Greek scripted voice calls (M1), real PSTN inbound and failover, email/SMS delivery and timing, then device and compliance review. Record measured results rather than inferring them from CI.
+
 ## Implemented and verified
 
 | PRD area | Change | Evidence |
