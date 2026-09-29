@@ -67,6 +67,18 @@ uv run --python 3.12 --with-requirements requirements.txt \
 
 The scripted voice scenarios in `agent/scripts/` require a running backend and worker plus provider credentials. See the usage notes at the top of [scripted_calls.py](agent/scripts/scripted_calls.py).
 
+## Noise and speech clarity
+
+Set `NOISE_CANCELLATION=on` on the **agent service** as well as locally. The worker uses BVC for browser microphones and BVCTelephony for phone audio, before transcription and turn detection. These filters require LiveKit Cloud transport. Each call logs the selected source and filter; an explicit `off`, `false`, `0`, or `no` disables filtering. The last checked Railway configuration (2026-09-28) had this set to `off`, so deploying code alone will not enable it.
+
+The default realtime pause is 700 ms and Scribe's silence threshold is 0.7 seconds. Existing deployment overrides still take precedence. The pipeline retains its interruption duration/word checks and resumes after false interruptions. Compare quiet speech, traffic, music and a nearby talker before shortening the pauses; measure missed words, unwanted interruptions, correct names/times, and reply latency.
+
+Text pipelines use explicit delivery settings: ElevenLabs speaks at `TTS_SPEED=0.93` using PCM audio, and Gemini TTS receives instructions for clear, slightly slower speech. The outgoing pipeline opening uses the same ElevenLabs model/settings as the conversation. Language switches update both recognition and speech settings. `ELEVENLABS_TTS_MODEL` can select another compatible model for a listening comparison; keep the current model until the alternative's quality and latency are verified.
+
+Choose voices using `ELEVENLABS_VOICE_MAP`, with optional `ELEVENLABS_VOICE_MAP_EL` and `_EN` overrides. A language map's `default` selects one voice for that language regardless of the app's voice key. Audition a native Greek voice with your actual names and services before configuring its ID; the built-in voice mappings are generic voices.
+
+For recurring pronunciation errors, set `TTS_PRONUNCIATION_ALIASES` to a JSON object such as `{"el":{"OpenAI":"Όπεν έι άι"},"en":{"Dr.":"Doctor"}}`. Whole words or phrases are replaced only in synthesized audio, including names split across generated text chunks. Transcripts and booking values keep their original spelling. Each language supports up to 100 aliases (80 characters per key, 160 per spoken value). Realtime speech models do not use this text filter; use `pipeline` or `text_pipeline` for exact pronunciation aliases. In realtime mode, the separate Deepgram transcript does not determine what Gemini hears.
+
 ## Continuous integration and deployment
 
 GitHub Actions runs backend tests against Postgres, agent tests, and an iOS Simulator build for changes proposed to `main`. The branch is protected so its required checks must pass before merge. Railway follows `main` and automatically deploys the backend and agent after a merge; a green build confirms the code passed automated checks, while live voice and provider acceptance remain separate pilot gates.
