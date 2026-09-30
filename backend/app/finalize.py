@@ -7,7 +7,7 @@ from datetime import datetime
 import httpx
 from sqlalchemy import select
 
-from app import booking, events, notifications, texts
+from app import booking, costs, events, notifications, texts
 from app.config import get_settings
 from app.database import async_session
 from app.models import Appointment, Call, CallStatus, Message, Practice, RoutingEvent, TranscriptEntry, TranscriptRole
@@ -120,6 +120,7 @@ async def finalize(call_id: str) -> None:
             if call.max_duration_seconds and (call.duration_seconds or 0) >= call.max_duration_seconds:
                 call.flags = [*{*(call.flags or []), "over_duration"}]
             call.cost_estimate = cost(call)
+            await costs.recompute(db, call)
             language = practice.language
             lines = [f"{'Πελάτης' if language == 'el' else 'Caller'}: {e.text}" if e.role == TranscriptRole.friend
                      else f"{'Βοηθός' if language == 'el' else 'Assistant'}: {e.text}" for e in entries]

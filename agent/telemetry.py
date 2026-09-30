@@ -34,6 +34,7 @@ class CallTelemetry:
         self.closed = False
         self.turn_id = None
         self.speech_end_ns = None
+        self.session = None
 
     @staticmethod
     def _log(record):
@@ -58,6 +59,7 @@ class CallTelemetry:
             logger.warning("telemetry sink failed")
 
     def attach(self, session):
+        self.session = session
         session.on("user_state_changed", self.user_state)
         session.on("agent_state_changed", self.agent_state)
         session.on("conversation_item_added", self.message)
@@ -113,8 +115,33 @@ class CallTelemetry:
                       source="sdk_tool_batch")
 
     def finish(self):
+        if not self.closed:
+            self.report_usage()
         self.emit("session_observation_ended")
         self.closed = True
+
+    def report_usage(self):
+        """Per provider/model usage totals (tokens, audio seconds, characters) for costing."""
+        try:
+            entries = self.session.usage.model_usage
+        except Exception:
+            return
+        lines = []
+        for entry in entries:
+            data = entry.model_dump()
+            line = {"type": data.pop("type"), "provider": data.pop("provider") or "unknown",
+                    "model": data.pop("model") or "unknown"}
+            line.update({name: value for name, value in data.items()
+                         if isinstance(value, (int, float)) and not isinstance(value, bool)
+                         and math.isfinite(value) and value > 0})
+            if len(line) > 3:
+                lines.append(line)
+        if lines:
+            self.emit("usage_reported", turn_id=None, source="sdk_usage", usage=lines[:20])
+            logger.info("call %s usage: %s", self.call_id, "; ".join(
+                f"{u['type']} {u['provider']}/{u['model']} " + " ".join(
+                    f"{k}={v:g}" for k, v in u.items() if k not in ("type", "provider", "model"))
+                for u in lines))
 
     def start_span(self, kind, **fields):
         span = {"span_id": str(uuid.uuid4()), "turn_id": self.turn_id, **fields}

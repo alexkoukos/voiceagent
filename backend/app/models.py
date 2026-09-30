@@ -289,6 +289,8 @@ class Call(Base):
     # name_uncertain, urgent, tool_error, over_duration, emergency, recording_refused
     flags: Mapped[list] = mapped_column(JSON, default=list)
     cost_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Measured usage priced from config/pricing.json (app/costs.py); USD, unknowns kept unknown.
+    cost_breakdown: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     latency_ms_median: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # open, break or closed when the call came in (R3)
     hours_state: Mapped[str | None] = mapped_column(String, nullable=True)

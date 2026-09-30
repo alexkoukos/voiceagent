@@ -3,6 +3,8 @@
 The page itself carries no data; the browser sends the founder key on each request.
 """
 
+from collections import Counter
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -58,6 +60,8 @@ async def recent_calls(limit: int = Query(default=25, ge=1, le=100), db: AsyncSe
             "created_at": _time(call.created_at), "started_at": _time(call.started_at),
             "ended_at": _time(call.ended_at), "duration_seconds": call.duration_seconds,
             "turns": len(values), "p50_ms": percentile(values, 0.5), "p95_ms": percentile(values, 0.95),
+            "cost_usd": (call.cost_breakdown or {}).get("known_usd"),
+            "cost_complete": (call.cost_breakdown or {}).get("complete"),
         })
     return {"calls": result}
 
@@ -83,6 +87,7 @@ async def call_live(call_id: str, after: int = Query(default=0, ge=0), db: Async
             "flags": call.flags or [], "language": call.language,
             "created_at": _time(call.created_at), "started_at": _time(call.started_at),
             "ended_at": _time(call.ended_at), "duration_seconds": call.duration_seconds,
+            "cost_breakdown": call.cost_breakdown,
         },
         "transcript": [{"role": entry.role.value, "text": entry.text, "at": _time(entry.created_at)}
                        for entry in transcript],
@@ -90,4 +95,66 @@ async def call_live(call_id: str, after: int = Query(default=0, ge=0), db: Async
                     for item in routing],
         "events": [{"cursor": row.id, "received_at": _time(row.received_at), **row.payload} for row in rows],
         "next_after": rows[-1].id if rows else after,
+    }
+
+
+SUCCESS = {"booked", "rescheduled", "cancelled", "confirmed", "info_given", "message_taken", "transferred"}
+STAGES = ("transcription_delay_ms", "end_of_turn_delay_ms", "llm_node_ttft_ms", "tts_node_ttfb_ms", "e2e_latency_ms")
+
+
+def spread(values):
+    return {"n": len(values), "p50": percentile(values, 0.5), "p95": percentile(values, 0.95),
+            "p99": percentile(values, 0.99)}
+
+
+@router.get("/monitor/api/summary", dependencies=[Depends(require_master_token)])
+async def summary(days: int = Query(default=7, ge=1, le=90), db: AsyncSession = Depends(get_db)):
+    """The small ASTRA dashboard: volume, outcomes, latency spread and cost for a window."""
+    since = datetime.utcnow() - timedelta(days=days)
+    calls = (await db.execute(select(Call).where(Call.created_at >= since))).scalars().all()
+    ids = [call.id for call in calls]
+    replies, tools, stages = [], [], {name: [] for name in STAGES}
+    if ids:
+        events = (await db.execute(select(CallTelemetryEvent.payload).where(
+            CallTelemetryEvent.call_id.in_(ids),
+            CallTelemetryEvent.payload["event"].as_string().in_(
+                ["response_latency_estimate", "tool_request_ended", "message_metrics"]),
+        ))).scalars().all()
+        for event in events:
+            if event["event"] == "response_latency_estimate":
+                replies.append(event["latency_ms"])
+            elif event["event"] == "tool_request_ended":
+                tools.append(event["duration_ms"])
+            else:
+                for name in STAGES:
+                    if name in (event.get("latencies") or {}):
+                        stages[name].append(event["latencies"][name])
+    outcomes = Counter(call.outcome or call.status.value for call in calls)
+    minutes = sum(call.duration_seconds or 0 for call in calls) / 60
+    successes = sum(outcomes[name] for name in SUCCESS)
+    priced = [call.cost_breakdown for call in calls if call.cost_breakdown]
+    known = sum(item["known_usd"] for item in priced)
+    by_component = Counter()
+    for item in priced:
+        for line in item["lines"]:
+            by_component[line["component"]] += line["cost_usd"] or 0
+    unpriced = sorted({f"{line['component']} {line['provider']}/{line['model']}: {line['unpriced']}"
+                       for item in priced for line in item["lines"] if line.get("unpriced")})
+    return {
+        "days": days, "calls": len(calls), "minutes": round(minutes, 1),
+        "outcomes": dict(outcomes), "successful": successes,
+        "failed": sum(1 for call in calls if call.status.value == "failed" or call.outcome == "failed"),
+        "transfers": outcomes["transferred"], "appointments": outcomes["booked"],
+        "tool_errors": sum(1 for call in calls if "tool_error" in (call.flags or [])),
+        "reply_ms": spread(replies), "tool_ms": spread(tools),
+        "stages_ms": {name.removesuffix("_ms"): spread(values) for name, values in stages.items()},
+        "cost": {
+            "currency": "USD", "known_total": round(known, 4), "calls_priced": len(priced),
+            "calls_complete": sum(1 for item in priced if item["complete"]),
+            "per_call": round(known / len(priced), 4) if priced else None,
+            "per_minute": round(known / minutes, 4) if minutes and priced else None,
+            "per_successful_outcome": round(known / successes, 4) if successes and priced else None,
+            "by_component": {k: round(v, 4) for k, v in by_component.items()},
+            "unpriced": unpriced,
+        },
     }
