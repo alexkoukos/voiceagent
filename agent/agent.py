@@ -54,8 +54,13 @@ from livekit.plugins import elevenlabs, google, noise_cancellation, silero
 from livekit.agents.voice.turn import TurnHandlingOptions
 
 from fillers import FillerPicker
+from telemetry import observe_span, track_telemetry
 from opening import prepare_opening, ready_opening
 from voices import elevenlabs_voice, gemini_voice, openai_voice
+from speech import (
+    ELEVENLABS_TTS_MODEL, Pronunciation, elevenlabs_voice_settings, env_number,
+    noise_cancellation_enabled, speech_instructions,
+)
 
 logger = logging.getLogger("prank-caller")
 
@@ -78,7 +83,7 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
 GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-3.8-flash-lite-tts")
 GEMINI_TTS_FALLBACK_MODEL = os.environ.get("GEMINI_TTS_FALLBACK_MODEL", "gemini-3.8-flash-tts")
 # Realtime and OpenAI engines: how long a pause means the friend has finished talking.
-REALTIME_SILENCE_MS = int(os.environ.get("REALTIME_SILENCE_MS", "400"))
+REALTIME_SILENCE_MS = int(env_number("REALTIME_SILENCE_MS", 700, 200, 3000))
 # Turn detector (pipeline engine): the longest we wait after the caller stops before
 # treating the turn as finished. Lower is snappier at the risk of cutting slow speech.
 TURN_MAX_DELAY_MS = int(os.environ.get("TURN_MAX_DELAY_MS", "1000"))
@@ -88,12 +93,12 @@ FILLER_DELAY_SECONDS = 0.5
 FILLER_GAP_SECONDS = 4
 # Pipeline engine: pause that ends a transcribed segment, and the least wait after the caller
 # stops before replying. Lower is snappier but splits normal-speed speech into fragments.
-SCRIBE_SILENCE_SECS = float(os.environ.get("SCRIBE_SILENCE_SECS", "0.5"))
+SCRIBE_SILENCE_SECS = env_number("SCRIBE_SILENCE_SECS", 0.7, 0.3, 2.0)
 ENDPOINT_MIN_DELAY = float(os.environ.get("ENDPOINT_MIN_DELAY", "0.5"))
 # If the callee stays silent after answering, open the conversation after this long.
 GREETING_WAIT_SECONDS = 4
 # Noise filter on the friend's audio before any model hears it; "off" to compare recognition without it.
-NOISE_CANCELLATION = os.environ.get("NOISE_CANCELLATION", "on") != "off"
+NOISE_CANCELLATION = noise_cancellation_enabled()
 # If the callee spoke but no reply has started this long after, open the conversation anyway.
 OPENING_FALLBACK_SECONDS = 5
 
@@ -216,7 +221,12 @@ class PrankCallerAgent(Agent):
         **agent_kwargs,
     ) -> None:
         # agent_kwargs: per-agent model parts (llm/stt) and chat_ctx, for a language switch.
-        super().__init__(instructions=instructions, **agent_kwargs)
+        self._pronunciation = Pronunciation(language)
+        if self._pronunciation.aliases:
+            # Provider alignment contains spoken aliases. Keep the original LLM text
+            # for the visible transcript and chat history instead.
+            agent_kwargs["use_tts_aligned_transcript"] = False
+        super().__init__(instructions=f"{instructions}\n\n{speech_instructions(language)}", **agent_kwargs)
         self._call_id = call_id
         # The call's language (Greek or English); it stays the same for the whole call.
         self.language = language
@@ -225,6 +235,9 @@ class PrankCallerAgent(Agent):
         self._opened = False
         self._fillers = FillerPicker() if fillers else None
         self._last_filler_at = 0.0
+
+    def tts_node(self, text, model_settings):
+        return Agent.default.tts_node(self, self._pronunciation.stream(text), model_settings)
 
     @function_tool
     async def delete_recording(self) -> str:
@@ -581,19 +594,28 @@ def prewarm(proc: JobProcess) -> None:
         proc.userdata["vad"] = silero.VAD.load()
 
 
+def build_tts(engine: str, voice: str, language: str):
+    if engine == "pipeline":
+        return elevenlabs.TTS(
+            voice_id=elevenlabs_voice(voice, language), model=ELEVENLABS_TTS_MODEL,
+            language=language, encoding="pcm_24000",
+            voice_settings=elevenlabs.VoiceSettings(**elevenlabs_voice_settings()),
+            apply_text_normalization="auto",
+        )
+    models = list(dict.fromkeys((GEMINI_TTS_MODEL, GEMINI_TTS_FALLBACK_MODEL)))
+    return livekit_tts.FallbackAdapter([
+        google.beta.GeminiTTS(
+            model=model, voice_name=gemini_voice(voice),
+            instructions=speech_instructions(language), api_key=os.environ.get("GEMINI_API_KEY"),
+        ) for model in models
+    ], max_retry_per_tts=1)
+
+
 def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> AgentSession:
     if engine in ("pipeline", "text_pipeline"):
         stt = (scribe_stt(language, vocab_terms(language, vocabulary)) if engine == "pipeline"
-               else caller_stt(language))
-        if engine == "pipeline":
-            tts = elevenlabs.TTS(voice_id=elevenlabs_voice(voice), model="eleven_flash_v2_5")
-        else:
-            models = list(dict.fromkeys((GEMINI_TTS_MODEL, GEMINI_TTS_FALLBACK_MODEL)))
-            tts = livekit_tts.FallbackAdapter([
-                google.beta.GeminiTTS(model=model, voice_name=gemini_voice(voice),
-                                      api_key=os.environ.get("GEMINI_API_KEY"))
-                for model in models
-            ], max_retry_per_tts=1)
+               else caller_stt(language, vocabulary))
+        tts = build_tts(engine, voice, language)
         # Open the connections now, while the phone rings, not on the first reply.
         for part in ((stt, tts) if engine == "pipeline" else (stt,)):
             if prewarm_part := getattr(part, "prewarm", None):
@@ -668,9 +690,9 @@ def language_parts(engine: str, voice: str, language: str, vocabulary: list[str]
     switches language (R7) hands over to a new agent built with these."""
     words = vocab_terms(language, vocabulary)
     if engine == "pipeline":
-        return {"stt": scribe_stt(language, words)}
+        return {"stt": scribe_stt(language, words), "tts": build_tts(engine, voice, language)}
     if engine == "text_pipeline":
-        return {"stt": caller_stt(language)}
+        return {"stt": caller_stt(language, vocabulary), "tts": build_tts(engine, voice, language)}
     if engine == "openai":
         return {"llm": openai.realtime.RealtimeModel(
             model=OPENAI_REALTIME_MODEL,
@@ -694,19 +716,45 @@ def language_parts(engine: str, voice: str, language: str, vocabulary: list[str]
         # Decide the friend has finished after a short pause, not Gemini's slower default.
         realtime_input_config=genai_types.RealtimeInputConfig(
             automatic_activity_detection=genai_types.AutomaticActivityDetection(
-                end_of_speech_sensitivity=genai_types.EndSensitivity.END_SENSITIVITY_HIGH,
+                start_of_speech_sensitivity=genai_types.StartSensitivity.START_SENSITIVITY_LOW,
+                end_of_speech_sensitivity=genai_types.EndSensitivity.END_SENSITIVITY_LOW,
                 silence_duration_ms=REALTIME_SILENCE_MS,
             ),
         ),
-    ), "stt": caller_stt(language)}
+    ), "stt": caller_stt(language, vocabulary)}
 
 
-def caller_stt(language: str):
+def deepgram_terms(vocabulary: list[str] | None) -> list[str]:
+    """Favor distinctive business names without over-biasing ordinary speech.
+
+    Deepgram recommends a focused glossary and rejects requests over 500 tokens.
+    Keep this well below that limit even when a practice has many services.
+    """
+    terms: list[str] = []
+    seen: set[str] = set()
+    words_left = 120
+    for value in vocabulary or []:
+        term = " ".join(value.split())
+        word_count = len(term.split())
+        if (not term or len(term) > 80 or word_count > 8 or word_count > words_left
+                or term.casefold() in seen):
+            continue
+        terms.append(term)
+        seen.add(term.casefold())
+        words_left -= word_count
+        if len(terms) == 40:
+            break
+    return terms
+
+
+def caller_stt(language: str, vocabulary: list[str] | None = None):
     """Deepgram STT for the text pipeline and realtime call transcript.
     Deepgram nova-3 via LiveKit Inference was the best streaming option on a real Greek
     phone recording (2026-09-25); Speechmatics, Cartesia and Gemini Transcribe Live garbled
     more, AssemblyAI has no Greek."""
-    return inference.STT("deepgram/nova-3", language=language)
+    terms = deepgram_terms(vocabulary)
+    options = {"extra_kwargs": {"keyterm": terms}} if terms else {}
+    return inference.STT("deepgram/nova-3", language=language, **options)
 
 
 class CallerTurns:
@@ -809,7 +857,7 @@ async def elevenlabs_usable() -> bool:
                 f"https://api.elevenlabs.io/v1/text-to-speech/{elevenlabs_voice('default')}",
                 params={"output_format": "mp3_22050_32"},
                 headers={"xi-api-key": os.environ["ELEVEN_API_KEY"]},
-                json={"text": "ok", "model_id": "eleven_flash_v2_5"},
+                json={"text": "ok", "model_id": ELEVENLABS_TTS_MODEL},
             )
     except Exception as e:
         logger.warning("ElevenLabs check failed: %r", e)
@@ -922,6 +970,8 @@ def room_options(web: bool = False, caller_identity: str | None = None) -> room_
     nc = None
     if NOISE_CANCELLATION:
         nc = noise_cancellation.BVC() if web else noise_cancellation.BVCTelephony()
+    logger.info("audio input: source=%s, noise_filter=%s", "web" if web else "phone",
+                ("BVC" if web else "BVCTelephony") if nc is not None else "off")
     kwargs = {"participant_identity": caller_identity} if caller_identity else {}
     if web:
         # Web calls publish final lines from track_transcript. RoomIO would also forward
@@ -939,6 +989,7 @@ class ReceptionistCall:
         self.metadata = metadata
         self.engine = engine
         self.call_id = metadata["call_id"]
+        self.telemetry = None
         self.language = metadata.get("language", "el")
         self.session: AgentSession | None = None
         self.agent: ReceptionistAgent | None = None
@@ -1000,12 +1051,14 @@ class ReceptionistCall:
         self._prepared_name = None
 
     async def tool(self, name: str, args: dict) -> dict:
-        try:
-            result = await backend_post(f"/internal/calls/{self.call_id}/tools/{name}", args)
-        except Exception:
-            logger.exception("call %s: tool %s failed", self.call_id, name)
-            self.flags.add("tool_error")
-            result = {"error": "tool_error"}
+        with observe_span(self.telemetry, "tool_request", tool_name=name, source="worker_http") as timing:
+            try:
+                result = await backend_post(f"/internal/calls/{self.call_id}/tools/{name}", args)
+            except Exception:
+                logger.exception("call %s: tool %s failed", self.call_id, name)
+                self.flags.add("tool_error")
+                result = {"error": "tool_error"}
+            timing.finish("error" if result.get("error") else "returned")
         logger.info("call %s tool %s completed", self.call_id, name)
         return result
 
@@ -1018,8 +1071,8 @@ class ReceptionistCall:
         )
 
     async def switch_language(self, language: str) -> None:
-        # The backend authorizes and logs R7; only then replace the model's STT
-        # language hint (or realtime model) along with the prompt.
+        # The backend authorizes and logs R7; then replace recognition and speech
+        # language/voice settings together with the prompt.
         if language not in ("el", "en") or language == self.language or self.session is None:
             return
         await asyncio.sleep(0.2)  # let route_call return before replacing its agent
@@ -1148,54 +1201,86 @@ class ReceptionistCall:
                 "say": "Tell the caller you're trying to reach them and to stay on the line. Don't call more tools."}
 
     async def _sip_transfer(self, h: dict) -> None:
-        await asyncio.sleep(2.5)  # let the "putting you through" line play
-        lk = api.LiveKitAPI()
-        try:
-            await lk.sip.transfer_sip_participant(api.TransferSIPParticipantRequest(
-                participant_identity=self.caller_identity, room_name=self.ctx.room.name,
-                transfer_to=h["transfer_to"], play_dialtone=True,
-            ))
-            self.handed_off = True
-            await self.tool("handoff_result", {"handoff_id": h["handoff_id"], "status": "transferred"})
-        except Exception:
-            logger.exception("call %s: SIP transfer failed", self.call_id)
-            await self.tool("handoff_result", {"handoff_id": h["handoff_id"], "status": "failed"})
-            self._nobody_came()
-        finally:
-            await lk.aclose()
+        with observe_span(getattr(self, "telemetry", None), "transfer",
+                          handoff_id=h["handoff_id"], mode="sip", source="worker_transfer") as timing:
+            await asyncio.sleep(2.5)  # let the "putting you through" line play
+            lk = api.LiveKitAPI()
+            try:
+                await lk.sip.create_sip_participant(api.CreateSIPParticipantRequest(
+                    sip_trunk_id=self.metadata.get("sip_trunk_id") or os.environ.get("SIP_TRUNK_ID", ""),
+                    sip_call_to=h["transfer_to"].removeprefix("tel:"),
+                    sip_number=self.metadata.get("outbound_number"),
+                    room_name=self.ctx.room.name,
+                    participant_identity=f"staff-transfer-{h['handoff_id']}",
+                    participant_name=h.get("target") or "Receptionist",
+                    wait_until_answered=True,
+                    ringing_timeout=Duration(seconds=h.get("timeout_seconds", 20)),
+                ))
+            except Exception:
+                timing.finish("failed")
+                logger.exception("call %s: SIP transfer failed", self.call_id)
+                try:
+                    await self.tool("handoff_result", {"handoff_id": h["handoff_id"], "status": "failed"})
+                except Exception:
+                    logger.exception("call %s: failed handoff could not be logged", self.call_id)
+                self._nobody_came(h.get("transfer_failure", "take_message"))
+            else:
+                timing.finish("joined")
+                self.handed_off = True
+                try:
+                    await self.tool("handoff_result", {"handoff_id": h["handoff_id"], "status": "joined"})
+                except Exception:
+                    logger.exception("call %s: connected handoff could not be logged", self.call_id)
+                self.session.interrupt()
+                await self.session.aclose()
+            finally:
+                await lk.aclose()
 
     async def _wait_for_staff(self, h: dict) -> None:
-        joined = asyncio.Event()
+        with observe_span(getattr(self, "telemetry", None), "transfer",
+                          handoff_id=h["handoff_id"], mode="app", source="worker_transfer") as timing:
+            joined = asyncio.Event()
 
-        def _on_join(p) -> None:
-            if p.identity.startswith("staff-join-"):
-                joined.set()
+            def _on_join(p) -> None:
+                if p.identity.startswith("staff-join-"):
+                    joined.set()
 
-        self.ctx.room.on("participant_connected", _on_join)
-        try:
-            await asyncio.wait_for(joined.wait(), timeout=h.get("timeout_seconds", 20))
-        except asyncio.TimeoutError:
-            await self.tool("handoff_result", {"handoff_id": h["handoff_id"], "status": "unanswered"})
-            self._nobody_came()
-            return
-        finally:
-            self.ctx.room.off("participant_connected", _on_join)
-        await self.tool("handoff_result", {"handoff_id": h["handoff_id"], "status": "joined"})
-        self.handed_off = True
-        # A person took over: the agent steps out and leaves them to talk. The room and its
-        # recording go on until they hang up.
-        self.session.interrupt()
-        text = "Σας συνδέω τώρα." if self.language == "el" else "I'm connecting you now."
-        await self.session.generate_reply(instructions=(
-            f"Πες μόνο: {text}" if self.language == "el" else f"Say only: {text}"))
-        await asyncio.sleep(2)
-        await self.session.aclose()
+            self.ctx.room.on("participant_connected", _on_join)
+            try:
+                # The staff member may have joined before the listener was attached.
+                if any(identity.startswith("staff-join-")
+                       for identity in self.ctx.room.remote_participants):
+                    joined.set()
+                await asyncio.wait_for(joined.wait(), timeout=h.get("timeout_seconds", 20))
+            except asyncio.TimeoutError:
+                timing.finish("unanswered")
+                await self.tool("handoff_result", {"handoff_id": h["handoff_id"], "status": "unanswered"})
+                self._nobody_came(h.get("transfer_failure", "take_message"))
+                return
+            finally:
+                self.ctx.room.off("participant_connected", _on_join)
+            timing.finish("joined")
+            await self.tool("handoff_result", {"handoff_id": h["handoff_id"], "status": "joined"})
+            self.handed_off = True
+            # A person took over: the agent steps out and leaves them to talk. The room and its
+            # recording go on until they hang up.
+            self.session.interrupt()
+            text = "Σας συνδέω τώρα." if self.language == "el" else "I'm connecting you now."
+            await self.session.generate_reply(instructions=(
+                f"Πες μόνο: {text}" if self.language == "el" else f"Say only: {text}"))
+            await asyncio.sleep(2)
+            await self.session.aclose()
 
-    def _nobody_came(self) -> None:
-        text = ("Κανείς δεν μπόρεσε να απαντήσει. Ζήτα συγγνώμη και κράτα επείγον μήνυμα (take_message με urgent "
-                "true) για να τον καλέσουν πίσω." if self.language == "el" else
-                "Nobody could pick up. Apologise and take an urgent message (take_message with urgent true) so "
-                "they call back.")
+    def _nobody_came(self, fallback: str = "take_message") -> None:
+        if fallback == "return_to_ai":
+            text = ("Δεν μπόρεσαν να απαντήσουν. Ζήτα συγγνώμη και συνέχισε να βοηθάς τον καλούντα με το αίτημά του."
+                    if self.language == "el" else "Nobody could pick up. Apologise and continue helping with the caller's request.")
+        elif fallback == "collect_callback":
+            text = ("Δεν μπόρεσαν να απαντήσουν. Ζήτα συγγνώμη και πάρε όνομα, τηλέφωνο και λόγο κλήσης με take_message."
+                    if self.language == "el" else "Nobody could pick up. Apologise and collect a name, callback number and reason with take_message.")
+        else:
+            text = ("Κανείς δεν μπόρεσε να απαντήσει. Ζήτα συγγνώμη και κράτα μήνυμα (take_message) για να τον καλέσουν πίσω."
+                    if self.language == "el" else "Nobody could pick up. Apologise and take a message (take_message) so they can call back.")
         self.session.generate_reply(instructions=text)
 
     # --- latency (median end of caller speech -> agent speaking) ---
@@ -1275,10 +1360,14 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
     if "call_id" not in metadata:
         dialed = caller.attributes.get("sip.trunkPhoneNumber", "")
         caller_number = caller.attributes.get("sip.phoneNumber") or None
+        forwarding_reason = caller.attributes.get("sip.forwardingReason")
+        if forwarding_reason not in {"no_answer", "busy", "after_hours", "unconditional"}:
+            forwarding_reason = None
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.post(f"{BACKEND_URL}/internal/inbound", headers={"x-agent-token": AGENT_TOKEN},
-                                      json={"dialed_number": dialed, "caller_number": caller_number})
+                                      json={"dialed_number": dialed, "caller_number": caller_number,
+                                            "forwarding_reason": forwarding_reason})
             if r.status_code == 429:
                 await say_busy_and_leave(ctx, await pick_engine("busy", receptionist=True), r.json())
                 return
@@ -1338,6 +1427,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
         caller_identity=rc.caller_identity,
         language=lambda: rc.language,
     )
+    rc.telemetry = track_telemetry(session, ctx, call_id, rc.engine)
     log_latency(session, call_id)
     guard_repetition(session, ctx, call_id)
     rc.track_latency()
@@ -1470,7 +1560,7 @@ async def entrypoint(ctx: JobContext) -> None:
     if engine == "pipeline":
         opening_task = asyncio.create_task(prepare_opening(
             prompt=prompt, language=language, language_name=language_name,
-            voice_id=elevenlabs_voice(voice), llm_model=LLM_MODEL,
+            voice_id=elevenlabs_voice(voice, language), llm_model=LLM_MODEL,
         ))
 
     agent = PrankCallerAgent(
@@ -1479,6 +1569,7 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     track_transcript(session, call_id, engine)
+    track_telemetry(session, ctx, call_id, engine)
     log_latency(session, call_id)
     guard_repetition(session, ctx, call_id)
 

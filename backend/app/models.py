@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Enum, Float, ForeignKey, ForeignKeyConstraint, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, Enum, Float, ForeignKey, ForeignKeyConstraint, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.crypto import SecretLookup, SecretText
@@ -86,6 +86,9 @@ class Practice(Base):
     vertical: Mapped[str] = mapped_column(String, default="")
     # Evaluated by the backend, not the model (see app/routing.py for the keys).
     routing_rules: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Carrier/PBX forwarding setup. The public number stays with the clinic; phone_numbers
+    # above are the AI ingress DIDs used to identify an inbound call.
+    call_routing: Mapped[dict] = mapped_column(JSON, default=dict)
     # [{"id", "name", "service_ids", "staff_ids"}] for multi-service businesses (R8).
     departments: Mapped[list] = mapped_column(JSON, default=list)
     # {"emails": [...], "customer_sms": true, "digest_time": "20:00", "monthly_report": true}
@@ -130,6 +133,20 @@ class BillingAccount(Base):
     practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id"), primary_key=True)
     pilot_started_on: Mapped[date] = mapped_column(Date, nullable=False)
     monthly_fee: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+
+
+class DemoLead(Base):
+    __tablename__ = "demo_leads"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(SecretText, nullable=False)
+    business_name: Mapped[str] = mapped_column(SecretText, nullable=False)
+    business_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    contact_method: Mapped[str] = mapped_column(String(10), nullable=False)
+    contact_detail: Mapped[str] = mapped_column(SecretText, nullable=False)
+    website: Mapped[str] = mapped_column(SecretText, default="")
+    source_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, index=True)
 
 
 class BillingDraft(Base):
@@ -308,6 +325,21 @@ class Call(Base):
     transcript_entries: Mapped[list["TranscriptEntry"]] = relationship(
         back_populates="call", order_by="TranscriptEntry.created_at"
     )
+
+
+class CallTelemetryEvent(Base):
+    __tablename__ = "call_telemetry_events"
+    __table_args__ = (
+        UniqueConstraint("call_id", "session_id", "sequence", name="uq_call_telemetry_sequence"),
+        Index("ix_call_telemetry_call_cursor", "call_id", "id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    call_id: Mapped[str] = mapped_column(ForeignKey("calls.id", ondelete="CASCADE"), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
 
 
 class TranscriptEntry(Base):

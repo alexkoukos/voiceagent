@@ -276,6 +276,8 @@ async def test_billing_guarantee_excludes_demo_other_tenant_and_duplicates(sessi
         assert await billing.prepare_due(db,a,datetime(2030,2,1,tzinfo=timezone.utc)) == []
         drafts=await billing.prepare_due(db,a,datetime(2030,3,1,tzinfo=timezone.utc))
         assert len(drafts)==1 and drafts[0].bookings==1 and drafts[0].amount==0 and drafts[0].status=="waived"
+        assert drafts[0].period_start == date(2030,1,15)
+        assert drafts[0].period_end == date(2030,2,15)
         await db.commit()
         assert await billing.prepare_due(db,a,datetime(2030,3,1,tzinfo=timezone.utc)) == []
         assert (await db.execute(select(BillingDraft).where(BillingDraft.practice_id==b.id))).scalars().all()==[]

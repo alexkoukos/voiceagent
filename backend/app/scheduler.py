@@ -11,7 +11,7 @@ from sqlalchemy import delete, func, select
 from app import billing, alerts, booking, health, finalize, gcal, notifications, onboarding, receptionist, reconciliation, texts
 from app.database import async_session
 from app.models import (
-    Appointment, AppointmentStatus, Call, CallStatus, Handoff, Notification, Practice, TranscriptEntry,
+    Appointment, AppointmentStatus, Call, CallStatus, CallTelemetryEvent, Handoff, Notification, Practice, TranscriptEntry,
 )
 from app.storage import process_recording_deletions, queue_recording_deletion, seal_recordings
 
@@ -157,6 +157,7 @@ async def retention(db, practice: Practice) -> None:
     old_tr = now - timedelta(days=tr_days)
     ids = select(Call.id).where(Call.practice_id == practice.id, Call.created_at < old_tr)
     await db.execute(delete(TranscriptEntry).where(TranscriptEntry.call_id.in_(ids)))
+    await db.execute(delete(CallTelemetryEvent).where(CallTelemetryEvent.call_id.in_(ids)))
 
 
 async def stale(db) -> None:
@@ -331,6 +332,12 @@ async def tick(now: datetime | None = None) -> None:
         if retained:
             for practice in practices:
                 await retention(db, practice)
+            # A maximum retention also covers legacy outbound calls without a practice.
+            from app.telemetry import TELEMETRY_RETENTION_DAYS
+            expired_calls = select(Call.id).where(
+                Call.created_at < now.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+                - timedelta(days=TELEMETRY_RETENTION_DAYS))
+            await db.execute(delete(CallTelemetryEvent).where(CallTelemetryEvent.call_id.in_(expired_calls)))
         await stale(db)
         await failed_notifications(db)
         await health.check(db)

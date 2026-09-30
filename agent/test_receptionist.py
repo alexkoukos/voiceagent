@@ -1,8 +1,93 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 import agent as worker
+from telemetry import CallTelemetry
+
+
+@pytest.mark.asyncio
+async def test_phone_handoff_waits_for_answer_and_falls_back_on_failure(monkeypatch):
+    dial = AsyncMock()
+    close_api = AsyncMock()
+    monkeypatch.setattr(worker.api, "LiveKitAPI", lambda: SimpleNamespace(
+        sip=SimpleNamespace(create_sip_participant=dial), aclose=close_api))
+    monkeypatch.setattr(worker.asyncio, "sleep", AsyncMock())
+    tool = AsyncMock()
+    session = SimpleNamespace(interrupt=Mock(), aclose=AsyncMock())
+    nobody_came = Mock()
+    telemetry_events = []
+    receiver = SimpleNamespace(metadata={"sip_trunk_id": "trunk", "outbound_number": "+302100000009"},
+                               ctx=SimpleNamespace(room=SimpleNamespace(name="room")), call_id="call",
+                               tool=tool, session=session, handed_off=False, _nobody_came=nobody_came,
+                               telemetry=CallTelemetry("call", "pipeline", sink=telemetry_events.append))
+    handoff = {"handoff_id": "handoff", "transfer_to": "tel:+306900000001",
+               "timeout_seconds": 12, "transfer_failure": "collect_callback"}
+
+    await worker.ReceptionistCall._sip_transfer(receiver, handoff)
+    request = dial.await_args.args[0]
+    assert request.wait_until_answered
+    assert request.ringing_timeout.seconds == 12
+    assert request.sip_call_to == "+306900000001"
+    assert receiver.handed_off
+    tool.assert_awaited_with("handoff_result", {"handoff_id": "handoff", "status": "joined"})
+    session.aclose.assert_awaited_once()
+
+    dial.reset_mock()
+    tool.reset_mock()
+    dial.side_effect = RuntimeError("no answer")
+    receiver.handed_off = False
+    await worker.ReceptionistCall._sip_transfer(receiver, handoff)
+    assert not receiver.handed_off
+    tool.assert_awaited_with("handoff_result", {"handoff_id": "handoff", "status": "failed"})
+    nobody_came.assert_called_once_with("collect_callback")
+    outcomes = [e for e in telemetry_events if e["event"] == "transfer_ended"]
+    assert [e["outcome"] for e in outcomes] == ["joined", "failed"]
+    assert all(e["duration_ms"] >= 0 and e["mode"] == "sip" for e in outcomes)
+    assert all("transfer_to" not in e for e in telemetry_events)
+
+
+@pytest.mark.asyncio
+async def test_app_handoff_accepts_staff_already_in_room(monkeypatch):
+    monkeypatch.setattr(worker.asyncio, "sleep", AsyncMock())
+    listeners = {}
+    room = SimpleNamespace(
+        remote_participants={"caller": object(), "staff-join-early": object()},
+        on=lambda event, callback: listeners.setdefault(event, callback),
+        off=lambda event, callback: listeners.pop(event),
+    )
+    tool = AsyncMock()
+    session = SimpleNamespace(interrupt=Mock(), generate_reply=AsyncMock(), aclose=AsyncMock())
+    telemetry_events = []
+    receiver = SimpleNamespace(ctx=SimpleNamespace(room=room), tool=tool, session=session,
+                               language="el", handed_off=False,
+                               telemetry=CallTelemetry("call", "pipeline", sink=telemetry_events.append))
+
+    await worker.ReceptionistCall._wait_for_staff(receiver, {"handoff_id": "handoff", "timeout_seconds": 0.01})
+
+    assert receiver.handed_off
+    tool.assert_awaited_once_with("handoff_result", {"handoff_id": "handoff", "status": "joined"})
+    assert listeners == {}
+    assert telemetry_events[-1]["outcome"] == "joined"
+    assert telemetry_events[-1]["mode"] == "app"
+
+
+def test_deepgram_transcript_uses_a_bounded_practice_glossary(monkeypatch):
+    calls = []
+    monkeypatch.setattr(worker.inference, "STT", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    worker.caller_stt("el", [" Κομμωτήριο   Αθηνά ", "Γιώργος", "γιώργος", "Ανδρικό κούρεμα"]
+                      + [f"Υπηρεσία {i}" for i in range(60)])
+    args, kwargs = calls[-1]
+    assert args == ("deepgram/nova-3",)
+    assert kwargs["language"] == "el"
+    assert kwargs["extra_kwargs"]["keyterm"][:3] == [
+        "Κομμωτήριο Αθηνά", "Γιώργος", "Ανδρικό κούρεμα"]
+    assert len(kwargs["extra_kwargs"]["keyterm"]) == 40
+
+    worker.caller_stt("en")
+    assert calls[-1][1] == {"language": "en"}
 
 
 def test_name_from_recent_transcript():
