@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     # Operator alerts (OP9): failover, cost caps, blocked spam, failed notifications, emergencies.
     # Unacknowledged after ALERT_ACK_MINUTES they also go to the backup contact.
     founder_email: str = ""
+    # Fictional practice used by the public landing-page voice demo.
+    landing_demo_slug: str = ""
     founder_sms: str = ""
     backup_email: str = ""
     backup_sms: str = ""

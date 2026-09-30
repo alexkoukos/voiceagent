@@ -16,7 +16,7 @@ from app.config import get_settings
 from app.languages import language_for_phone
 from app.dispatcher import active_count, start_call, start_next_queued
 from app.livekit_dispatch import end_call
-from app.models import Call, CallStatus, Friend, TranscriptEntry
+from app.models import Call, CallStatus, CallTelemetryEvent, Friend, TranscriptEntry
 from app.schemas import CallCreate, CallDetailOut, CallOut
 from app.storage import SEALED, presigned_recording_url, queue_recording_deletion, recording_exists
 
@@ -120,13 +120,14 @@ async def get_recording(call_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.delete("/{call_id}/recording", status_code=204)
 async def delete_call_recording(call_id: str, db: AsyncSession = Depends(get_db)):
-    call = await db.get(Call, call_id)
+    call = await db.get(Call, call_id, with_for_update=True)
     if call is None or not call.recording_url:
         raise HTTPException(status_code=404, detail="No recording")
     await queue_recording_deletion(db, call.recording_url, call.id)
     call.recording_url = None
     call.delete_requested = True
     await db.execute(delete(TranscriptEntry).where(TranscriptEntry.call_id == call.id))
+    await db.execute(delete(CallTelemetryEvent).where(CallTelemetryEvent.call_id == call.id))
     await db.commit()
     events.publish(call.id)
 

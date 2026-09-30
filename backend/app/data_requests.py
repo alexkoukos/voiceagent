@@ -13,7 +13,7 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
-    Appointment, AppointmentStatus, Call, Customer, DataRequest, Message, Notification, Practice, TranscriptEntry,
+    Appointment, AppointmentStatus, Call, CallTelemetryEvent, Customer, DataRequest, Message, Notification, Practice, RoutingEvent, TranscriptEntry,
     WaitlistEntry,
 )
 from app.schemas import normalize_phone
@@ -32,10 +32,9 @@ def phone_hash(practice: Practice, phone: str) -> str:
     return hashlib.sha256(f"{practice.id}:{phone}".encode()).hexdigest()
 
 
-async def _calls(db: AsyncSession, practice: Practice, phone: str) -> list[Call]:
-    return list((await db.execute(
-        select(Call).where(Call.practice_id == practice.id, Call.caller_number == phone).order_by(Call.created_at)
-    )).scalars())
+async def _calls(db: AsyncSession, practice: Practice, phone: str, *, lock=False) -> list[Call]:
+    query = select(Call).where(Call.practice_id == practice.id, Call.caller_number == phone).order_by(Call.created_at)
+    return list((await db.execute(query.with_for_update() if lock else query)).scalars())
 
 
 async def _messages(db: AsyncSession, practice: Practice, phone: str, call_ids: list[str]) -> list[Message]:
@@ -98,7 +97,7 @@ async def erase(db: AsyncSession, practice: Practice, phone: str, now: datetime)
     ))).scalars())
     if upcoming:
         raise HasUpcoming(upcoming)
-    calls = await _calls(db, practice, phone)
+    calls = await _calls(db, practice, phone, lock=True)
     call_ids = [c.id for c in calls]
     counts = {"calls": len(calls), "recordings": 0}
     for c in calls:
@@ -113,6 +112,12 @@ async def erase(db: AsyncSession, practice: Practice, phone: str, now: datetime)
         c.delete_requested = True
     if call_ids:
         await db.execute(delete(TranscriptEntry).where(TranscriptEntry.call_id.in_(call_ids)))
+        await db.execute(delete(CallTelemetryEvent).where(CallTelemetryEvent.call_id.in_(call_ids)))
+        for event in (await db.execute(select(RoutingEvent).where(
+                RoutingEvent.practice_id == practice.id, RoutingEvent.call_id.in_(call_ids)))).scalars():
+            # Some existing decisions store the caller's number or spoken text in value.
+            # Keep event type and timestamp for operational metrics without that data.
+            event.value = ""
     messages = await _messages(db, practice, phone, call_ids)
     counts["messages"] = len(messages)
     for m in messages:

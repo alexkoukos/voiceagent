@@ -330,7 +330,8 @@ async def test_notification_metric_counts_pending_failed_and_missing(sessions):
 
 
 @pytest.mark.asyncio
-async def test_repeated_cancellation_offers_waitlist_slot_once(sessions):
+async def test_repeated_cancellation_offers_waitlist_slot_once(sessions, monkeypatch):
+    monkeypatch.setattr(receptionist, "utcnow", lambda: NOW)
     p = await seed(sessions, reminders={"waitlist": True})
     async with sessions() as db:
         appt = await book(db, p)

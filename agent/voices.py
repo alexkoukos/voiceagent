@@ -27,20 +27,24 @@ ELEVENLABS_VOICES: dict[str, str] = {
 }
 
 
-def _overrides() -> dict[str, str]:
-    raw = os.environ.get("ELEVENLABS_VOICE_MAP", "")
+def _overrides(variable: str = "ELEVENLABS_VOICE_MAP") -> dict[str, str]:
+    raw = os.environ.get(variable, "")
     if not raw:
         return {}
     try:
-        return {str(k): str(v) for k, v in json.loads(raw).items()}
+        mapping = json.loads(raw)
+        if not isinstance(mapping, dict) or any(not isinstance(v, str) or not v.strip() for v in mapping.values()):
+            raise ValueError
+        return mapping
     except (ValueError, AttributeError):
-        logger.warning("ELEVENLABS_VOICE_MAP is not valid JSON; ignoring it")
+        logger.warning("%s is not a valid voice mapping; ignoring it", variable)
         return {}
 
 
-def elevenlabs_voice(key: str) -> str:
+def elevenlabs_voice(key: str, language: str | None = None) -> str:
     mapping = {**ELEVENLABS_VOICES, **_overrides()}
-    return mapping.get(key) or mapping["default"]
+    localized = _overrides(f"ELEVENLABS_VOICE_MAP_{language.upper()}") if language in {"el", "en"} else {}
+    return localized.get(key) or localized.get("default") or mapping.get(key) or mapping["default"]
 
 
 # OpenAI Realtime voices, matched to each key's label in the app.

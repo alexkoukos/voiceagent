@@ -3,7 +3,7 @@ import re
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from app.languages import LANGUAGES, language_for_phone
 
@@ -198,6 +198,78 @@ class ReminderSettings(BaseModel):
     waitlist: bool = False
 
 
+class RoutingCapabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    unconditional: bool = False
+    no_answer: bool = False
+    configurable_no_answer_timeout: bool = False
+    scheduled: bool = False
+    busy: bool = False
+    transfer_return: bool = False
+
+
+class CallRouting(BaseModel):
+    """Clinic-owned forwarding configuration, not an instruction to change its carrier."""
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["unconfigured", "ai_first", "human_first", "after_hours", "overflow"] = "unconfigured"
+    public_number: str | None = None
+    ai_destination_number: str | None = None
+    provider: str = Field(default="", max_length=SHORT_TEXT)
+    phone_system: Literal["unknown", "mobile", "landline", "voip", "sip_pbx", "other"] = "unknown"
+    capabilities: RoutingCapabilities = Field(default_factory=RoutingCapabilities)
+    no_answer_seconds: int | None = Field(default=None, ge=5, le=120)
+    busy_behavior: Literal["normal", "forward_to_ai"] = "normal"
+    after_hours_behavior: Literal["normal", "forward_to_ai"] = "normal"
+    transfer_destinations: list[str] = Field(default_factory=list, max_length=10)
+    transfer_failure: Literal["return_to_ai", "take_message", "collect_callback"] = "take_message"
+    escalation_rules: dict[str, str] = Field(default_factory=dict)
+    holiday_dates: list[date] = Field(default_factory=list, max_length=100)
+    closure_dates: list[date] = Field(default_factory=list, max_length=100)
+    carrier_configuration_confirmed: bool = False
+
+    @field_validator("public_number", "ai_destination_number", mode="before")
+    @classmethod
+    def _phone(cls, value):
+        if value is None:
+            return None
+        value = normalize_phone(value)
+        if not re.fullmatch(r"\+\d{8,15}", value):
+            raise ValueError("phone number must be E.164")
+        return value
+
+    @field_validator("transfer_destinations", mode="before")
+    @classmethod
+    def _destinations(cls, value):
+        if not isinstance(value, list):
+            raise ValueError("transfer destinations must be a list")
+        numbers = [normalize_phone(v) for v in value]
+        if any(not re.fullmatch(r"\+\d{8,15}", v) for v in numbers):
+            raise ValueError("transfer destinations must be E.164")
+        return numbers
+
+    @model_validator(mode="after")
+    def _supported(self):
+        required = {"ai_first": "unconditional", "human_first": "no_answer",
+                    "after_hours": "scheduled", "overflow": "busy"}
+        feature = required.get(self.mode)
+        if feature and not getattr(self.capabilities, feature):
+            raise ValueError(f"{self.mode} requires carrier/PBX support for {feature}")
+        if self.no_answer_seconds is not None and not self.capabilities.configurable_no_answer_timeout:
+            raise ValueError("no-answer timeout requires carrier/PBX support")
+        if self.busy_behavior == "forward_to_ai" and not self.capabilities.busy:
+            raise ValueError("busy forwarding requires carrier/PBX support")
+        if self.after_hours_behavior == "forward_to_ai" and not self.capabilities.scheduled:
+            raise ValueError("scheduled forwarding requires carrier/PBX support")
+        if self.mode != "unconfigured" and (not self.public_number or not self.ai_destination_number):
+            raise ValueError("public and AI destination numbers are required for routing")
+        if self.public_number and self.public_number == self.ai_destination_number:
+            raise ValueError("public and AI destination numbers must differ")
+        if any(number in (self.public_number, self.ai_destination_number)
+               for number in self.transfer_destinations):
+            raise ValueError("transfer destination cannot be the public or AI number")
+        return self
+
+
 class PracticeIn(BaseModel):
     name: str = Field(min_length=1, max_length=SHORT_TEXT)
     slug: str | None = Field(default=None, pattern=r"^[a-z0-9\-]{6,64}$")
@@ -214,6 +286,7 @@ class PracticeIn(BaseModel):
     calendar_id: str | None = None
     vertical: str = ""
     routing_rules: dict = {}
+    call_routing: CallRouting = Field(default_factory=CallRouting)
     departments: list[Department] = []
     notifications: NotificationSettings = NotificationSettings()
     reminders: ReminderSettings = ReminderSettings()
@@ -250,6 +323,13 @@ class PracticeIn(BaseModel):
         from zoneinfo import ZoneInfo
         ZoneInfo(v)
         return v
+
+    @model_validator(mode="after")
+    def _routing_destination(self):
+        destination = self.call_routing.ai_destination_number
+        if destination and destination not in self.phone_numbers:
+            raise ValueError("AI destination must be one of the practice's inbound phone_numbers")
+        return self
 
     def to_columns(self) -> dict:
         data = self.model_dump(mode="json")
@@ -292,6 +372,7 @@ class InboundStart(BaseModel):
     """The agent asks which practice a SIP call belongs to (by the dialed number)."""
     dialed_number: str
     caller_number: str | None = None
+    forwarding_reason: Literal["no_answer", "busy", "after_hours", "unconditional"] | None = None
 
 
 class CheckAvailability(BaseModel):
