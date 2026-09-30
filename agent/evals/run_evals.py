@@ -10,7 +10,7 @@ handoffs, outcome and the tools the worker called. No audio, phone or LiveKit ro
     cd agent && INTERNAL_API_TOKEN=dev-agent ADMIN_API_TOKEN=dev-founder GEMINI_API_KEY=... \\
         uv run --python 3.12 --with-requirements requirements.txt python evals/run_evals.py
 
-Options: --only EVAL-001,EVAL-004  --repeat 5 (benchmark)  --baseline evals/results/<file>.json
+Options: --only EVAL-001,EVAL-004  --repeat 5 (benchmark)  --baseline <results file name>
 Exit code 1 when any critical check fails or a pass rate drops below the baseline.
 """
 
@@ -427,7 +427,12 @@ async def main() -> int:
     print(f"results: {out}")
     failed = stats["critical_failures"] > 0
     if args.baseline:
-        found = regressions(stats, json.loads(Path(args.baseline).read_text())["stats"])
+        # Only earlier result files: evals/results/<name>.json
+        name = Path(args.baseline).name
+        known = {p.name: p for p in (HERE / "results").glob("*.json")}
+        if name not in known:
+            sys.exit(f"Baseline must be a file in {HERE / 'results'}: {name}")
+        found = regressions(stats, json.loads(known[name].read_text())["stats"])
         for line in found:
             print("REGRESSION", line)
         failed = failed or any("non-critical" not in line for line in found)
