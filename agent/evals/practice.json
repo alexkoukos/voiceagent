@@ -1,0 +1,27 @@
+{
+  "name": "Οδοντιατρείο Eval",
+  "language": "el",
+  "hours": {
+    "mon": [["09:00", "14:00"], ["17:00", "20:00"]],
+    "tue": [["09:00", "14:00"]],
+    "wed": [["09:00", "14:00"], ["17:00", "20:00"]],
+    "thu": [["09:00", "14:00"]],
+    "fri": [["09:00", "14:00"], ["17:00", "20:00"]]
+  },
+  "services": [
+    {"id": "checkup", "name": "Έλεγχος", "duration_minutes": 30, "price": "40€"},
+    {"id": "cleaning", "name": "Καθαρισμός", "duration_minutes": 45, "price": "60€"}
+  ],
+  "rules": {"slot_step_minutes": 15, "min_notice_minutes": 0},
+  "knowledge_base": {
+    "Διεύθυνση": "Σόλωνος 10, Κολωνάκι",
+    "Πάρκινγκ": "Δημοτικό πάρκινγκ στη γωνία",
+    "Πληρωμή": "Μετρητά και κάρτα"
+  },
+  "routing_rules": {"emergency": {"enabled": true}, "handoff": {"ask_twice": true, "timeout_seconds": 3}},
+  "notifications": {"customer_sms": false, "monthly_report": false},
+  "staff": [
+    {"name": "Δρ. Νίκος Παπαδόπουλος", "role": "doctor", "aliases": ["γιατρός", "γιατρό", "Παπαδόπουλο"]},
+    {"name": "Δρ. Ελένη Αλεξίου", "role": "doctor", "aliases": ["γιατρίνα", "Αλεξίου"]}
+  ]
+}

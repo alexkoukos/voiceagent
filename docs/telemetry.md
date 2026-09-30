@@ -21,6 +21,28 @@ transcript, routing and timing events. Data comes from `GET /monitor/api/calls` 
 In worker logs, search for `reply after`, `timings:` and `tool_request` for the same
 numbers as plain text.
 
+## Cost per call
+
+At session end the worker sends one `usage_reported` event: per provider/model totals
+from the LiveKit SDK (LLM text/audio/cached tokens, STT audio seconds, TTS characters,
+turn-detector requests). Numbers only, no content. The backend prices it with
+[backend/config/pricing.json](../backend/config/pricing.json) into `calls.cost_breakdown`
+(migration `0028`): one line per component, plus telephony minutes (by direction) and
+LiveKit minutes. It is recomputed when usage arrives, when the call ends and at finalize.
+
+- Prices are USD, in dated versions. A call uses the version in effect on its creation
+  date, and the version ID is stored with the breakdown. To change a price, add a new
+  version; never edit an old one.
+- An unknown rate or an unmatched model gives `cost_usd: null` and `complete: false`.
+  `known_usd` is then a lower bound. `/monitor` lists what is unpriced.
+- Rates on 2026-09-30 came from the providers' public price pages (sources are in the
+  file). The LiveKit agent-minute and turn-detector rates were not published there: fill
+  them in from the invoice.
+- The existing `cost_estimate` (EUR, flat per-minute) is unchanged and still drives the
+  monthly cost cap.
+- Not included: the ElevenLabs availability probe (about 1 credit per call), the opening
+  line pre-rendered during the ring, Railway compute and storage.
+
 ## Retrieve
 
 `GET /internal/calls/{call_id}/telemetry` requires the founder's `x-api-key`.

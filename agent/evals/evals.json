@@ -1,0 +1,254 @@
+{
+  "_readme": "Eval Suite V0.1 (ASTRA.md). mode=text runs in agent/evals/run_evals.py against a local backend; mode=audio needs the WebRTC harness (scripts/scripted_calls.py). Checks marked critical block a release. Add an eval for every meaningful real failure.",
+  "evals": [
+    {
+      "id": "EVAL-001",
+      "title": "New patient booking, golden path",
+      "mode": "text",
+      "lines": [
+        "Καλησπέρα, θα ήθελα ένα ραντεβού για έλεγχο.",
+        "Την άλλη Τρίτη το πρωί.",
+        "Ναι, η πρώτη ώρα που είπατε.",
+        "Γιώργος Παπαδόπουλος.",
+        "Ναι, σωστά.",
+        "Όχι, ευχαριστώ, γεια σας."
+      ],
+      "expect": {
+        "outcome": "booked",
+        "new_appointments": 1,
+        "service_id": "checkup",
+        "weekday": "tue",
+        "customer_name_contains": "Παπαδόπουλ",
+        "tools_in_order": [
+          "check_availability",
+          "book_appointment"
+        ]
+      }
+    },
+    {
+      "id": "EVAL-002",
+      "title": "Hours, prices, services: knowledge accuracy",
+      "mode": "text",
+      "lines": [
+        "Πόσο κοστίζει ο καθαρισμός;",
+        "Και τι ώρες είστε ανοιχτά την Τρίτη;",
+        "Ευχαριστώ, δεν θέλω ραντεβού τώρα. Γεια σας."
+      ],
+      "expect": {
+        "outcome": "info_given",
+        "new_appointments": 0,
+        "agent_said_all": [
+          [
+            "60",
+            "εξήντα"
+          ],
+          [
+            "14:00",
+            "δύο το μεσημέρι",
+            "2 το μεσημέρι",
+            "14"
+          ]
+        ],
+        "tools_not_called": [
+          "book_appointment"
+        ]
+      }
+    },
+    {
+      "id": "EVAL-003",
+      "title": "Caller changes their mind mid-booking",
+      "mode": "text",
+      "lines": [
+        "Ραντεβού για έλεγχο την Παρασκευή το πρωί.",
+        "Στις δέκα.",
+        "Ελένη Γεωργίου.",
+        "Όχι, όχι, την Πέμπτη ήθελα, όχι Παρασκευή. Πέμπτη πρωί.",
+        "Ναι, η πρώτη ώρα την Πέμπτη.",
+        "Ναι, τώρα σωστά.",
+        "Γεια σας."
+      ],
+      "expect": {
+        "outcome": "booked",
+        "new_appointments": 1,
+        "weekday": "thu"
+      }
+    },
+    {
+      "id": "EVAL-004",
+      "title": "Reschedule existing appointment",
+      "mode": "text",
+      "seed_appointment": {
+        "days_ahead_weekday": "mon",
+        "time": "10:00",
+        "service_id": "checkup",
+        "customer_name": "Κατερίνα Σταύρου"
+      },
+      "lines": [
+        "Καλησπέρα, θέλω να αλλάξω το ραντεβού μου.",
+        "Ναι, αυτό.",
+        "Την άλλη Τετάρτη το πρωί.",
+        "Ναι, την πρώτη ώρα που είπατε.",
+        "Ναι.",
+        "Ευχαριστώ, γεια."
+      ],
+      "expect": {
+        "outcome": "rescheduled",
+        "new_appointments": 0,
+        "seeded_status": "booked",
+        "seeded_weekday": "wed",
+        "tools_in_order": [
+          "find_appointments",
+          "check_availability",
+          "reschedule_appointment"
+        ]
+      }
+    },
+    {
+      "id": "EVAL-005",
+      "title": "Cancel existing appointment",
+      "mode": "text",
+      "seed_appointment": {
+        "days_ahead_weekday": "thu",
+        "time": "11:00",
+        "service_id": "cleaning",
+        "customer_name": "Πέτρος Ζαχαρίου"
+      },
+      "lines": [
+        "Θέλω να ακυρώσω το ραντεβού μου.",
+        "Ναι, αυτό.",
+        "Ναι, ακυρώστε το.",
+        "Ευχαριστώ, γεια."
+      ],
+      "expect": {
+        "outcome": "cancelled",
+        "new_appointments": 0,
+        "seeded_status": "cancelled",
+        "tools_in_order": [
+          "find_appointments",
+          "cancel_appointment"
+        ]
+      }
+    },
+    {
+      "id": "EVAL-006",
+      "title": "Fast Greek + interruption/barge-in",
+      "mode": "audio",
+      "audio_scenarios": [
+        "slang-swearing",
+        "book-simple"
+      ],
+      "note": "Needs real audio: run scripts/scripted_calls.py and compare reply p50/p95 in /monitor. Barge-in needs a scripted interruption (not yet in the harness)."
+    },
+    {
+      "id": "EVAL-007",
+      "title": "Greek/English switching + difficult name",
+      "mode": "text",
+      "lines": [
+        "English mode.",
+        "I'd like to book a check-up next Monday morning.",
+        "The first time you have is fine.",
+        "Xanthopoulos. X, A, N, T, H, O, P, O, U, L, O, S. First name Ioanna.",
+        "Yes, that's right.",
+        "Thanks, bye."
+      ],
+      "expect": {
+        "outcome": "booked",
+        "new_appointments": 1,
+        "weekday": "mon",
+        "customer_name_contains": [
+          "anthopoul",
+          "ανθοπούλ",
+          "ανθόπουλ"
+        ],
+        "tools_called": [
+          "set_language"
+        ]
+      },
+      "audio_part": "Speech recognition of the spelled name: scripts/scripted_calls.py book-spell-surname"
+    },
+    {
+      "id": "EVAL-008",
+      "title": "Requested time unavailable",
+      "mode": "text",
+      "lines": [
+        "Θέλω ραντεβού για έλεγχο την Τρίτη το απόγευμα.",
+        "Εντάξει, τότε την επόμενη μέρα το πρωί.",
+        "Την πρώτη ώρα που έχετε.",
+        "Νίκος Αλεξίου.",
+        "Ναι, σωστά.",
+        "Γεια σας."
+      ],
+      "expect": {
+        "outcome": "booked",
+        "new_appointments": 1,
+        "not_weekday_afternoon": "tue",
+        "tools_in_order": [
+          "check_availability",
+          "check_availability",
+          "book_appointment"
+        ]
+      }
+    },
+    {
+      "id": "EVAL-009",
+      "title": "Human transfer with failed-transfer fallback",
+      "mode": "text",
+      "lines": [
+        "Θέλω να μιλήσω με τον γιατρό.",
+        "Όχι, θέλω να μιλήσω με τον γιατρό, είναι προσωπικό.",
+        "Εντάξει, πάρτε μήνυμα. Δημήτρης Λάμπρου.",
+        "Σε αυτό το νούμερο, το απόγευμα.",
+        "Για τα αποτελέσματα των ακτινογραφιών.",
+        "Όχι, δεν είναι επείγον. Γεια."
+      ],
+      "expect": {
+        "new_appointments": 0,
+        "handoff_status_in": [
+          "unanswered",
+          "failed"
+        ],
+        "messages": 1,
+        "tools_called": [
+          "transfer_to_human",
+          "take_message"
+        ]
+      }
+    },
+    {
+      "id": "EVAL-010",
+      "title": "Ambiguous caller needing clarification",
+      "mode": "text",
+      "lines": [
+        "Ναι, γεια σας, για εκείνο το θέμα.",
+        "Ραντεβού, για έλεγχο.",
+        "Αύριο ή μεθαύριο, όποια μέρα είστε ανοιχτά.",
+        "Όποια ώρα έχετε.",
+        "Σοφία Ιωάννου.",
+        "Ναι.",
+        "Γεια."
+      ],
+      "expect": {
+        "outcome": "booked",
+        "new_appointments": 1,
+        "first_route_intent_in": [
+          "unclear",
+          "book"
+        ]
+      }
+    },
+    {
+      "id": "EVAL-011",
+      "title": "No booking without the caller's yes",
+      "mode": "text",
+      "lines": [
+        "Θέλω έλεγχο αύριο το πρωί.",
+        "Δοκιμαστικός Πελάτης.",
+        "Όχι, μην το κλείσετε. Θα ξαναπάρω. Γεια σας."
+      ],
+      "expect": {
+        "new_appointments": 0
+      },
+      "critical_all": true
+    }
+  ]
+}

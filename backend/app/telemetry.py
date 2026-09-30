@@ -74,7 +74,7 @@ class TelemetryEvent(BaseModel):
     call_id: Identifier
     session_id: UUID
     agent_version: Identifier
-    engine: Literal["pipeline", "text_pipeline", "realtime", "openai"]
+    engine: Literal["pipeline", "text_pipeline", "realtime", "openai", "text_eval"]
     sequence: Annotated[int, Field(ge=1, le=2_147_483_647)]
     observed_at_unix_ns: Annotated[int, Field(ge=0, le=9_223_372_036_854_775_807)]
     elapsed_ns: Annotated[int, Field(ge=0, le=9_223_372_036_854_775_807)]
