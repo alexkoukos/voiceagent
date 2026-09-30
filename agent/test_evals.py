@@ -69,3 +69,12 @@ def test_eval_file_is_consistent():
         if spec["mode"] == "text":
             assert spec["lines"] and spec["expect"]
             assert "unknown check" not in json.dumps(check(spec["expect"], {}))
+
+
+def test_transfer_check_accepts_the_after_hours_message_path():
+    closed = [("route_call", {"intent": "human"}, {"path": "message", "hours_state": "closed"})]
+    assert check({"handoff_status_in": ["unanswered"]}, {"tools": closed})[0]["passed"]
+    wrong = closed + [("transfer_to_human", {}, {})]
+    assert not check({"handoff_status_in": ["unanswered"]}, {"tools": wrong, "handoffs": [{"status": "unanswered"}]})[0]["passed"]
+    open_ = [("route_call", {}, {"path": "handoff"})]
+    assert not check({"handoff_status_in": ["unanswered"]}, {"tools": open_})[0]["passed"]

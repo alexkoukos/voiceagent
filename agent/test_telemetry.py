@@ -207,6 +207,8 @@ async def test_backend_tool_error_and_cancellation_emit_timing(monkeypatch):
 
     tracker, records, _ = setup_tracker()
     receiver = NS(telemetry=tracker, call_id="call", flags=set())
+    receiver._tool_request = lambda name, args: worker.ReceptionistCall._tool_request(receiver, name, args)
+    receiver._tool_lock = asyncio.Lock()
     monkeypatch.setattr(worker, "backend_post", AsyncMock(return_value={"error": "unavailable"}))
     assert (await worker.ReceptionistCall.tool(receiver, "book_appointment", {"name": "PRIVATE"}))["error"] == "unavailable"
     assert records[-1]["outcome"] == "error"

@@ -249,3 +249,22 @@ async def test_language_switch_waits_for_the_agent_swap(monkeypatch):
                          make_agent=lambda language, parts: f"agent-{language}")
     await worker.ReceptionistCall.switch_language(rc, "en")
     assert swapped == ["agent-en"] and rc.language == "en"
+
+
+@pytest.mark.asyncio
+async def test_parallel_backend_tools_run_in_call_order(monkeypatch):
+    # EVAL-004: a parallel prepare_action overtook check_availability's saved offer.
+    order = []
+
+    async def backend_post(path, payload):
+        name = path.rsplit("/", 1)[-1]
+        order.append(("start", name))
+        await worker.asyncio.sleep(0.05 if name == "check_availability" else 0)
+        order.append(("end", name))
+        return {}
+
+    monkeypatch.setattr(worker, "backend_post", backend_post)
+    rc = worker.ReceptionistCall(SimpleNamespace(), {"call_id": "call"}, "pipeline")
+    await worker.asyncio.gather(rc.tool("check_availability", {}), rc.tool("prepare_action", {}))
+    assert order == [("start", "check_availability"), ("end", "check_availability"),
+                     ("start", "prepare_action"), ("end", "prepare_action")]
