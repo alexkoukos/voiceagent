@@ -209,7 +209,6 @@
         ],
         "messages": 1,
         "tools_called": [
-          "transfer_to_human",
           "take_message"
         ]
       }

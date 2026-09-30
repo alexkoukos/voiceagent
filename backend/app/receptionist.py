@@ -554,8 +554,16 @@ async def tool_check_availability(db: AsyncSession, call: Call, args) -> dict:
         RoutingEvent.call_id == call.id, RoutingEvent.kind == "offer",
     ).order_by(RoutingEvent.created_at.desc()).limit(1))).scalar_one_or_none()
     last_offer = json.loads(last.value)["result"] if last else None
+    staff_name = args.staff
+    if exclude and not staff_name:
+        # A move keeps the appointment's own staff member (booking.reschedule), so only
+        # offer their free times: "anyone free" offered 09:00 and the move then failed
+        # with slot_taken after the caller's yes (EVAL-004, 2026-10-01).
+        moving = await db.get(Appointment, exclude)
+        owner = await db.get(Staff, moving.staff_id) if moving and moving.staff_id else None
+        staff_name = owner.name if owner else None
     result = await booking.check_availability(
-        db, practice, args.when, args.service_id, utcnow(), staff_name=args.staff,
+        db, practice, args.when, args.service_id, utcnow(), staff_name=staff_name,
         staff_ids=await _department_staff(db, practice, call), language=_lang(call, practice), exclude_id=exclude,
         after=booking._hhmm(args.after) if args.after else None,
         before=booking._hhmm(args.before) if args.before else None,
@@ -565,7 +573,7 @@ async def tool_check_availability(db: AsyncSession, call: Call, args) -> dict:
         # Persist exactly what the backend offered so a later write cannot use an
         # invented date or time, even if the model misheard a second voice.
         db.add(RoutingEvent(practice_id=practice.id, call_id=call.id, kind="offer", value=json.dumps({
-            "result": result, "appointment_id": exclude, "requested_staff": args.staff or "",
+            "result": result, "appointment_id": exclude, "requested_staff": staff_name or "",
         }, ensure_ascii=False), rule="B1 availability offer"))
     await db.commit()
     return result
@@ -622,6 +630,13 @@ async def tool_prepare_action(db: AsyncSession, call: Call, args) -> dict:
         service_id = args.service_id
         name = (args.customer_name or appt.customer_name).strip()
         staff_name = args.staff or ""
+        if appt and appt.staff_id:
+            # A move is checked against the appointment's own staff (tool_check_availability);
+            # the model may name them here or not (EVAL-004).
+            owner = await db.get(Staff, appt.staff_id)
+            named = booking.match_staff(await booking.staff_of(db, practice.id), staff_name) if staff_name else None
+            if owner and (not staff_name or (named and named.id == owner.id)):
+                staff_name = owner.name
         if not await _offered(db, call, day=day, time=time, service_id=service_id,
                               appointment_id=appointment_id, staff=staff_name):
             return {"error": "check_availability_first"}
