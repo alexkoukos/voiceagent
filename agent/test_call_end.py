@@ -36,7 +36,8 @@ async def test_hang_up_waits_for_spoken_goodbye(monkeypatch):
             calls.append("disconnected")
 
     monkeypatch.setattr(worker, "get_job_context", lambda: SimpleNamespace(room=Room()))
-    receiver = SimpleNamespace(session=Session(), _fillers=object(), language="en", _call_id="call")
+    receiver = SimpleNamespace(session=Session(), _fillers=object(), language="en", _call_id="call",
+                               _spoken_already=lambda note: note)
     result = await worker.PrankCallerAgent.hang_up.__wrapped__(receiver, Context())
     assert result.startswith("The call is ending")
     assert calls == ["previous speech finished", ("Thank you for calling. Goodbye.", False)]

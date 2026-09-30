@@ -247,7 +247,7 @@ class PrankCallerAgent(Agent):
         return "recording and transcript will be deleted"
 
     @function_tool
-    async def hang_up(self, context: RunContext, silent: bool = False) -> str:
+    async def hang_up(self, context: RunContext, silent: bool = False) -> str | None:
         """Says a final goodbye and ends the call after it has played. Use silent=true only for voicemail."""
         # current_speech.wait_for_playout() waits for the tool itself to finish and
         # raises inside a function tool. Wait for the speech before this tool instead.
@@ -276,7 +276,12 @@ class PrankCallerAgent(Agent):
             await room.disconnect()
 
         asyncio.create_task(finish())
-        return "The call is ending. Do not speak again."
+        return self._spoken_already("The call is ending. Do not speak again.")
+
+    def _spoken_already(self, note: str) -> str | None:
+        """Result for a tool that already queued its own speech. Realtime models get the note;
+        see ReceptionistAgent for the text engines."""
+        return note
 
     async def _play_opening(self) -> bool:
         opening = await ready_opening(self._opening_task)
@@ -342,6 +347,12 @@ class ReceptionistAgent(PrankCallerAgent):
         # The receptionist speaks first; the callee-speaks-first logic doesn't apply.
         self._opened = True
 
+    def _spoken_already(self, note: str) -> str | None:
+        # Text engines: a note makes the LLM run again with nothing to say. Gemini then
+        # returns empty completions (retried, then an error) or improvises "Συγγνώμη, δεν
+        # σας άκουσα" before the read-back (EVAL-001, 2026-09-30). None asks for no reply.
+        return None if self._rc.engine not in ("realtime", "openai") else note
+
     async def _tool(self, name: str, args: dict | None = None) -> str:
         payload = dict(args or {})
         if name in ("book_appointment", "reschedule_appointment", "cancel_appointment"):
@@ -352,7 +363,7 @@ class ReceptionistAgent(PrankCallerAgent):
         return json.dumps(result, ensure_ascii=False)
 
     @function_tool
-    async def route_call(self, context: RunContext, intent: str, staff: str = "", department: str = "") -> str:
+    async def route_call(self, context: RunContext, intent: str, staff: str = "", department: str = "") -> str | None:
         """Call first, as soon as you know what the caller wants, and again if it changes.
 
         Args:
@@ -370,7 +381,12 @@ class ReceptionistAgent(PrankCallerAgent):
             # Third off-topic / abusive turn (off_topic_limit): the backend decided to end the call.
             await context.wait_for_playout()
             self._rc.spawn(self._rc.end_with(result.get("say", "")))
-            return json.dumps({"path": "end_call", "next": "The call is ending. Say nothing more."})
+            return self._spoken_already(json.dumps({"path": "end_call", "next": "The call is ending. Say nothing more."}))
+        if result.get("path") == "handoff":
+            # The model announced transfers without calling transfer_to_human, leaving the
+            # caller waiting for nobody (EVAL-009, 2026-09-30). Start it here, in code.
+            result = {**result, "transfer": await self._rc.start_handoff(result.get("target") or staff),
+                      "next": "The transfer has started. Follow transfer.say; do not call transfer_to_human."}
         return json.dumps(result, ensure_ascii=False)
 
     @function_tool
@@ -413,7 +429,7 @@ class ReceptionistAgent(PrankCallerAgent):
     async def prepare_action(
         self, action: str, date: str = "", time: str = "", service_id: str = "",
         customer_name: str = "", staff: str = "", appointment_id: str = "",
-    ) -> str:
+    ) -> str | None:
         """Reads back trusted details and asks for a clear yes before booking, moving or cancelling.
 
         Args:
@@ -437,7 +453,8 @@ class ReceptionistAgent(PrankCallerAgent):
         })
         if result.get("confirmation_id"):
             self._rc.read_back(result, customer_name=prepared_name if action == "book" else None)
-            return json.dumps({"next": "Wait for the caller to answer the spoken readback. Only a clear yes permits the action."})
+            return self._spoken_already(json.dumps(
+                {"next": "Wait for the caller to answer the spoken readback. Only a clear yes permits the action."}))
         return json.dumps(result, ensure_ascii=False)
 
     @function_tool
@@ -611,6 +628,16 @@ def build_tts(engine: str, voice: str, language: str):
     ], max_retry_per_tts=1)
 
 
+def text_llm() -> google.LLM:
+    """The pipeline engines' model; the text-mode evals use exactly this too."""
+    return google.LLM(
+        model=LLM_MODEL,
+        api_key=os.environ.get("GEMINI_API_KEY"),
+        temperature=0.9,
+        thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
+    )
+
+
 def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> AgentSession:
     if engine in ("pipeline", "text_pipeline"):
         stt = (scribe_stt(language, vocab_terms(language, vocabulary)) if engine == "pipeline"
@@ -625,12 +652,7 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
                     logger.warning("could not prewarm %s", type(part).__name__)
         return AgentSession(
             stt=stt,
-            llm=google.LLM(
-                model=LLM_MODEL,
-                api_key=os.environ.get("GEMINI_API_KEY"),
-                temperature=0.9,
-                thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
-            ),
+            llm=text_llm(),
             tts=tts,
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             turn_handling=TurnHandlingOptions(
@@ -1010,6 +1032,7 @@ class ReceptionistCall:
         self._confirmation_armed = False
         self._prepared_name: str | None = None
         self._availability_checked = False
+        self._handoff_pending = False
 
     def spawn(self, coro) -> None:
         t = asyncio.create_task(coro)
@@ -1081,6 +1104,15 @@ class ReceptionistCall:
         self.language = language
         self.agent = self.make_agent(language, parts)
         self.session.update_agent(self.agent)
+        # update_agent swaps in a background task. Speaking before it finishes lands on
+        # the draining old agent ("cannot schedule new speech"), so the caller never heard
+        # the "English mode" line (EVAL-007, 2026-10-01). The task is SDK-internal (1.8.3).
+        swap = getattr(self.session, "_update_activity_atask", None)
+        if swap is not None:
+            try:
+                await asyncio.wait_for(asyncio.shield(swap), timeout=5)
+            except Exception:
+                logger.warning("call %s: agent swap did not finish cleanly", self.call_id)
 
     async def end_with(self, line: str) -> None:
         """Say one closing line (not interruptible), then hang up."""
@@ -1190,9 +1222,12 @@ class ReceptionistCall:
     # --- handoff (R6, W1, C6, C7) ---
 
     async def start_handoff(self, target: str) -> dict:
+        if self._handoff_pending:
+            return {"status": "already_transferring", "say": "The transfer is already in progress. Don't call more tools."}
         result = await self.tool("transfer_to_human", {"target": target or None})
         if result.get("error"):
             return result
+        self._handoff_pending = True
         if result.get("mode") == "sip":
             self.spawn(self._sip_transfer(result))
             return {"status": "transferring", "say": "Tell the caller you're putting them through now."}
@@ -1272,6 +1307,7 @@ class ReceptionistCall:
             await self.session.aclose()
 
     def _nobody_came(self, fallback: str = "take_message") -> None:
+        self._handoff_pending = False
         if fallback == "return_to_ai":
             text = ("Δεν μπόρεσαν να απαντήσουν. Ζήτα συγγνώμη και συνέχισε να βοηθάς τον καλούντα με το αίτημά του."
                     if self.language == "el" else "Nobody could pick up. Apologise and continue helping with the caller's request.")
