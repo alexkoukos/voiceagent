@@ -153,7 +153,21 @@ failures, turn and first-reply p50/p95/p99, tool error rate and cost per call. A
 critical pass rate than the baseline exits 1. Voice latency comes from `/monitor` after
 scripted audio calls, not from text runs.
 
-BASELINE_PLACEHOLDER
+Baseline, 2026-10-01 (10 text evals × 3, gemini-3.5-flash-lite, local backend):
+
+| | First run | After fixes |
+|---|---|---|
+| Runs passed | 24/30 (80%) | 30/30 (100%) |
+| Critical failures | 6 | 0 |
+| First reply p50 / p95 / p99 | 699 / 1583 / 1926 ms | 693 / 1529 / 1797 ms |
+| Whole turn p50 / p95 / p99 | 1314 / 2130 / 4131 ms | 1323 / 2093 / 2194 ms |
+| Tool error rate | 8.1% | 5.6% |
+| Known cost per call | $0.0216 | $0.0206 |
+
+Text timings exclude STT, turn detection, TTS and telephony. Voice latency will be higher.
+Costs are a lower bound: LiveKit minutes are unpriced. EVAL-010's Gemini
+`MALFORMED_FUNCTION_CALL` appeared in 2 of 9 earlier runs and 0 of 3 here: still a known,
+intermittent provider failure.
 
 ## Next pieces, in order
 
