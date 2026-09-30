@@ -78,12 +78,14 @@ class CallTelemetry:
         self.emit("agent_state_changed", old_state=ev.old_state, new_state=ev.new_state)
         if ev.new_state == "speaking" and ev.old_state != "speaking":
             if self.speech_end_ns is not None:
+                latency_ms = (self.clock() - self.speech_end_ns) / 1_000_000
                 self.emit(
-                    "response_latency_estimate",
-                    latency_ms=(self.clock() - self.speech_end_ns) / 1_000_000,
+                    "response_latency_estimate", latency_ms=latency_ms,
                     source="sdk_state", accuracy="proxy_not_handset_playback",
                 )
                 self.speech_end_ns = None
+                # Human-readable line for plain log tailing; no content.
+                logger.info("call %s reply after %.0f ms", self.call_id, latency_ms)
 
     def message(self, ev):
         item = ev.item
@@ -100,6 +102,9 @@ class CallTelemetry:
         # their timings to the currently speaking caller's locally inferred turn.
         self.emit("message_metrics", turn_id=None, message_id=item.id,
                   role=item.role, source="sdk_message_metrics", latencies=values)
+        if values:
+            logger.info("call %s %s timings: %s", self.call_id, item.role,
+                        " ".join(f"{name[:-3]}={value:.0f}" for name, value in values.items()))
 
     def tools_completed(self, ev):
         for call, output in ev.zipped():
@@ -119,8 +124,10 @@ class CallTelemetry:
 
     def end_span(self, kind, span, outcome):
         started, fields = span
-        self.emit(kind + "_ended", **fields, outcome=outcome,
-                  duration_ms=(self.clock() - started) / 1_000_000)
+        duration_ms = (self.clock() - started) / 1_000_000
+        self.emit(kind + "_ended", **fields, outcome=outcome, duration_ms=duration_ms)
+        logger.info("call %s %s %s %s in %.0f ms", self.call_id, kind,
+                    fields.get("tool_name") or fields.get("mode", ""), outcome, duration_ms)
 
 
 class observe_span:
