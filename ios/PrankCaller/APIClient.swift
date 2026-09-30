@@ -238,6 +238,9 @@ struct APIClient {
     func forwarding(_ pid: String, full: Bool) async throws -> ForwardingInfo {
         try await get("/practices/\(pid)/forwarding?mode=" + (full ? "full" : "backup"))
     }
+    func routingSetup(_ pid: String) async throws -> RoutingSetupInfo {
+        try await get("/practices/\(pid)/routing/setup")
+    }
     /// The raw JSON, to hand to the patient as a file.
     func exportCaller(_ pid: String, phone: String) async throws -> Data {
         try await request("POST", "/practices/\(pid)/data/export", body: ["phone": phone])

@@ -1,5 +1,9 @@
 # AI Voice Receptionist
 
+Company priorities and working principles: [Astra operating brief](ASTRA.md).
+Incremental implementation record: [Build progress](docs/build-progress.md).
+Telemetry setup and retrieval: [Call telemetry](docs/telemetry.md).
+
 A Greek and English AI phone receptionist for small practices. It answers calls through LiveKit and Telnyx, handles appointments and messages, and gives staff an iOS view of calls and operations. The repository also contains the original outbound calling flow; the receptionist is the current product direction.
 
 This is an active pilot project. Feature code and automated tests are present, but provider setup and live acceptance still need to be completed for each deployment. See [PRD_STATUS.md](PRD_STATUS.md) for the detailed verification record.
@@ -13,6 +17,8 @@ This is an active pilot project. Feature code and automated tests are present, b
 | `ios/` | SwiftUI app for call history, receptionist settings, appointments, messages, and handoff |
 
 Receptionist calls can answer common questions, check availability, book or change appointments, take messages, and hand off to a person. Practices can configure hours, services, staff, routing rules, calendars, and notifications. A web demo is available at `/demo/<slug>` once a practice is configured. The backend also includes import review, calendar feeds, usage controls, and data export/erasure operations.
+
+The Greek landing page is served at `/`. Its demo-request form stores leads and queues an email to `FOUNDER_EMAIL`. Configure `FOUNDER_EMAIL`, `SMTP_HOST`, `EMAIL_FROM`, and `DATA_ENCRYPTION_KEY` before accepting requests; without them the form shows an unavailable message and saves nothing. Set `BACKEND_PUBLIC_URL` to the public site origin for the social preview image. Set `LANDING_DEMO_SLUG` only to a fictional practice with no real customer calendar or records. When unset, the page offers a personal demo instead of a live voice call. Review the site's public privacy and demo-terms pages with counsel and add the final business identity before launch.
 
 ## Requirements
 
@@ -67,11 +73,25 @@ uv run --python 3.12 --with-requirements requirements.txt \
 
 The scripted voice scenarios in `agent/scripts/` require a running backend and worker plus provider credentials. See the usage notes at the top of [scripted_calls.py](agent/scripts/scripted_calls.py).
 
+## Noise and speech clarity
+
+Set `NOISE_CANCELLATION=on` on the **agent service** as well as locally. The worker uses BVC for browser microphones and BVCTelephony for phone audio, before transcription and turn detection. These filters require LiveKit Cloud transport. Each call logs the selected source and filter; an explicit `off`, `false`, `0`, or `no` disables filtering. The last checked Railway configuration (2026-09-28) had this set to `off`, so deploying code alone will not enable it.
+
+The default realtime pause is 700 ms and Scribe's silence threshold is 0.7 seconds. Existing deployment overrides still take precedence. The pipeline retains its interruption duration/word checks and resumes after false interruptions. Compare quiet speech, traffic, music and a nearby talker before shortening the pauses; measure missed words, unwanted interruptions, correct names/times, and reply latency.
+
+Text pipelines use explicit delivery settings: ElevenLabs speaks at `TTS_SPEED=0.93` using PCM audio, and Gemini TTS receives instructions for clear, slightly slower speech. The outgoing pipeline opening uses the same ElevenLabs model/settings as the conversation. Language switches update both recognition and speech settings. `ELEVENLABS_TTS_MODEL` can select another compatible model for a listening comparison; keep the current model until the alternative's quality and latency are verified.
+
+Choose voices using `ELEVENLABS_VOICE_MAP`, with optional `ELEVENLABS_VOICE_MAP_EL` and `_EN` overrides. A language map's `default` selects one voice for that language regardless of the app's voice key. Audition a native Greek voice with your actual names and services before configuring its ID; the built-in voice mappings are generic voices.
+
+For recurring pronunciation errors, set `TTS_PRONUNCIATION_ALIASES` to a JSON object such as `{"el":{"OpenAI":"Όπεν έι άι"},"en":{"Dr.":"Doctor"}}`. Whole words or phrases are replaced only in synthesized audio, including names split across generated text chunks. Transcripts and booking values keep their original spelling. Each language supports up to 100 aliases (80 characters per key, 160 per spoken value). Realtime speech models do not use this text filter; use `pipeline` or `text_pipeline` for exact pronunciation aliases. In realtime mode, the separate Deepgram transcript does not determine what Gemini hears.
+
 ## Continuous integration and deployment
 
 GitHub Actions runs backend tests against Postgres, agent tests, and an iOS Simulator build for changes proposed to `main`. The branch is protected so its required checks must pass before merge. Railway follows `main` and automatically deploys the backend and agent after a merge; a green build confirms the code passed automated checks, while live voice and provider acceptance remain separate pilot gates.
 
 ## Deployment notes
+
+For clinic forwarding that keeps the existing public number, see [Existing-number call routing](docs/call-routing.md).
 
 Both `backend/` and `agent/` have Dockerfiles. The backend runs migrations on startup and needs Postgres; the agent needs the same LiveKit project and the backend URL. Set secrets in your host's secret manager, not in the repository. Keep the backend at one replica until the in-memory live update and scheduler behavior is adapted for multiple instances.
 

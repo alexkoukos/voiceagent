@@ -2,6 +2,12 @@
 
 The receptionist 2.0 PRD is the current target. This pass improves existing backend behavior around P0 booking, notifications, and call reporting. It does not establish pilot readiness or the PRD's real-call accuracy and latency targets.
 
+## Browser transcript update — 2026-09-28
+
+- The web demo and embedded widget now show speaker-labeled, timestamped turns with clearer call status, a compact widget layout, and a way back to new turns when someone scrolls up. The client keeps final segment updates in the same turn and gives a specific microphone-permission error.
+- The Deepgram Nova-3 transcription path now receives a bounded glossary of the practice's name, staff and services. This may improve those words; real Greek calls are still needed to measure accuracy. The ElevenLabs Scribe path is unchanged.
+- Browser-client tests (4) and agent tests (15) pass. This change is local and has not been verified against a live provider or deployed.
+
 ## Pilot readiness checkpoint — 2026-09-27
 
 - The public repository has a protected `main` branch, secret scanning with push protection, Dependabot, CodeQL, and pull-request CI for the backend, agent, and iOS build. Railway deploys backend and agent changes from `main`.

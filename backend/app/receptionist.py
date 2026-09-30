@@ -154,7 +154,8 @@ def busy_line(practice: Practice, language: str) -> str:
 
 
 async def start_call(
-    db: AsyncSession, practice: Practice, *, direction: str, caller_number: str | None
+    db: AsyncSession, practice: Practice, *, direction: str, caller_number: str | None,
+    forwarding_reason: str | None = None,
 ) -> tuple[Call, dict]:
     """Creates the call record for an inbound or web call and returns the agent's metadata.
     Raises Busy when the practice is at its concurrent-call cap (G8), Blocked for a blocked
@@ -194,6 +195,15 @@ async def start_call(
     await db.flush()
     upcoming = await booking.upcoming_for(db, practice, caller_number, now)
     await routing.log_call_start(db, call, state, known=customer is not None)
+    if direction == "inbound":
+        await routing.log(db, call, "incoming", "ai_destination", "SIP inbound", "ai")
+        if forwarding_reason:
+            if forwarding_reason == "no_answer":
+                await routing.log(db, call, "human_ring_attempt", "carrier_reported", "forwarding reason", "human")
+                await routing.log(db, call, "human_no_answer", "carrier_reported", "forwarding reason", "ai")
+            await routing.log(db, call, "carrier_forward", forwarding_reason,
+                              "carrier-provided forwarding reason", "ai")
+        await routing.log(db, call, "ai_admitted", "connected", "agent admission", "ai")
     await db.commit()
     await db.refresh(call)
     events.publish(f"practice:{practice.id}")
@@ -272,13 +282,14 @@ async def build_metadata(
         "vocabulary": _vocabulary(practice, staff),
         "waitlist": bool((practice.reminders or {}).get("waitlist")),
     }
-    if call.direction == "outbound":
+    if call.direction in ("inbound", "outbound"):
         settings = get_settings()
         meta.update(
-            dial_number=call.caller_number,
             sip_trunk_id=settings.sip_trunk_id,
             outbound_number=practice.outbound_number or settings.sip_outbound_number,
         )
+        if call.direction == "outbound":
+            meta["dial_number"] = call.caller_number
     return meta
 
 
@@ -857,12 +868,17 @@ async def tool_transfer(db: AsyncSession, call: Call, args) -> dict:
         person = next((p for p in staff if p.role in ("secretary", "owner", "doctor") and p.phone), None) if rules["mode"] == "sip" else None
     target = person.name if person else (args.target or "")
     mode = rules["mode"]
-    if mode == "sip" and (call.direction != "inbound" or not (person and person.phone)):
+    setup = practice.call_routing or {}
+    forbidden = {setup.get("public_number"), setup.get("ai_destination_number"), *(practice.phone_numbers or [])}
+    choices = ([person.phone] if person and person.phone else []) + (setup.get("transfer_destinations") or [])
+    destination = next((number for number in choices if number not in forbidden), None)
+    if mode == "sip" and (call.direction != "inbound" or not destination):
         mode = "app"
     handoff = Handoff(practice_id=practice.id, call_id=call.id, staff_id=person.id if person else None,
                       room_name=room_of(call), mode=mode)
     db.add(handoff)
     await db.flush()
+    await routing.log(db, call, "human_transfer_attempt", mode, "configured handoff", "human")
     if mode == "app":
         title, body = texts.handoff_push(practice, call, target)
         await notifications.queue_push(db, practice, kind="handoff", title=title, body=body, call_id=call.id,
@@ -872,9 +888,10 @@ async def tool_transfer(db: AsyncSession, call: Call, args) -> dict:
     notifications.kick()
     events.publish(f"practice:{practice.id}")
     out = {"handoff_id": handoff.id, "mode": mode, "target": target,
-           "timeout_seconds": rules["timeout_seconds"]}
+           "timeout_seconds": rules["timeout_seconds"],
+           "transfer_failure": setup.get("transfer_failure", "take_message")}
     if mode == "sip":
-        out["transfer_to"] = f"tel:{person.phone}"
+        out["transfer_to"] = f"tel:{destination}"
     return out
 
 
@@ -885,9 +902,11 @@ async def tool_handoff_result(db: AsyncSession, call: Call, args) -> dict:
     practice = await _practice(db, call)
     handoff.status = args.status
     handoff.resolved_at = datetime.utcnow()
+    await routing.log(db, call, "human_transfer_result", args.status, "handoff result",
+                      "human" if args.status in ("joined", "transferred") else "ai")
     if args.status in ("joined", "transferred"):
         set_outcome(call, "transferred")
-    else:
+    elif args.status in ("unanswered", "failed"):
         staff = await booking.staff_of(db, practice.id)
         person = next((p for p in staff if p.id == handoff.staff_id), None)
         subject, body = texts.handoff_unanswered_email(practice, call, person.name if person else "")

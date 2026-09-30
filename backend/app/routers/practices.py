@@ -107,6 +107,13 @@ async def update_practice(practice_id: str, payload: PracticeIn, db: AsyncSessio
     await validate_assignments(db, practice_id, numbers=payload.phone_numbers, calendar_id=payload.calendar_id)
     await config_changes.lock_config(db, practice)
     columns = payload.to_columns()
+    # Older app versions do not know this field. A full PUT from one must not
+    # silently disable the clinic's configured forwarding profile.
+    if "call_routing" not in payload.model_fields_set:
+        columns["call_routing"] = practice.call_routing or {}
+    destination = (columns["call_routing"] or {}).get("ai_destination_number")
+    if destination and destination not in columns["phone_numbers"]:
+        raise HTTPException(status_code=422, detail="AI destination must be a provisioned inbound number")
     # Closures have their own calls; a full update never drops them.
     columns["rules"]["closures"] = (practice.rules or {}).get("closures") or []
     try:
