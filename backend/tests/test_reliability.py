@@ -333,12 +333,14 @@ async def test_notification_metric_counts_pending_failed_and_missing(sessions):
 async def test_repeated_cancellation_offers_waitlist_slot_once(sessions, monkeypatch):
     monkeypatch.setattr(receptionist, "utcnow", lambda: NOW)
     p = await seed(sessions, reminders={"waitlist": True})
+    today = datetime.now(ATH).date()
+    slot_day = today + timedelta(days=(7 - today.weekday()) % 7 + 7)
     async with sessions() as db:
-        appt = await book(db, p)
-        await book(db, p, start_time="09:30", customer_phone="test-0")
+        appt = await book(db, p, day=slot_day)
+        await book(db, p, day=slot_day, start_time="09:30", customer_phone="test-0")
         for i in range(2):
             db.add(WaitlistEntry(practice_id=p.id, customer_name="Test", phone=f"test-{i}",
-                                 service_id="check", date_from=DAY, date_to=DAY))
+                                 service_id="check", date_from=slot_day, date_to=slot_day))
         await db.commit()
         assert await receptionist.offer_freed_slot(db, p, appt)
         await db.commit()
