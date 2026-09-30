@@ -56,6 +56,12 @@
   #log .friend { background: var(--caller); } #log .agent { background: var(--agent); }
   #log .t { color: var(--muted); margin-right: 8px; }
   .controls { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; font-size: 13px; }
+  #summary { max-width: 1500px; margin: 16px auto 0; padding: 0 16px; }
+  #summary section { padding: 12px 14px; }
+  .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 16px; }
+  .kv div span { display: block; }
+  .kv b { font-variant-numeric: tabular-nums; }
+  select { font: inherit; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--soft); color: var(--ink); }
   .empty { color: var(--muted); padding: 20px 0; text-align: center; }
 </style>
 </head>
@@ -68,6 +74,11 @@
     <button>Connect</button>
   </form>
 </header>
+<div id="summary" hidden><section>
+  <div class="row"><h2>Summary</h2><label class="muted">window <select id="days"><option value="1">24 h</option><option value="7" selected>7 days</option><option value="30">30 days</option></select></label></div>
+  <div class="kv" id="sum-kv"></div>
+  <div class="muted" id="sum-note"></div>
+</section></div>
 <main>
   <section>
     <div class="row"><h2>Recent calls</h2><label class="toggle muted"><input type="checkbox" id="follow" checked> follow newest</label></div>
@@ -95,6 +106,13 @@
         <div class="scroll"><table>
           <thead><tr><th>Time</th><th>Who</th><th>STT</th><th>End of turn</th><th>LLM first token</th><th>TTS first byte</th><th>End-to-end</th></tr></thead>
           <tbody id="stages"></tbody>
+        </table></div>
+      </div>
+      <div class="panel">
+        <h2>Cost <span id="cost-total" style="text-transform:none"></span></h2>
+        <div class="scroll"><table>
+          <thead><tr><th>Component</th><th>Provider / model</th><th>Usage</th><th>USD</th></tr></thead>
+          <tbody id="costs"></tbody>
         </table></div>
       </div>
       <div class="panel">
@@ -131,6 +149,8 @@
   const clock = (d) => d ? d.toLocaleTimeString([], { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0") : "";
   const pct = (vals, p) => { if (!vals.length) return null; const s = [...vals].sort((a, b) => a - b);
                              return s[Math.min(s.length - 1, Math.round(p * (s.length - 1)))]; };
+  const usd = (v, complete) => v == null ? "" : (complete ? "" : "≥") + "$" + (v < 0.1 ? v.toFixed(4) : v.toFixed(2));
+  const qty = (q) => Object.entries(q || {}).filter(([, v]) => v != null).map(([k, v]) => `${k.replace(/_tokens$/, " tok").replace(/_/g, " ")} ${Number.isInteger(v) ? v : v.toFixed(1)}`).join(", ");
   const evTime = (e) => new Date(Number(e.observed_at_unix_ns) / 1e6);
   const el = (tag, text, className) => { const n = document.createElement(tag);
                                           if (text != null) n.textContent = text; if (className) n.className = className; return n; };
@@ -156,7 +176,7 @@
         top.append(el("span", c.practice || c.direction), el("span", live ? "● live" : c.status, live ? "live" : "muted"));
         const bottom = el("div", null, "row muted");
         bottom.append(el("span", new Date(c.created_at).toLocaleString([], { hour12: false })),
-                      el("span", c.turns ? `${c.turns} replies · p50 ${fmtMs(c.p50_ms)}` : (c.outcome || c.end_reason || "")));
+                      el("span", [c.turns ? `${c.turns} replies · p50 ${fmtMs(c.p50_ms)}` : (c.outcome || c.end_reason || ""), usd(c.cost_usd, c.cost_complete)].filter(Boolean).join(" · ")));
         li.append(top, bottom);
         li.onclick = () => { $("follow").checked = false; select(c.id); };
         list.append(li);
@@ -221,7 +241,37 @@
         el("td", e.event === "tool_completed" ? "error" : e.outcome, e.outcome === "returned" || e.outcome === "joined" ? "good" : "bad"),
         el("td", e.duration_ms == null ? "" : Math.round(e.duration_ms))); return tr; }));
 
+    const cb = call.cost_breakdown;
+    $("cost-total").textContent = cb ? `${usd(cb.known_usd, cb.complete)} · prices ${cb.pricing_version}` : "";
+    $("costs").replaceChildren(...(cb ? cb.lines : []).map((l) => { const tr = el("tr");
+      tr.append(el("td", l.component), el("td", `${l.provider} / ${l.model}`), el("td", qty(l.quantity)),
+        el("td", l.cost_usd == null ? (l.unpriced || "unknown") : usd(l.cost_usd, true), l.cost_usd == null ? "warn" : "")); return tr; }));
+    if (!cb) $("costs").append((() => { const tr = el("tr"); const td = el("td", "No usage yet: it arrives when the session ends.", "muted"); td.colSpan = 4; tr.append(td); return tr; })());
+
     renderLog(transcript, routing);
+  }
+
+  async function loadSummary() {
+    if (!key) return;
+    try {
+      const d = await api(`/monitor/api/summary?days=${$("days").value}`);
+      $("summary").hidden = false;
+      const c = d.cost, r = d.reply_ms;
+      const items = [
+        ["Calls", d.calls], ["Minutes", d.minutes], ["Successful", `${d.successful} / ${d.calls}`],
+        ["Appointments", d.appointments], ["Transfers", d.transfers], ["Failed", d.failed], ["Tool errors", d.tool_errors],
+        ["Reply p50 / p95 / p99", `${fmtMs(r.p50)} / ${fmtMs(r.p95)} / ${fmtMs(r.p99)}`, cls(r.p95)],
+        ["Replies measured", r.n],
+        ["STT p50", fmtMs(d.stages_ms.transcription_delay.p50)], ["End of turn p50", fmtMs(d.stages_ms.end_of_turn_delay.p50)],
+        ["LLM first token p50", fmtMs(d.stages_ms.llm_node_ttft.p50)], ["TTS first byte p50", fmtMs(d.stages_ms.tts_node_ttfb.p50)],
+        ["Tool p50 / p95", `${fmtMs(d.tool_ms.p50)} / ${fmtMs(d.tool_ms.p95)}`],
+        ["Cost (known)", usd(c.known_total, c.calls_complete === c.calls_priced)], ["Cost / call", usd(c.per_call, true)],
+        ["Cost / minute", usd(c.per_minute, true)], ["Cost / success", usd(c.per_successful_outcome, true)],
+        ...Object.entries(c.by_component).map(([k, v]) => [`Cost: ${k}`, usd(v, true)]),
+      ];
+      $("sum-kv").replaceChildren(...items.map(([k, v, klass]) => { const n = el("div"); n.append(el("span", k, "muted"), el("b", v == null || v === "" ? "–" : String(v), klass)); return n; }));
+      $("sum-note").textContent = c.unpriced.length ? `Priced ${c.calls_complete}/${c.calls_priced} calls completely. Unpriced: ${c.unpriced.join("; ")}. Add rates in backend/config/pricing.json.` : "";
+    } catch {}
   }
 
   function describe(e) {
@@ -265,7 +315,10 @@
 
   for (const id of ["f-transcript", "f-events", "f-states"]) $(id).onchange = () => latest && renderLog(latest.transcript, latest.routing);
   $("keyform").onsubmit = (ev) => { ev.preventDefault(); key = $("key").value.trim(); store.set("monitor-key", key); $("key").value = ""; start(); };
-  function start() { clearInterval(listTimer); loadCalls(); listTimer = setInterval(loadCalls, 3000); }
+  let summaryTimer = null;
+  $("days").onchange = loadSummary;
+  function start() { clearInterval(listTimer); clearInterval(summaryTimer); loadCalls(); loadSummary();
+                     listTimer = setInterval(loadCalls, 3000); summaryTimer = setInterval(loadSummary, 15000); }
   if (key) start();
 })();
 </script>

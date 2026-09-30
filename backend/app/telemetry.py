@@ -30,6 +30,36 @@ LatencyName = Literal[
 ]
 
 
+ModelName = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:/ -]+$")]
+Quantity = Annotated[float, Field(ge=0, le=1e12, allow_inf_nan=False)]
+
+
+class UsageLine(BaseModel):
+    """One provider/model's totals for a session, as reported by the SDK."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["llm_usage", "stt_usage", "tts_usage", "interruption_usage", "eot_usage"]
+    provider: ModelName
+    model: ModelName
+    input_tokens: Quantity | None = None
+    input_cached_tokens: Quantity | None = None
+    input_cache_creation_tokens: Quantity | None = None
+    input_audio_tokens: Quantity | None = None
+    input_cached_audio_tokens: Quantity | None = None
+    input_text_tokens: Quantity | None = None
+    input_cached_text_tokens: Quantity | None = None
+    input_image_tokens: Quantity | None = None
+    input_cached_image_tokens: Quantity | None = None
+    output_tokens: Quantity | None = None
+    output_audio_tokens: Quantity | None = None
+    output_text_tokens: Quantity | None = None
+    output_reasoning_tokens: Quantity | None = None
+    session_duration: Quantity | None = None
+    audio_duration: Quantity | None = None
+    characters_count: Quantity | None = None
+    total_requests: Quantity | None = None
+
+
 class TelemetryEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -39,6 +69,7 @@ class TelemetryEvent(BaseModel):
         "caller_speech_started", "caller_speech_stopped", "agent_state_changed",
         "response_latency_estimate", "message_metrics", "tool_completed",
         "tool_request_started", "tool_request_ended", "transfer_started", "transfer_ended",
+        "usage_reported",
     ]
     call_id: Identifier
     session_id: UUID
@@ -48,7 +79,7 @@ class TelemetryEvent(BaseModel):
     observed_at_unix_ns: Annotated[int, Field(ge=0, le=9_223_372_036_854_775_807)]
     elapsed_ns: Annotated[int, Field(ge=0, le=9_223_372_036_854_775_807)]
     turn_id: UUID | None = None
-    source: Literal["sdk_state", "sdk_message_metrics", "sdk_tool_batch", "worker_http", "worker_transfer"] | None = None
+    source: Literal["sdk_state", "sdk_message_metrics", "sdk_tool_batch", "worker_http", "worker_transfer", "sdk_usage"] | None = None
     old_state: Literal["initializing", "idle", "listening", "thinking", "speaking"] | None = None
     new_state: Literal["initializing", "idle", "listening", "thinking", "speaking"] | None = None
     accuracy: Literal["proxy_not_handset_playback"] | None = None
@@ -63,6 +94,7 @@ class TelemetryEvent(BaseModel):
     span_id: UUID | None = None
     handoff_id: Identifier | None = None
     mode: Literal["sip", "app"] | None = None
+    usage: Annotated[list[UsageLine], Field(min_length=1, max_length=20)] | None = None
     outcome: Literal["returned", "error", "cancelled", "joined", "failed", "unanswered"] | None = None
 
     @model_validator(mode="after")
@@ -76,6 +108,7 @@ class TelemetryEvent(BaseModel):
             "transfer_started": ("span_id", "handoff_id", "mode"),
             "transfer_ended": ("span_id", "handoff_id", "mode", "duration_ms", "outcome"),
             "agent_state_changed": ("old_state", "new_state"),
+            "usage_reported": ("usage",),
         }
         if any(getattr(self, name) is None for name in requirements.get(self.event, ())):
             raise ValueError("Missing fields for telemetry event")

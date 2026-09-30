@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import events, finalize, health, routing
+from app import costs, events, finalize, health, routing
 from app.auth import require_master_token
 from app.config import get_settings
 from app.database import get_db
@@ -45,6 +45,9 @@ async def ingest_telemetry(call_id: str, batch: TelemetryBatch, db: AsyncSession
     result = await db.execute(insert(CallTelemetryEvent).values(rows).on_conflict_do_nothing(
         constraint="uq_call_telemetry_sequence").returning(CallTelemetryEvent.id))
     inserted = len(result.scalars().all())
+    if inserted and any(event.event == "usage_reported" for event in batch.events):
+        await db.flush()
+        await costs.recompute(db, call)
     await db.commit()
     return {"inserted": inserted, "discarded": 0}
 
@@ -100,6 +103,7 @@ async def call_event(call_id: str, event: CallEvent, db: AsyncSession = Depends(
             call.ended_at = datetime.utcnow()
             if call.started_at:
                 call.duration_seconds = int((call.ended_at - call.started_at).total_seconds())
+            await costs.recompute(db, call)
             if call.direction == "inbound" and call.practice_id:
                 await routing.log(db, call, "call_ended", event.status.value,
                                   event.end_reason or "agent event", call.outcome or "")

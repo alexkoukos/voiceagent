@@ -229,3 +229,25 @@ def test_readable_log_lines_carry_timings_but_no_content(caplog):
     assert "call test-call reply after 1234 ms" in caplog.text
     assert "call test-call assistant timings: llm_node_ttft=400" in caplog.text
     assert "secret words" not in caplog.text
+
+
+def test_usage_report_keeps_numbers_only_and_runs_once():
+    from livekit.agents.metrics import LLMModelUsage, TTSModelUsage
+    tracker, records, _ = setup_tracker()
+    tracker.session = NS(usage=NS(model_usage=[
+        LLMModelUsage(provider="google", model="gemini-3.8-live", input_audio_tokens=900, output_audio_tokens=300),
+        TTSModelUsage(provider="elevenlabs", model="flash"),  # all zero: skipped
+    ]))
+    tracker.finish()
+    tracker.finish()
+    usage = [r for r in records if r["event"] == "usage_reported"]
+    assert len(usage) == 1
+    assert usage[0]["usage"] == [{"type": "llm_usage", "provider": "google", "model": "gemini-3.8-live",
+                                  "input_audio_tokens": 900, "output_audio_tokens": 300}]
+    assert records[-1]["event"] == "session_observation_ended"
+
+
+def test_usage_report_survives_missing_session():
+    tracker, records, _ = setup_tracker()
+    tracker.finish()
+    assert [r["event"] for r in records] == ["session_observation_ended"]
