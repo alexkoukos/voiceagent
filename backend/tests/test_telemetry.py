@@ -195,3 +195,19 @@ async def test_real_worker_payloads_upload_and_can_be_retrieved(telemetry_http):
     assert events[-1]["event"] == "session_observation_ended"
     assert [e["sequence"] for e in events] == list(range(1, 13))
     assert "PRIVATE" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_usage_event_is_validated_and_prices_the_call(telemetry_http, sessions):
+    http, cid = telemetry_http
+    path = f"/internal/calls/{cid}/telemetry"
+    usage = [{"type": "stt_usage", "provider": "livekit", "model": "deepgram/nova-3", "audio_duration": 60.0}]
+    bad = event(cid, 1, event="usage_reported", source="sdk_usage",
+                usage=[{**usage[0], "transcript": "secret"}])
+    assert (await http.post(path, headers=AGENT, json={"events": [bad]})).status_code == 422
+    good = event(cid, 1, event="usage_reported", source="sdk_usage", usage=usage)
+    assert (await http.post(path, headers=AGENT, json={"events": [good]})).json()["inserted"] == 1
+    async with sessions() as db:
+        call = await db.get(Call, cid)
+        stt = next(line for line in call.cost_breakdown["lines"] if line["component"] == "stt")
+        assert stt["cost_usd"] == pytest.approx(0.0058)

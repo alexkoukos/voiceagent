@@ -81,3 +81,22 @@ async def test_monitor_lists_latency_and_streams_by_cursor(monitor_http):
                             params={"after": live["next_after"]})).json()
     assert later["events"] == [] and later["next_after"] == live["next_after"]
     assert (await http.get("/monitor/api/calls/missing", headers=FOUNDER)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_summary_reports_spread_outcomes_and_unknown_costs(monitor_http, sessions):
+    http, call_id = monitor_http
+    async with sessions() as db:
+        call = await db.get(Call, call_id)
+        call.outcome, call.duration_seconds = "booked", 120
+        call.cost_breakdown = {"known_usd": 0.5, "complete": False, "lines": [
+            {"component": "llm", "provider": "g", "model": "m", "cost_usd": 0.5},
+            {"component": "livekit", "provider": "livekit", "model": "web", "cost_usd": None, "unpriced": "unknown rate"}]}
+        await db.commit()
+    assert (await http.get("/monitor/api/summary")).status_code == 403
+    data = (await http.get("/monitor/api/summary", headers=FOUNDER, params={"days": 1})).json()
+    assert data["calls"] == 1 and data["successful"] == 1 and data["appointments"] == 1
+    assert data["reply_ms"] == {"n": 3, "p50": 1200, "p95": 3000, "p99": 3000}
+    assert data["cost"]["per_call"] == 0.5 and data["cost"]["per_minute"] == 0.25
+    assert data["cost"]["calls_complete"] == 0
+    assert data["cost"]["unpriced"] == ["livekit livekit/web: unknown rate"]
