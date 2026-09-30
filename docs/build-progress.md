@@ -69,6 +69,35 @@ The full suite also exposed and fixed an existing missing `TranscriptRole` impor
 in call-event handling, and froze a waitlist regression test's clock so its fixed
 fixture date remains valid after September 28.
 
+## Piece 3 — live call monitor (2026-09-30)
+
+Telemetry was stored but readable only as raw JSON pages. `/monitor` is a single
+founder-only page, not a dashboard platform. It lists recent calls with reply count
+and p50 reply time. For the selected call it polls every second while the call is
+live and shows:
+
+- the headline metric, caller stops speaking → agent starts speaking: the last
+  reply, p50, p95 and a bar per reply (green < 1 s, amber < 2 s, red above)
+- SDK stage timings per message: STT, end of turn, LLM first token, TTS first byte,
+  end-to-end
+- backend tool and transfer spans with outcome and duration
+- one merged log: transcript, routing decisions and timing events (agent state
+  changes are optional)
+
+The page holds no data; the browser sends the founder key on every request and
+keeps it in local storage on that device. The worker also writes readable,
+content-free log lines (`call <id> reply after 1234 ms`, `... timings: ...`,
+`... tool_request <name> returned in 180 ms`) so plain Railway log tailing shows the
+same numbers.
+
+Verification: backend suite 133 passed (including the new monitor tests on Postgres),
+agent suite 58 passed. Not yet checked against a real call.
+
+Limits: reply time is still the SDK-state proxy described in [telemetry.md](telemetry.md).
+Transcript times are backend receive times and event times are worker clock times, so
+the merged log order between the two is approximate. There is no cost data yet
+(next piece).
+
 ## Next pieces, in order
 
 1. Capture provider usage and centralize versioned pricing. Preserve source usage

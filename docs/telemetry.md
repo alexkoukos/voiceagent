@@ -10,6 +10,17 @@ local JSON logs only. Set `AGENT_VERSION` to the deployed commit or release ID
 No provider credentials or real call are needed for the automated tests. Live-call
 acceptance and deployment are still separate steps.
 
+## Watch live
+
+Open `<backend>/monitor` and enter the founder API key (`ADMIN_API_TOKEN`). It follows
+the newest call by default and refreshes every second while that call is live. It shows
+reply times (last, p50, p95), stage timings, tool/transfer spans, and a merged log of
+transcript, routing and timing events. Data comes from `GET /monitor/api/calls` and
+`GET /monitor/api/calls/{call_id}?after=<cursor>`; both require the founder key.
+
+In worker logs, search for `reply after`, `timings:` and `tool_request` for the same
+numbers as plain text.
+
 ## Retrieve
 
 `GET /internal/calls/{call_id}/telemetry` requires the founder's `x-api-key`.

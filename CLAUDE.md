@@ -79,6 +79,7 @@ Code-complete through M6. First real call worked end to end (2026-09-24) on a **
 - The LiveKit secret and the Railway workspace token were pasted in chat on 2026-09-24: rotate both.
 
 ## Working notes
+- Live call timings and log: `<backend>/monitor` with the founder key (`ADMIN_API_TOKEN`); see `docs/telemetry.md`.
 - Python 3.14 breaks venv/ensurepip here; run backend code with `uv run --python 3.12 --with-requirements backend/requirements.txt ...`.
 - Run a single backend instance (live push keeps subscribers in memory).
 - Never commit `.env`.
