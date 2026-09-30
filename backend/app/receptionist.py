@@ -837,16 +837,30 @@ async def tool_take_message(db: AsyncSession, call: Call, args) -> dict:
     staff = await booking.staff_of(db, practice.id)
     person = booking.match_staff(staff, args.for_whom) if args.for_whom else None
     from app.schemas import normalize_phone
-    m = Message(
-        practice_id=practice.id, call_id=call.id, staff_id=person.id if person else None,
-        caller_name=args.caller_name.strip(), callback_number=normalize_phone(args.callback_number) if args.callback_number else call.caller_number,
-        reason=args.reason.strip(), best_time=args.best_time.strip(), urgent=args.urgent,
-    )
-    db.add(m)
+    staff_id = person.id if person else None
+    callback = normalize_phone(args.callback_number) if args.callback_number else call.caller_number
+    if callback and re.fullmatch(r"2\d{9}|69\d{8}", callback):
+        callback = "+30" + callback  # the model passes Greek numbers as spoken, without +30
+    # The model often calls this again as the caller adds details (EVAL-009, 2026-09-30):
+    # one call leaves one message per recipient, updated in place.
+    m = (await db.execute(select(Message).where(
+        Message.call_id == call.id, Message.staff_id.is_(None) if staff_id is None else Message.staff_id == staff_id,
+    ).order_by(Message.created_at).limit(1))).scalar_one_or_none()
+    was_urgent = bool(m and m.urgent)
+    if m is None:
+        m = Message(practice_id=practice.id, call_id=call.id, staff_id=staff_id, caller_name="", reason="",
+                    best_time="", urgent=False)
+        db.add(m)
+    for field, value in (("caller_name", args.caller_name.strip()), ("reason", args.reason.strip()),
+                         ("best_time", args.best_time.strip())):
+        if value:
+            setattr(m, field, value)
+    m.callback_number = callback or m.callback_number
+    m.urgent = m.urgent or args.urgent
     set_outcome(call, "message_taken")
     if call.use_case is None:
         call.use_case = "call_center"
-    if args.urgent:
+    if args.urgent and not was_urgent:
         add_flag(call, "urgent")
         await db.flush()
         subject, body = texts.urgent_message_email(practice, m)

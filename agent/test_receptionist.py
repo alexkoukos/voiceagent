@@ -119,11 +119,11 @@ async def test_readback_and_booking_use_the_transcribed_name():
         calls.append((name, args))
         return '{}'
 
-    receiver = SimpleNamespace(_rc=rc, _tool=book_tool)
-    await worker.ReceptionistAgent.prepare_action.__wrapped__(
+    receiver = SimpleNamespace(_rc=rc, _tool=book_tool, _spoken_already=lambda note: None)
+    assert await worker.ReceptionistAgent.prepare_action.__wrapped__(
         receiver, action="book", date="2026-09-28", time="17:15", service_id="first_visit",
         customer_name="Ανδρέας Σταθόπουλος",
-    )
+    ) is None  # the read-back speaks; no second LLM reply
     assert calls[0][1]["customer_name"] == "Αντρέας Αντετοκούμπο"
     assert rc._prepared_name == "Αντρέας Αντετοκούμπο"
 
@@ -188,3 +188,64 @@ async def test_first_availability_lookup_uses_the_recognized_caller_day():
     )
     assert sent[1]["when"] == "Την άλλη Τρίτη το απόγευμα"
     assert rc._availability_checked is True
+
+
+@pytest.mark.parametrize("engine,quiet", [("pipeline", True), ("text_pipeline", True),
+                                          ("realtime", False), ("openai", False)])
+def test_tools_that_already_spoke_ask_text_engines_for_no_reply(engine, quiet):
+    # EVAL-001: a note made Gemini reply empty (retried, then an error) or say
+    # "Συγγνώμη, δεν σας άκουσα" before the read-back.
+    receiver = SimpleNamespace(_rc=SimpleNamespace(engine=engine))
+    result = worker.ReceptionistAgent._spoken_already(receiver, "note")
+    assert result is None if quiet else result == "note"
+
+
+@pytest.mark.asyncio
+async def test_handoff_path_starts_the_transfer_in_code():
+    # EVAL-009: the model said "Μια στιγμή να σας συνδέσω" but never called transfer_to_human.
+    started = []
+
+    async def tool(name, args):
+        return {"path": "handoff", "target": "Δρ. Νίκος", "next": "call transfer_to_human"}
+
+    async def start_handoff(target):
+        started.append(target)
+        return {"status": "waiting", "say": "stay on the line"}
+
+    receiver = SimpleNamespace(_rc=SimpleNamespace(tool=tool, start_handoff=start_handoff))
+    result = await worker.ReceptionistAgent.route_call.__wrapped__(receiver, None, intent="human", staff="τον γιατρό")
+    assert started == ["Δρ. Νίκος"]
+    assert '"transfer"' in result and "do not call transfer_to_human" in result
+
+
+@pytest.mark.asyncio
+async def test_second_handoff_request_does_not_start_another_transfer():
+    tool = AsyncMock(return_value={"handoff_id": "h", "mode": "app", "timeout_seconds": 3})
+    receiver = SimpleNamespace(_handoff_pending=False, tool=tool, spawn=lambda coro: coro.close(),
+                               _wait_for_staff=lambda h: worker.asyncio.sleep(0))
+    first = await worker.ReceptionistCall.start_handoff(receiver, "γιατρό")
+    second = await worker.ReceptionistCall.start_handoff(receiver, "γιατρό")
+    assert first["status"] == "waiting" and second["status"] == "already_transferring"
+    tool.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_language_switch_waits_for_the_agent_swap(monkeypatch):
+    # EVAL-007: speaking before update_agent's swap finished hit the draining old agent.
+    monkeypatch.setattr(worker, "language_parts", lambda *args: {})
+    real_sleep = worker.asyncio.sleep
+    swapped = []
+
+    class Session:
+        _update_activity_atask = None
+
+        def update_agent(self, agent):
+            async def swap():
+                await real_sleep(0.05)
+                swapped.append(agent)
+            self._update_activity_atask = worker.asyncio.create_task(swap())
+
+    rc = SimpleNamespace(language="el", session=Session(), metadata={}, engine="pipeline", call_id="call",
+                         make_agent=lambda language, parts: f"agent-{language}")
+    await worker.ReceptionistCall.switch_language(rc, "en")
+    assert swapped == ["agent-en"] and rc.language == "en"

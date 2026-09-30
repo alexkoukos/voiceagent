@@ -98,14 +98,60 @@ Transcript times are backend receive times and event times are worker clock time
 the merged log order between the two is approximate. There is no cost data yet
 (next piece).
 
+## Piece 4: usage and cost per call (2026-09-30)
+
+The worker reports per provider/model usage at session end. The backend prices it from
+a central, dated price list into `calls.cost_breakdown` (migration `0028`). Unknown
+rates stay unknown and mark the breakdown incomplete. `/monitor` shows a cost table per
+call and a summary over a window of 24 h, 7 days or 30 days: calls, minutes, outcomes,
+reply p50/p95/p99, stage timings, cost per call, per minute and per successful outcome.
+See [telemetry.md](telemetry.md#cost-per-call).
+
+## Piece 5: Eval Suite V0.1 (2026-10-01)
+
+`agent/evals/`: ASTRA's ten scenarios plus EVAL-011 (no booking without a yes). They
+run the real receptionist agent in text mode against a local backend, and critical
+checks are on database state. CI workflow `evals.yml` (needs the `GEMINI_API_KEY`
+secret). See [evals.md](evals.md).
+
+First runs found six real bugs, all fixed, each with a regression test:
+
+1. **Extra LLM turn after tools that already spoke** (read-back, goodbye, end of call).
+   Gemini returned empty completions (four retries, then an error) or said «Συγγνώμη,
+   δεν σας άκουσα καλά» just before the read-back. Text engines now ask for no reply.
+2. **Transfer announced but never started.** The backend said `handoff` and the model
+   said «Μια στιγμή να σας συνδέσω» without calling `transfer_to_human`, so the caller
+   waited for nobody. The worker now starts the transfer in code, and a second request
+   cannot start a second transfer.
+3. **Duplicate messages.** Each follow-up detail created a new message (three for one
+   call). Now there is one message per call and recipient, updated in place, with the
+   urgent alert sent once.
+4. **The "English mode" line never played.** It was spoken while the old agent was still
+   draining, which raised an error that was only logged. The switch now waits for the swap.
+5. **Callback numbers without `+30`** when the model passed a spoken Greek number.
+   Now stored in E.164 format.
+6. Harness issues found while building it: read-backs went through the LLM (production
+   uses `say`), and a finished speech stayed "current" after an agent swap. Both fixed in
+   the harness; neither affected production.
+
+Seen but not fixed: Gemini once blocked a "say exactly this" read-back as
+`PROHIBITED_CONTENT` (that is the `realtime` engine's path), and once produced a
+malformed function call four times in a row. Repeat runs measure how often.
+English read-backs say the service's Greek name ("for Έλεγχος").
+
+## Piece 6: benchmark (2026-10-01)
+
+`run_evals.py --repeat N --baseline <file>` reports pass rate per eval, critical
+failures, turn and first-reply p50/p95/p99, tool error rate and cost per call. A lower
+critical pass rate than the baseline exits 1. Voice latency comes from `/monitor` after
+scripted audio calls, not from text runs.
+
+BASELINE_PLACEHOLDER
+
 ## Next pieces, in order
 
-1. Capture provider usage and centralize versioned pricing. Preserve source usage
-   and historical rates; report missing costs as unknown.
-2. Implement Eval Suite V0.1 using the ten scenarios in ASTRA.md, starting with
-   booking state assertions and existing booking tests. Keep audio/language cases
-   separately identifiable when they require live providers.
-3. Build repeatable benchmarks with p50/p95/p99, sample counts, correctness and cost.
-4. Use measured failures to improve the demo while beginning customer discovery.
-
-Do not postpone customer conversations until all four pieces are complete.
+1. Deploy, then one real test call with `/monitor` open. Fill in the LiveKit rates in
+   `pricing.json` from the invoice.
+2. Scripted audio calls (`scripts/scripted_calls.py`) against the deployment for voice
+   latency p50/p95 and EVAL-006.
+3. Customer discovery: local material in `sales/` (ignored by git). Start conversations now.

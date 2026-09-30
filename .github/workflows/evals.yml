@@ -1,0 +1,85 @@
+name: Evals
+
+# Eval Suite V0.1 with the real LLM against a throwaway backend + Postgres.
+# Critical eval failures fail the job (ASTRA: critical eval regression = release blocker).
+# Needs the repository secret GEMINI_API_KEY; without it the job is skipped with a notice.
+on:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: Runs per eval
+        default: "1"
+  pull_request:
+    branches: [main]
+    paths: ["agent/**", "backend/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evals:
+    name: Eval suite (text)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: voiceagent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U user -d voiceagent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/voiceagent
+      INTERNAL_API_TOKEN: ci-agent-token
+      ADMIN_API_TOKEN: ci-founder-token
+      AGENT_VERSION: ${{ github.sha }}
+    steps:
+      - name: Check for the model key
+        id: key
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::notice::GEMINI_API_KEY secret not set; skipping evals."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        if: steps.key.outputs.present == 'true'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        if: steps.key.outputs.present == 'true'
+        with:
+          python-version: '3.12'
+      - name: Start backend
+        if: steps.key.outputs.present == 'true'
+        run: |
+          python -m venv /tmp/backend && /tmp/backend/bin/pip install -q -r backend/requirements.txt
+          cd backend && /tmp/backend/bin/alembic upgrade head
+          nohup /tmp/backend/bin/uvicorn app.main:app --port 8000 > /tmp/backend.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:8000/health && break; sleep 1; done
+      - name: Run evals
+        if: steps.key.outputs.present == 'true'
+        run: |
+          python -m venv /tmp/agent && /tmp/agent/bin/pip install -q -r agent/requirements.txt
+          cd agent && /tmp/agent/bin/python evals/run_evals.py --backend http://localhost:8000 \
+            --repeat "${{ github.event.inputs.repeat || '1' }}"
+      - name: Upload results
+        if: always() && steps.key.outputs.present == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: eval-results
+          path: |
+            agent/evals/results/*.json
+            /tmp/backend.log
+          retention-days: 14
