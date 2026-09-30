@@ -114,7 +114,7 @@ run the real receptionist agent in text mode against a local backend, and critic
 checks are on database state. CI workflow `evals.yml` (needs the `GEMINI_API_KEY`
 secret). See [evals.md](evals.md).
 
-First runs found six real bugs, all fixed, each with a regression test:
+First runs found seven real bugs, all fixed, each with a regression test:
 
 1. **Extra LLM turn after tools that already spoke** (read-back, goodbye, end of call).
    Gemini returned empty completions (four retries, then an error) or said «Συγγνώμη,
@@ -130,7 +130,14 @@ First runs found six real bugs, all fixed, each with a regression test:
    draining, which raised an error that was only logged. The switch now waits for the swap.
 5. **Callback numbers without `+30`** when the model passed a spoken Greek number.
    Now stored in E.164 format.
-6. Harness issues found while building it: read-backs went through the LLM (production
+6. **Parallel tool calls raced.** Gemini emits `check_availability` and `prepare_action`
+   together; run concurrently, the read-back was rejected before the new offer was saved,
+   and the caller's yes arrived before the late read-back. Backend calls now run one at a
+   time, in order.
+7. **Reschedule offered another dentist's times.** Availability for a move was "anyone
+   free", but a move keeps the appointment's own dentist, so the move failed with
+   `slot_taken` after the caller's yes. A move now offers only that dentist's times.
+8. Harness issues found while building it: read-backs went through the LLM (production
    uses `say`), and a finished speech stayed "current" after an agent swap. Both fixed in
    the harness; neither affected production.
 

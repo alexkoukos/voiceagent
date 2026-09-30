@@ -1033,6 +1033,7 @@ class ReceptionistCall:
         self._prepared_name: str | None = None
         self._availability_checked = False
         self._handoff_pending = False
+        self._tool_lock = asyncio.Lock()
 
     def spawn(self, coro) -> None:
         t = asyncio.create_task(coro)
@@ -1074,6 +1075,14 @@ class ReceptionistCall:
         self._prepared_name = None
 
     async def tool(self, name: str, args: dict) -> dict:
+        # One backend call at a time, in the order they were made. Gemini emits parallel
+        # calls (check_availability + prepare_action in one turn); run concurrently, the
+        # read-back was prepared before the new offer was saved and was rejected as
+        # check_availability_first (EVAL-004, 2026-10-01).
+        async with self._tool_lock:
+            return await self._tool_request(name, args)
+
+    async def _tool_request(self, name: str, args: dict) -> dict:
         with observe_span(self.telemetry, "tool_request", tool_name=name, source="worker_http") as timing:
             try:
                 result = await backend_post(f"/internal/calls/{self.call_id}/tools/{name}", args)
