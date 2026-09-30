@@ -215,3 +215,17 @@ async def test_backend_tool_error_and_cancellation_emit_timing(monkeypatch):
         await worker.ReceptionistCall.tool(receiver, "book_appointment", {})
     assert records[-1]["outcome"] == "cancelled"
     assert "PRIVATE" not in json.dumps(records)
+
+
+def test_readable_log_lines_carry_timings_but_no_content(caplog):
+    tracker, _records, now = setup_tracker()
+    caplog.set_level("INFO", logger="voice.telemetry")
+    user(tracker, "listening", "speaking")
+    user(tracker, "speaking", "listening")
+    now[0] = 1_234_000_000
+    agent(tracker, "thinking", "speaking")
+    item = ChatMessage(role="assistant", content=["secret words"], metrics={"llm_node_ttft": 0.4})
+    tracker.message(ConversationItemAddedEvent(item=item))
+    assert "call test-call reply after 1234 ms" in caplog.text
+    assert "call test-call assistant timings: llm_node_ttft=400" in caplog.text
+    assert "secret words" not in caplog.text
