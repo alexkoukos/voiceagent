@@ -78,3 +78,13 @@ def test_transfer_check_accepts_the_after_hours_message_path():
     assert not check({"handoff_status_in": ["unanswered"]}, {"tools": wrong, "handoffs": [{"status": "unanswered"}]})[0]["passed"]
     open_ = [("route_call", {}, {"path": "handoff"})]
     assert not check({"handoff_status_in": ["unanswered"]}, {"tools": open_})[0]["passed"]
+
+
+def test_real_call_checks():
+    rejected = [("book_appointment", {}, {"error": "confirmation_required"}), ("book_appointment", {}, {"booked": True})]
+    assert not check({"no_reconfirm": True}, {"tools": rejected})[0]["passed"]
+    staff_named = {"new_appointments": [appt(customer_name="κυρία Παπαδοπούλου")]}
+    assert not check({"customer_not_staff": ["παπαδόπουλ"]}, staff_named)[0]["passed"]
+    switched = {"tools": [("set_language", {"language": "en"}, {}), ("set_language", {"language": "el"}, {})]}
+    result = check({"no_language_switch_to": "el"}, switched)[0]
+    assert not result["passed"] and result["critical"]
