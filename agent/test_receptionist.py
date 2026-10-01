@@ -348,3 +348,34 @@ async def test_model_filler_after_ours_is_dropped():
     assert await run(["Μια στιγμή να δω… Ένα λεπτό… Ναι, έχουμε."]) == "Ναι, έχουμε."
     assert await run(["Η πρώτη επίσκεψη κοστίζει πενήντα ευρώ."]) == "Η πρώτη επίσκεψη κοστίζει πενήντα ευρώ."
     assert await run(["Ένα λεπτό…"]) == ""
+
+
+@pytest.mark.asyncio
+async def test_sparring_heckles_a_long_turn_once(monkeypatch):
+    import asyncio
+    import agent
+
+    class FakeSession:
+        def __init__(self):
+            self.handlers, self.said, self.options = {}, [], None
+        def on(self, event):
+            def register(fn):
+                self.handlers[event] = fn
+                return fn
+            return register
+        def update_options(self, **kwargs): self.options = kwargs
+        def say(self, text, **kwargs): self.said.append(text)
+
+    monkeypatch.setattr(agent, "HECKLE_AFTER_SECONDS", 0.05)
+    session = FakeSession()
+    agent.heckle_while_talking(session, "call")
+    assert session.options["endpointing_opts"]["max_delay"] <= 0.5
+    state = session.handlers["user_state_changed"]
+    state(type("E", (), {"new_state": "speaking"}))
+    await asyncio.sleep(0.1)
+    assert len(session.said) == 1 and session.said[0] in agent.HECKLES
+    # A short turn is not heckled, and the gap stops a second heckle straight after.
+    state(type("E", (), {"new_state": "listening"}))
+    state(type("E", (), {"new_state": "speaking"}))
+    await asyncio.sleep(0.1)
+    assert len(session.said) == 1

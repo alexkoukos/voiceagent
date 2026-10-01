@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     sip_outbound_number: str = ""
     # The owner's own number, verified with Telnyx, for calls placed "from my number".
     own_caller_number: str = ""
+    # Internal web-only "sparring" page (/sparring/<token>): the agent argues and swears
+    # back. Empty turns the page off.
+    sparring_token: str = ""
     telnyx_public_key: str = ""
 
     # S3-compatible recording storage (a Railway bucket, Cloudflare R2, ...).
