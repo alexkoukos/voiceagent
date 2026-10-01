@@ -72,4 +72,13 @@ async def test_recompute_sums_every_session(sessions):
         await db.flush()
         await costs.recompute(db, row)
         tts = [line for line in row.cost_breakdown["lines"] if line["component"] == "tts"]
-        assert len(tts) == 2 and row.cost_breakdown["known_usd"] == pytest.approx(0.08)
+        assert len(tts) == 2 and row.cost_breakdown["known_usd"] == pytest.approx(0.08 + 0.001)  # + LiveKit web minute
+
+
+def test_livekit_rate_per_direction_from_october():
+    oct_call = SimpleNamespace(direction="web", duration_seconds=60, created_at=datetime(2026, 10, 2))
+    result = costs.breakdown(oct_call, [{"type": "eot_usage", "provider": "livekit", "model": "turn-detector",
+                                         "total_requests": 12}])
+    assert result["pricing_version"] == "2026-10-01"
+    assert result["complete"] and result["known_usd"] == pytest.approx(0.001)
+    assert costs.breakdown(call(), [])["pricing_version"] == "2026-09-30"  # earlier calls keep their prices

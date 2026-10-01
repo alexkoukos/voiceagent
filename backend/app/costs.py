@@ -78,7 +78,10 @@ def breakdown(call: Call, usage: list[dict]) -> dict:
     lines = [price_usage(version, item) for item in usage]
     minutes = call.duration_seconds / 60 if call.duration_seconds is not None else None
     telephony_rate = version["telephony_usd_per_minute"].get(call.direction)
-    for component, rate in (("telephony", telephony_rate), ("livekit", version.get("livekit_usd_per_minute"))):
+    livekit_rate = version.get("livekit_usd_per_minute")
+    if isinstance(livekit_rate, dict):  # per direction
+        livekit_rate = livekit_rate.get(call.direction)
+    for component, rate in (("telephony", telephony_rate), ("livekit", livekit_rate)):
         if component == "telephony" and call.direction == "web":
             continue
         line = {"component": component, "provider": "telnyx" if component == "telephony" else "livekit",

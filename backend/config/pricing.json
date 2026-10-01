@@ -11,20 +11,172 @@
         "telnyx": "https://telnyx.com/pricing/elastic-sip (US pay-as-you-go, read 2026-09-30); outbound rate observed for Greek mobiles from the US number on 2026-09-25"
       },
       "models": [
-        {"type": "llm_usage", "model_contains": "3.8-live", "usd_per_million": {"input_text": 0.75, "input_audio": 3.0, "output_text": 4.5, "output_audio": 12.0}},
-        {"type": "llm_usage", "model_contains": "3.5-flash-lite", "usd_per_million": {"input": 0.30, "output": 2.50}},
-        {"type": "llm_usage", "model_contains": "3.1-flash-lite", "usd_per_million": {"input_text": 0.25, "input_audio": 0.50, "input": 0.25, "output": 1.50}},
-        {"type": "stt_usage", "model_contains": "scribe", "usd_per_minute": 0.0065},
-        {"type": "stt_usage", "model_contains": "nova-3", "usd_per_minute": 0.0058},
-        {"type": "tts_usage", "model_contains": "flash", "usd_per_1k_characters": 0.04},
-        {"type": "tts_usage", "model_contains": "turbo", "usd_per_1k_characters": 0.04},
-        {"type": "tts_usage", "model_contains": "v3", "usd_per_1k_characters": 0.08},
-        {"type": "tts_usage", "model_contains": "multilingual", "usd_per_1k_characters": 0.08},
-        {"type": "eot_usage", "model_contains": "", "usd_per_request": null},
-        {"type": "interruption_usage", "model_contains": "", "usd_per_request": null}
+        {
+          "type": "llm_usage",
+          "model_contains": "3.8-live",
+          "usd_per_million": {
+            "input_text": 0.75,
+            "input_audio": 3.0,
+            "output_text": 4.5,
+            "output_audio": 12.0
+          }
+        },
+        {
+          "type": "llm_usage",
+          "model_contains": "3.5-flash-lite",
+          "usd_per_million": {
+            "input": 0.3,
+            "output": 2.5
+          }
+        },
+        {
+          "type": "llm_usage",
+          "model_contains": "3.1-flash-lite",
+          "usd_per_million": {
+            "input_text": 0.25,
+            "input_audio": 0.5,
+            "input": 0.25,
+            "output": 1.5
+          }
+        },
+        {
+          "type": "stt_usage",
+          "model_contains": "scribe",
+          "usd_per_minute": 0.0065
+        },
+        {
+          "type": "stt_usage",
+          "model_contains": "nova-3",
+          "usd_per_minute": 0.0058
+        },
+        {
+          "type": "tts_usage",
+          "model_contains": "flash",
+          "usd_per_1k_characters": 0.04
+        },
+        {
+          "type": "tts_usage",
+          "model_contains": "turbo",
+          "usd_per_1k_characters": 0.04
+        },
+        {
+          "type": "tts_usage",
+          "model_contains": "v3",
+          "usd_per_1k_characters": 0.08
+        },
+        {
+          "type": "tts_usage",
+          "model_contains": "multilingual",
+          "usd_per_1k_characters": 0.08
+        },
+        {
+          "type": "eot_usage",
+          "model_contains": "",
+          "usd_per_request": null
+        },
+        {
+          "type": "interruption_usage",
+          "model_contains": "",
+          "usd_per_request": null
+        }
       ],
-      "telephony_usd_per_minute": {"inbound": 0.0032, "outbound": 0.37, "web": 0},
+      "telephony_usd_per_minute": {
+        "inbound": 0.0032,
+        "outbound": 0.37,
+        "web": 0
+      },
       "livekit_usd_per_minute": null
+    },
+    {
+      "id": "2026-10-01",
+      "effective_from": "2026-10-01",
+      "sources": {
+        "gemini": "https://ai.google.dev/gemini-api/docs/pricing (paid tier, read 2026-09-30)",
+        "elevenlabs": "https://elevenlabs.io/pricing/api (pay-as-you-go, read 2026-09-30)",
+        "livekit_inference": "https://livekit.com/pricing/inference (Build/Ship plan, read 2026-09-30)",
+        "telnyx": "https://telnyx.com/pricing/elastic-sip (US pay-as-you-go, read 2026-09-30); outbound rate observed for Greek mobiles from the US number on 2026-09-25",
+        "livekit": "https://livekit.com/pricing (read 2026-10-01): list prices after the plan's included minutes. The agent is self-hosted (Railway), so no agent-session minutes. Web: caller + agent participants at $0.0005/min each. Phone: SIP $0.004/min (Ship) + agent participant $0.0005/min. Turn detection runs locally off LiveKit hosting (free)."
+      },
+      "models": [
+        {
+          "type": "llm_usage",
+          "model_contains": "3.8-live",
+          "usd_per_million": {
+            "input_text": 0.75,
+            "input_audio": 3.0,
+            "output_text": 4.5,
+            "output_audio": 12.0
+          }
+        },
+        {
+          "type": "llm_usage",
+          "model_contains": "3.5-flash-lite",
+          "usd_per_million": {
+            "input": 0.3,
+            "output": 2.5
+          }
+        },
+        {
+          "type": "llm_usage",
+          "model_contains": "3.1-flash-lite",
+          "usd_per_million": {
+            "input_text": 0.25,
+            "input_audio": 0.5,
+            "input": 0.25,
+            "output": 1.5
+          }
+        },
+        {
+          "type": "stt_usage",
+          "model_contains": "scribe",
+          "usd_per_minute": 0.0065
+        },
+        {
+          "type": "stt_usage",
+          "model_contains": "nova-3",
+          "usd_per_minute": 0.0058
+        },
+        {
+          "type": "tts_usage",
+          "model_contains": "flash",
+          "usd_per_1k_characters": 0.04
+        },
+        {
+          "type": "tts_usage",
+          "model_contains": "turbo",
+          "usd_per_1k_characters": 0.04
+        },
+        {
+          "type": "tts_usage",
+          "model_contains": "v3",
+          "usd_per_1k_characters": 0.08
+        },
+        {
+          "type": "tts_usage",
+          "model_contains": "multilingual",
+          "usd_per_1k_characters": 0.08
+        },
+        {
+          "type": "eot_usage",
+          "model_contains": "",
+          "usd_per_request": 0
+        },
+        {
+          "type": "interruption_usage",
+          "model_contains": "",
+          "usd_per_request": null
+        }
+      ],
+      "telephony_usd_per_minute": {
+        "inbound": 0.0032,
+        "outbound": 0.37,
+        "web": 0
+      },
+      "livekit_usd_per_minute": {
+        "web": 0.001,
+        "inbound": 0.0045,
+        "outbound": 0.0045
+      }
     }
   ]
 }
