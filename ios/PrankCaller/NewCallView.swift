@@ -3,13 +3,13 @@ import SwiftUI
 /// Main screen: pick a friend, describe the call (or start from a preset), call.
 struct NewCallView: View {
     private let api = APIClient()
-    // Stable keys; the agent maps each to an ElevenLabs (or Gemini) voice.
+    // Stable keys; the agent maps them to native Greek voices for Greek calls
+    // (Aria and Fatsis, agent/voices.py) and to matching voices otherwise.
     static let voices: [(id: String, label: String)] = [
-        ("default", "Γυναικεία, ήρεμη"), ("Aoede", "Γυναικεία, ανάλαφρη"),
-        ("Puck", "Αντρική, κεφάτη"), ("Charon", "Αντρική, ήρεμη"),
-        ("Fenrir", "Αντρική, ενθουσιώδης"), ("Algenib", "Αντρική, τραχιά"),
-        ("Algieba", "Αντρική, απαλή"),
+        ("Kore", "Γυναικεία"), ("Zubenelgenubi", "Ανδρική"),
     ]
+    /// Presets saved with an older voice keep its gender.
+    static let maleKeys: Set<String> = ["Puck", "Charon", "Fenrir", "Algenib", "Algieba", "Zubenelgenubi"]
     @State private var friends: [Friend] = []
     @State private var templates: [PromptTemplate] = []
     @State private var loaded = false
@@ -17,7 +17,7 @@ struct NewCallView: View {
     @State private var prankId = ""
     /// The whole call in the user's words; a preset just fills it in.
     @State private var scenario = ""
-    @State private var voice = "Puck"
+    @State private var voice = "Kore"
     @State private var maxMinutes = 3
     @State private var fromOwnNumber = false
     @State private var ownNumberAvailable = false
@@ -209,7 +209,7 @@ struct NewCallView: View {
                 Picker("Φωνή", selection: $voice) {
                     ForEach(Self.voices, id: \.id) { Text($0.label).tag($0.id) }
                 }
-                .pickerStyle(.menu)
+                .pickerStyle(.segmented)
                 if !languages.isEmpty {
                     Picker("Γλώσσα", selection: $language) {
                         Text(dialMode ? "Αυτόματα, από τον αριθμό" : "Αυτόματα (\(languageName(selectedFriend?.language)))").tag(String?.none)
@@ -257,7 +257,7 @@ struct NewCallView: View {
         prankId = t.id
         scenario = t.scenario
         notice = nil
-        if let v = t.voice, Self.voices.contains(where: { $0.id == v }) { voice = v }
+        if let v = t.voice { voice = Self.maleKeys.contains(v) ? "Zubenelgenubi" : "Kore" }
     }
 
     private func load() async {
