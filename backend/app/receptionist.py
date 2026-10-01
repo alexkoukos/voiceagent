@@ -505,7 +505,7 @@ async def _department_staff(db: AsyncSession, practice: Practice, call: Call) ->
 
 async def tool_route(db: AsyncSession, call: Call, args) -> dict:
     practice = await _practice(db, call)
-    if args.intent == "off_topic" and await _short_last_turn(db, call):
+    if args.intent == "off_topic" and (await _short_last_turn(db, call) or await _after_clarify(db, call)):
         # Two words or fewer is more likely misheard audio («Μακρόνησος. Τίποτα.» for
         # «Μ' ακούτε;», 2026-10-01) than trolling: never a strike towards hanging up.
         await routing.log(db, call, "intent", "short_turn", "short turn not counted as off-topic", "clarify")
@@ -547,6 +547,27 @@ async def _names_staff(db: AsyncSession, practice: Practice, name: str | None) -
     if len(rest) == len(words) or not rest:
         return False
     return booking.match_staff(staff, " ".join(rest)) is not None
+
+
+CLARIFY_WORDS = ("δεν σας καταλαβα", "δεν σας ακουσα", "δεν καταλαβα", "επαναλαβετε", "ποια μερα ειπατε",
+                 "didn t catch", "didn t understand", "could you repeat", "say that again")
+
+
+async def _after_clarify(db: AsyncSession, call: Call) -> bool:
+    """The caller is answering our own «δεν σας κατάλαβα»: confusion or frustration, not
+    trolling («Όχι, όχι, ρε, τώρα το έφτανα» got a strike, 2026-10-01)."""
+    caller = (await db.execute(select(TranscriptEntry).where(
+        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.friend,
+    ).order_by(TranscriptEntry.created_at.desc()).limit(1))).scalar_one_or_none()
+    if caller is None:
+        return False
+    # What we said before their latest turn; a filler of this turn may already be stored.
+    last = (await db.execute(select(TranscriptEntry).where(
+        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.agent,
+        TranscriptEntry.created_at < caller.created_at,
+    ).order_by(TranscriptEntry.created_at.desc()).limit(1))).scalar_one_or_none()
+    spaced = " ".join(re.findall(r"\w+", booking._plain(last.text if last else "")))
+    return any(phrase in spaced for phrase in CLARIFY_WORDS)
 
 
 async def _short_last_turn(db: AsyncSession, call: Call) -> bool:
