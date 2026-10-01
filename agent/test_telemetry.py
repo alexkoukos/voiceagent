@@ -253,3 +253,19 @@ def test_usage_report_survives_missing_session():
     tracker, records, _ = setup_tracker()
     tracker.finish()
     assert [r["event"] for r in records] == ["session_observation_ended"]
+
+
+def test_answer_latency_skips_fillers_and_counts_once_per_turn():
+    tracker, records, now = setup_tracker()
+    user(tracker, "listening", "speaking")
+    user(tracker, "speaking", "listening")
+    now[0] = 400_000_000
+    agent(tracker, "thinking", "speaking")  # the filler: first sound only
+    now[0] = 2_100_000_000
+    tracker.answer_started(650.0)
+    tracker.answer_started(300.0)  # second model call in the same turn: TTFT only
+    answers = [r for r in records if r["event"] == "answer_latency_estimate"]
+    assert [a["latency_ms"] for a in answers] == [2100]
+    assert answers[0]["accuracy"] == "proxy_text_ready_not_playback"
+    assert [r["latency_ms"] for r in records if r["event"] == "model_ttft"] == [650.0, 300.0]
+    assert [r["latency_ms"] for r in records if r["event"] == "response_latency_estimate"] == [400]

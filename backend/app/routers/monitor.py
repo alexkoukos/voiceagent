@@ -47,10 +47,14 @@ async def recent_calls(limit: int = Query(default=25, ge=1, le=100), db: AsyncSe
     if ids:
         events = (await db.execute(select(CallTelemetryEvent.call_id, CallTelemetryEvent.payload).where(
             CallTelemetryEvent.call_id.in_(ids),
-            CallTelemetryEvent.payload["event"].as_string() == "response_latency_estimate",
+            CallTelemetryEvent.payload["event"].as_string().in_(["answer_latency_estimate", "response_latency_estimate"]),
         ))).all()
+        answers: dict[str, list[float]] = {}
         for call_id, payload in events:
-            latencies.setdefault(call_id, []).append(payload["latency_ms"])
+            target = answers if payload["event"] == "answer_latency_estimate" else latencies
+            target.setdefault(call_id, []).append(payload["latency_ms"])
+        # Older calls have only the first-sound estimate (which includes fillers).
+        latencies = {call_id: answers.get(call_id) or values for call_id, values in latencies.items()}
     result = []
     for call, practice in rows:
         values = latencies.get(call.id, [])
@@ -113,16 +117,21 @@ async def summary(days: int = Query(default=7, ge=1, le=90), db: AsyncSession = 
     since = datetime.utcnow() - timedelta(days=days)
     calls = (await db.execute(select(Call).where(Call.created_at >= since))).scalars().all()
     ids = [call.id for call in calls]
-    replies, tools, stages = [], [], {name: [] for name in STAGES}
+    replies, answers, ttft, tools, stages = [], [], [], [], {name: [] for name in STAGES}
     if ids:
         events = (await db.execute(select(CallTelemetryEvent.payload).where(
             CallTelemetryEvent.call_id.in_(ids),
             CallTelemetryEvent.payload["event"].as_string().in_(
-                ["response_latency_estimate", "tool_request_ended", "message_metrics"]),
+                ["response_latency_estimate", "answer_latency_estimate", "model_ttft",
+                 "tool_request_ended", "message_metrics"]),
         ))).scalars().all()
         for event in events:
             if event["event"] == "response_latency_estimate":
                 replies.append(event["latency_ms"])
+            elif event["event"] == "answer_latency_estimate":
+                answers.append(event["latency_ms"])
+            elif event["event"] == "model_ttft":
+                ttft.append(event["latency_ms"])
             elif event["event"] == "tool_request_ended":
                 tools.append(event["duration_ms"])
             else:
@@ -146,6 +155,7 @@ async def summary(days: int = Query(default=7, ge=1, le=90), db: AsyncSession = 
         "failed": sum(1 for call in calls if call.status.value == "failed" or call.outcome == "failed"),
         "transfers": outcomes["transferred"], "appointments": outcomes["booked"],
         "tool_errors": sum(1 for call in calls if "tool_error" in (call.flags or [])),
+        "answer_ms": spread(answers), "model_ttft_ms": spread(ttft),
         "reply_ms": spread(replies), "tool_ms": spread(tools),
         "stages_ms": {name.removesuffix("_ms"): spread(values) for name, values in stages.items()},
         "cost": {

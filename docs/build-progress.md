@@ -173,6 +173,45 @@ Costs are a lower bound: LiveKit minutes are unpriced. EVAL-010's Gemini
 `MALFORMED_FUNCTION_CALL` appeared in 2 of 9 earlier runs and 0 of 3 here: still a known,
 intermittent provider failure.
 
+## Piece 7: fixes from the first real demo call (2026-10-01)
+
+The first call on the deployment (web demo, 3:16, booked, $0.15 measured) showed:
+
+- **Greeting and goodbye rushed and garbled.** Fixed lines were streamed through Flash, and the
+  English hint was read by the Greek voice. Now voiced whole with `eleven_multilingual_v2`
+  (`PRERENDER_TTS_MODEL`), split by language, and cached on disk for later calls in the
+  container. Streaming is the fallback.
+- **Latency was hidden by fillers.** The old "reply" metric stopped at «Λοιπόν…», and
+  `llm_node_ttft` read ~501 ms because the filler fires at 0.5 s. New events:
+  `answer_latency_estimate` (to the answer's first real words) and `model_ttft`. `/monitor`
+  now leads with the answer time. Per turn the call showed ~1.0–1.2 s waiting for end of
+  speech (no Greek turn model), then a tool round and a second model round.
+- **«Μάλιστα» was not a yes.** Accepted now, as are σύμφωνοι, βεβαίως, ακριβώς, έγινε,
+  «κλείσ' το» and others. Negatives still win.
+- **The dentist's name was booked as the caller's** («κυρία Παπαδοπούλου»). A title +
+  staff surname, or a staff member's exact name, is refused as the customer name. Patients
+  who share the surname are unaffected.
+- **«…conversation in Greek?» left English mode.** A language now switches only on a short
+  request or with "mode"/"speak"/"παρακαλώ".
+- **Misheard noise counted towards hanging up** («Μακρόνησος. Τίποτα.»). Off-topic turns
+  of two words or fewer ask the caller to repeat instead of counting as a strike.
+- The prompt now says to call `route_call` only when the request changes, and that the
+  code starts transfers.
+
+New evals: EVAL-012 («Μάλιστα»), EVAL-013 (caller vs dentist name), EVAL-014 (English
+mode stays), EVAL-015 («Σύμφωνοι»). EVAL-010 now includes the misheard line.
+
+Evals after the fixes (14 text evals × 3, local): 41/42 runs passed. The one failure was
+harness-made: a text-mode wait timed out three times and outlasted the backend's 5-minute
+offer window. Harness waits are now 30 s and counted. First reply p50 769 ms / p95 1839 ms
+(text only). Two of 227 turns had a failed model reply and recovered by asking the caller to
+repeat. CI passed on PR #22.
+
+Planned but not done: cutting the prompt to under ~6k tokens. It is dense and every rule has
+a reason, and Gemini already caches about half the input. Decide after measuring
+`model_ttft` on real calls. End-of-turn timing is a Railway setting (`TURN_MAX_DELAY_MS`,
+`ENDPOINT_MIN_DELAY`).
+
 ## Next pieces, in order
 
 1. Deploy, then one real test call with `/monitor` open. Fill in the LiveKit rates in
