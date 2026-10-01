@@ -23,7 +23,7 @@ Spec: `AI Voice Receptionist 2.0 PRD.md`. Migrations 0012 + 0013. Nothing has ru
 ## Checkpoint (2026-09-25, end of session)
 
 **Live on Railway now**
-- Agent: `AGENT_ENGINE=realtime` (Gemini `gemini-3.8-live`), `REALTIME_SILENCE_MS=400`, `NUM_IDLE_PROCESSES=0`, `NOISE_CANCELLATION=off`. Each turn is logged as `call <id> friend|agent: <text>`: read those first after a test call.
+- Agent (2026-10-01): `AGENT_ENGINE=pipeline` for app calls too, the same engine as the receptionist (Gemini Live misheard Greek phone calls badly: «Πάρε Χάπις hour», «comunicare»). `SCRIBE_SILENCE_SECS=0.5` (0.3 split turns and was slower), `TURN_MAX_DELAY_MS=700`, `ENDPOINT_MIN_DELAY=0.3`. Earlier: `REALTIME_SILENCE_MS=400`, `NUM_IDLE_PROCESSES=0`, `NOISE_CANCELLATION=off`. Each turn is logged as `call <id> friend|agent: <text>`: read those first after a test call.
 - Backend: master prompt cut to speaking style + safety, with a strict "only the call's language" rule (dropping it made Gemini drift into Spanish/Chinese). The app sends one free-text description in `scenario`; persona/context/reveal are optional (older builds still work). Migrations 0009 (fold presets into one text) and 0010 (delete built-in presets) are deployed; only user-saved presets remain. Not confirmed on live data.
 - iOS (installed on the iPhone 2026-09-25): one textbox, preset chips that fill it, "Αποθήκευση ως σενάριο". Default voice is male (`Puck`).
 
@@ -64,14 +64,14 @@ Code-complete through M6. First real call worked end to end (2026-09-24) on a **
 - Open questions: Gemini Greek quality over phone audio, latency, 210 caller ID on Greek mobiles.
 
 **Voice pipeline (2026-09-25)**
-- Agent has two engines (`AGENT_ENGINE`): `pipeline` (ElevenLabs Scribe v2 realtime -> gemini-3.5-flash-lite -> ElevenLabs Flash v2.5, LiveKit Cloud turn detector, fillers, opening line pre-rendered with eleven_v3 during the ring) and `realtime` (Gemini Live). Railway ran `pipeline` from 2026-09-25 but Scribe mangled Greek phone audio; since 2026-09-25 it runs `realtime` again (`REALTIME_SILENCE_MS=400`) (new ElevenLabs key with `text_to_speech` + `speech_to_text`; `voices_read` isn't needed). Not yet tested on a real call; fall back with `AGENT_ENGINE=realtime`.
+- Agent has two engines (`AGENT_ENGINE`): `pipeline` (ElevenLabs Scribe v2 realtime -> gemini-3.5-flash-lite -> ElevenLabs Flash v2.5, LiveKit Cloud turn detector, fillers, opening line pre-rendered with eleven_v3 during the ring) and `realtime` (Gemini Live). Railway ran `pipeline` from 2026-09-25 but Scribe mangled Greek phone audio; it then ran `realtime` until 2026-10-01, when app calls moved back to `pipeline` (see the top checkpoint). The ElevenLabs key has `text_to_speech`, `speech_to_text` and `voices_read` (for browsing the Greek voice library). Fall back with `AGENT_ENGINE=realtime`.
 - The agent runs in Railway EU West (LiveKit region "Germany 2"); backend + Postgres stay in US West together. Before the Greek go-live, move backend + Postgres to EU West too (co-located) — tracked in `PRD_STATUS.md` ("Deployment: move backend + Postgres to EU West").
 - Don't use `livekit-plugins-turn-detector` on Railway: its local model process gets OOM-killed and takes the worker down. Use `inference.TurnDetector(local_fallback=False)`. Off LiveKit Cloud hosting it resolves to the local v1-mini model, which has no Greek, so Greek turns end on `max_delay`. Forcing `version="v1"` (cloud) got every call OOM-killed (exit -9) on 2026-09-25.
 - Test without phoning: local worker with `AGENT_NAME=prank-caller-test`, dispatch with metadata `test_no_dial: true` (skips dial and recording). Realtime engine measured ~2 s from end of speech to reply.
 - Call language comes from the friend's phone prefix (`backend/app/languages.py`); non-Greek calls use `config/master_prompt.en.md`.
 
 **Call from my number**
-- `OWN_CALLER_NUMBER` (the owner's Telnyx-verified number) is set on Railway and added to the LiveKit trunk's numbers. The app shows a "Call from my number" toggle when `/options` says it's available. Not yet tested on a real call.
+- `OWN_CALLER_NUMBER` (the owner's Telnyx-verified number) is set on Railway and added to the LiveKit trunk's numbers. The app shows a "Call from my number" toggle when `/options` says it's available. Tested 2026-10-01: Telnyx refused it from the US route (404 D11, then 503 No Routes Found). An ANI override set to the owner's mobile on the Telnyx credential connection broke every call, own number or not; it was cleared. Don't set it again.
 
 **Security state**
 - All routes except `/health` need `x-api-key` (app) or `x-agent-token` (agent); `/docs` and `/openapi.json` are off unless `ENABLE_DOCS=true`; the Telnyx webhook rejects unsigned requests and returns 503 when no key is set.
