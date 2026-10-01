@@ -35,9 +35,10 @@ LiveKit minutes. It is recomputed when usage arrives, when the call ends and at 
   version; never edit an old one.
 - An unknown rate or an unmatched model gives `cost_usd: null` and `complete: false`.
   `known_usd` is then a lower bound. `/monitor` lists what is unpriced.
-- Rates on 2026-09-30 came from the providers' public price pages (sources are in the
-  file). The LiveKit agent-minute and turn-detector rates were not published there: fill
-  them in from the invoice.
+- Rates come from the providers' public price pages (sources are in the file). Version
+  `2026-10-01` adds LiveKit: the agent is self-hosted, so participant minutes (+ SIP for
+  phone calls) apply, not agent-session minutes; local turn detection is free. These are
+  list prices after the plan's included minutes, so check the plan against the invoice.
 - The existing `cost_estimate` (EUR, flat per-minute) is unchanged and still drives the
   monthly cost cap.
 - Not included: the ElevenLabs availability probe (about 1 credit per call), the opening
