@@ -25,7 +25,8 @@ async def test_booking_requires_trusted_offer_and_explicit_yes(sessions):
 
         today = datetime.now(ZoneInfo("Europe/Athens")).date()
         day = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
-        raw = BookAppointment(date=day, time="09:00", service_id="check", customer_name="Ada")
+        raw = BookAppointment(date=day, time="09:00", service_id="check", customer_name="Ada",
+                              customer_phone="+306912345678")
         assert (await receptionist.tool_book(db, call, raw))["error"] == "confirmation_required"
         missing = await receptionist.tool_prepare_action(db, call, PrepareAction(
             action="book", date=day, time="09:00", service_id="check", customer_name="Ada"))
@@ -36,9 +37,18 @@ async def test_booking_requires_trusted_offer_and_explicit_yes(sessions):
         assert "09:00" in offer["free_times"]
         assert (await receptionist.tool_prepare_action(db, call, PrepareAction(
             action="book", date=day, time="12:00", service_id="check", customer_name="Ada")))["error"] == "check_availability_first"
+        # No calling number (web demo): the readback needs a contact phone first.
+        assert (await receptionist.tool_prepare_action(db, call, PrepareAction(
+            action="book", date=day, time="09:00", service_id="check", customer_name="Ada")))["error"] == "phone_required"
         readback = await receptionist.tool_prepare_action(db, call, PrepareAction(
-            action="book", date=day, time="09:00", service_id="check", customer_name="Ada"))
-        assert "Ada" in readback["say"] and "09:00" in readback["say"]
+            action="book", date=day, time="09:00", service_id="check", customer_name="Ada",
+            customer_phone="+30 691 234 5678"))
+        assert "Ada" in readback["say"] and "at 9 a.m." in readback["say"]
+        assert "phone 6 9 1 2 3 4 5 6 7 8" in readback["say"]
+        other_phone = raw.model_copy(update={"customer_phone": "+306900000000",
+                                             "confirmation_id": readback["confirmation_id"],
+                                             "confirmation_text": "yes"})
+        assert (await receptionist.tool_book(db, call, other_phone))["error"] == "confirmation_required"
         for answer in ("", "yes, but wait", "no", "maybe"):
             args = raw.model_copy(update={"confirmation_id": readback["confirmation_id"],
                                           "confirmation_text": answer})
