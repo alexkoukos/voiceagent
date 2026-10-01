@@ -154,7 +154,8 @@ def busy_line(practice: Practice, language: str) -> str:
 
 
 async def start_call(
-    db: AsyncSession, practice: Practice, *, direction: str, caller_number: str | None
+    db: AsyncSession, practice: Practice, *, direction: str, caller_number: str | None,
+    forwarding_reason: str | None = None,
 ) -> tuple[Call, dict]:
     """Creates the call record for an inbound or web call and returns the agent's metadata.
     Raises Busy when the practice is at its concurrent-call cap (G8), Blocked for a blocked
@@ -194,6 +195,15 @@ async def start_call(
     await db.flush()
     upcoming = await booking.upcoming_for(db, practice, caller_number, now)
     await routing.log_call_start(db, call, state, known=customer is not None)
+    if direction == "inbound":
+        await routing.log(db, call, "incoming", "ai_destination", "SIP inbound", "ai")
+        if forwarding_reason:
+            if forwarding_reason == "no_answer":
+                await routing.log(db, call, "human_ring_attempt", "carrier_reported", "forwarding reason", "human")
+                await routing.log(db, call, "human_no_answer", "carrier_reported", "forwarding reason", "ai")
+            await routing.log(db, call, "carrier_forward", forwarding_reason,
+                              "carrier-provided forwarding reason", "ai")
+        await routing.log(db, call, "ai_admitted", "connected", "agent admission", "ai")
     await db.commit()
     await db.refresh(call)
     events.publish(f"practice:{practice.id}")
@@ -272,13 +282,14 @@ async def build_metadata(
         "vocabulary": _vocabulary(practice, staff),
         "waitlist": bool((practice.reminders or {}).get("waitlist")),
     }
-    if call.direction == "outbound":
+    if call.direction in ("inbound", "outbound"):
         settings = get_settings()
         meta.update(
-            dial_number=call.caller_number,
             sip_trunk_id=settings.sip_trunk_id,
             outbound_number=practice.outbound_number or settings.sip_outbound_number,
         )
+        if call.direction == "outbound":
+            meta["dial_number"] = call.caller_number
     return meta
 
 
@@ -543,8 +554,16 @@ async def tool_check_availability(db: AsyncSession, call: Call, args) -> dict:
         RoutingEvent.call_id == call.id, RoutingEvent.kind == "offer",
     ).order_by(RoutingEvent.created_at.desc()).limit(1))).scalar_one_or_none()
     last_offer = json.loads(last.value)["result"] if last else None
+    staff_name = args.staff
+    if exclude and not staff_name:
+        # A move keeps the appointment's own staff member (booking.reschedule), so only
+        # offer their free times: "anyone free" offered 09:00 and the move then failed
+        # with slot_taken after the caller's yes (EVAL-004, 2026-10-01).
+        moving = await db.get(Appointment, exclude)
+        owner = await db.get(Staff, moving.staff_id) if moving and moving.staff_id else None
+        staff_name = owner.name if owner else None
     result = await booking.check_availability(
-        db, practice, args.when, args.service_id, utcnow(), staff_name=args.staff,
+        db, practice, args.when, args.service_id, utcnow(), staff_name=staff_name,
         staff_ids=await _department_staff(db, practice, call), language=_lang(call, practice), exclude_id=exclude,
         after=booking._hhmm(args.after) if args.after else None,
         before=booking._hhmm(args.before) if args.before else None,
@@ -554,7 +573,7 @@ async def tool_check_availability(db: AsyncSession, call: Call, args) -> dict:
         # Persist exactly what the backend offered so a later write cannot use an
         # invented date or time, even if the model misheard a second voice.
         db.add(RoutingEvent(practice_id=practice.id, call_id=call.id, kind="offer", value=json.dumps({
-            "result": result, "appointment_id": exclude, "requested_staff": args.staff or "",
+            "result": result, "appointment_id": exclude, "requested_staff": staff_name or "",
         }, ensure_ascii=False), rule="B1 availability offer"))
     await db.commit()
     return result
@@ -611,6 +630,13 @@ async def tool_prepare_action(db: AsyncSession, call: Call, args) -> dict:
         service_id = args.service_id
         name = (args.customer_name or appt.customer_name).strip()
         staff_name = args.staff or ""
+        if appt and appt.staff_id:
+            # A move is checked against the appointment's own staff (tool_check_availability);
+            # the model may name them here or not (EVAL-004).
+            owner = await db.get(Staff, appt.staff_id)
+            named = booking.match_staff(await booking.staff_of(db, practice.id), staff_name) if staff_name else None
+            if owner and (not staff_name or (named and named.id == owner.id)):
+                staff_name = owner.name
         if not await _offered(db, call, day=day, time=time, service_id=service_id,
                               appointment_id=appointment_id, staff=staff_name):
             return {"error": "check_availability_first"}
@@ -826,16 +852,30 @@ async def tool_take_message(db: AsyncSession, call: Call, args) -> dict:
     staff = await booking.staff_of(db, practice.id)
     person = booking.match_staff(staff, args.for_whom) if args.for_whom else None
     from app.schemas import normalize_phone
-    m = Message(
-        practice_id=practice.id, call_id=call.id, staff_id=person.id if person else None,
-        caller_name=args.caller_name.strip(), callback_number=normalize_phone(args.callback_number) if args.callback_number else call.caller_number,
-        reason=args.reason.strip(), best_time=args.best_time.strip(), urgent=args.urgent,
-    )
-    db.add(m)
+    staff_id = person.id if person else None
+    callback = normalize_phone(args.callback_number) if args.callback_number else call.caller_number
+    if callback and re.fullmatch(r"2\d{9}|69\d{8}", callback):
+        callback = "+30" + callback  # the model passes Greek numbers as spoken, without +30
+    # The model often calls this again as the caller adds details (EVAL-009, 2026-09-30):
+    # one call leaves one message per recipient, updated in place.
+    m = (await db.execute(select(Message).where(
+        Message.call_id == call.id, Message.staff_id.is_(None) if staff_id is None else Message.staff_id == staff_id,
+    ).order_by(Message.created_at).limit(1))).scalar_one_or_none()
+    was_urgent = bool(m and m.urgent)
+    if m is None:
+        m = Message(practice_id=practice.id, call_id=call.id, staff_id=staff_id, caller_name="", reason="",
+                    best_time="", urgent=False)
+        db.add(m)
+    for field, value in (("caller_name", args.caller_name.strip()), ("reason", args.reason.strip()),
+                         ("best_time", args.best_time.strip())):
+        if value:
+            setattr(m, field, value)
+    m.callback_number = callback or m.callback_number
+    m.urgent = m.urgent or args.urgent
     set_outcome(call, "message_taken")
     if call.use_case is None:
         call.use_case = "call_center"
-    if args.urgent:
+    if args.urgent and not was_urgent:
         add_flag(call, "urgent")
         await db.flush()
         subject, body = texts.urgent_message_email(practice, m)
@@ -857,12 +897,17 @@ async def tool_transfer(db: AsyncSession, call: Call, args) -> dict:
         person = next((p for p in staff if p.role in ("secretary", "owner", "doctor") and p.phone), None) if rules["mode"] == "sip" else None
     target = person.name if person else (args.target or "")
     mode = rules["mode"]
-    if mode == "sip" and (call.direction != "inbound" or not (person and person.phone)):
+    setup = practice.call_routing or {}
+    forbidden = {setup.get("public_number"), setup.get("ai_destination_number"), *(practice.phone_numbers or [])}
+    choices = ([person.phone] if person and person.phone else []) + (setup.get("transfer_destinations") or [])
+    destination = next((number for number in choices if number not in forbidden), None)
+    if mode == "sip" and (call.direction != "inbound" or not destination):
         mode = "app"
     handoff = Handoff(practice_id=practice.id, call_id=call.id, staff_id=person.id if person else None,
                       room_name=room_of(call), mode=mode)
     db.add(handoff)
     await db.flush()
+    await routing.log(db, call, "human_transfer_attempt", mode, "configured handoff", "human")
     if mode == "app":
         title, body = texts.handoff_push(practice, call, target)
         await notifications.queue_push(db, practice, kind="handoff", title=title, body=body, call_id=call.id,
@@ -872,9 +917,10 @@ async def tool_transfer(db: AsyncSession, call: Call, args) -> dict:
     notifications.kick()
     events.publish(f"practice:{practice.id}")
     out = {"handoff_id": handoff.id, "mode": mode, "target": target,
-           "timeout_seconds": rules["timeout_seconds"]}
+           "timeout_seconds": rules["timeout_seconds"],
+           "transfer_failure": setup.get("transfer_failure", "take_message")}
     if mode == "sip":
-        out["transfer_to"] = f"tel:{person.phone}"
+        out["transfer_to"] = f"tel:{destination}"
     return out
 
 
@@ -885,9 +931,11 @@ async def tool_handoff_result(db: AsyncSession, call: Call, args) -> dict:
     practice = await _practice(db, call)
     handoff.status = args.status
     handoff.resolved_at = datetime.utcnow()
+    await routing.log(db, call, "human_transfer_result", args.status, "handoff result",
+                      "human" if args.status in ("joined", "transferred") else "ai")
     if args.status in ("joined", "transferred"):
         set_outcome(call, "transferred")
-    else:
+    elif args.status in ("unanswered", "failed"):
         staff = await booking.staff_of(db, practice.id)
         person = next((p for p in staff if p.id == handoff.staff_id), None)
         subject, body = texts.handoff_unanswered_email(practice, call, person.name if person else "")

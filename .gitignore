@@ -18,3 +18,11 @@ ios/build/
 # Business plan and pricing: kept local (the repo is public)
 AI Voice Receptionist 2.0 PRD.md
 agent/scripted_calls_result.json
+
+# Local reference copy of a third-party site: never publish
+backend/app/templates/landing-assets/fonio/
+docs/fonio-qa/
+agent/evals/results/
+
+# Sales material and prospect data: local only (the repo is public)
+sales/

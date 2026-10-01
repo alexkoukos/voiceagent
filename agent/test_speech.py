@@ -83,7 +83,7 @@ def test_language_voice_overrides_preserve_existing_mapping(monkeypatch):
 @pytest.mark.parametrize("engine", ["pipeline", "text_pipeline"])
 def test_language_switch_updates_both_recognition_and_speech(monkeypatch, engine):
     monkeypatch.setattr(worker, "scribe_stt", lambda language, words: ("stt", language))
-    monkeypatch.setattr(worker, "caller_stt", lambda language: ("stt", language))
+    monkeypatch.setattr(worker, "caller_stt", lambda language, vocabulary: ("stt", language))
     monkeypatch.setattr(worker, "build_tts", lambda engine, voice, language: ("tts", language, voice))
     for language in ("en", "el"):
         parts = worker.language_parts(engine, "Kore", language)

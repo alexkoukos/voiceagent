@@ -292,13 +292,69 @@ async def import_price_list(
 # --- O5: call forwarding codes ---
 
 
+def routing_instructions(practice: Practice) -> dict:
+    """Carrier-neutral checklist. Capabilities are declared during onboarding, not guessed."""
+    setup = practice.call_routing or {}
+    mode = setup.get("mode", "unconfigured")
+    target = setup.get("ai_destination_number")
+    public = setup.get("public_number")
+    capabilities = setup.get("capabilities") or {}
+    greek = practice.language == "el"
+    if mode == "unconfigured" or not target or not public:
+        return {"ready": False, "mobile_codes_available": False,
+                "steps": ["Καταγράψτε τον υπάρχοντα αριθμό, τον πάροχο και το τηλεφωνικό σύστημα και επιλέξτε υποστηριζόμενη δρομολόγηση."
+                          if greek else "Record the existing public number, provider and phone system, then choose a supported routing mode."]}
+    actions = ({
+        "ai_first": "Προωθήστε τις εισερχόμενες κλήσεις στον αριθμό AI.",
+        "human_first": "Κρατήστε τα τηλέφωνα της γραμματείας· προωθήστε στο AI μόνο τις αναπάντητες κλήσεις.",
+        "after_hours": "Κρατήστε την κανονική δρομολόγηση εντός ωραρίου· προωθήστε στο AI εκτός ωραρίου.",
+        "overflow": "Κρατήστε την κανονική δρομολόγηση· προωθήστε στο AI όταν η γραμμή είναι κατειλημμένη.",
+    } if greek else {
+        "ai_first": "Forward eligible calls on the public number to the AI destination.",
+        "human_first": "Keep the receptionist's phones ringing; forward only unanswered calls to the AI destination.",
+        "after_hours": "Keep normal business-hours routing; forward out-of-hours calls to the AI destination.",
+        "overflow": "Keep normal routing; forward busy or unavailable calls to the AI destination.",
+    })
+    provider = setup.get("provider") or ("τον πάροχο/διαχειριστή τηλεφωνικού κέντρου" if greek else "the phone provider/PBX administrator")
+    steps = ([f"Διατηρήστε το {public} ως δημοσιευμένο αριθμό του ιατρείου.",
+              f"Ζητήστε από {provider} να ρυθμίσει: {actions[mode]} Προορισμός: {target}."] if greek else
+             [f"Keep {public} as the published clinic number.",
+              f"Ask {provider} to configure: {actions[mode]} Destination: {target}."])
+    if mode == "human_first":
+        seconds = setup.get("no_answer_seconds")
+        steps.append((f"Ορίστε χρόνο αναμονής {seconds} δευτερολέπτων." if greek else
+                      f"Set the no-answer timeout to {seconds} seconds.") if seconds and capabilities.get("configurable_no_answer_timeout")
+                     else ("Επιβεβαιώστε τον χρόνο αναμονής που υποστηρίζει ο πάροχος· μην υποσχεθείτε συγκεκριμένο αριθμό κουδουνισμάτων."
+                           if greek else "Confirm the provider's supported no-answer interval; do not promise a specific ring count."))
+    if mode == "after_hours":
+        steps.append("Ρυθμίστε ωράριο, Σαββατοκύριακα, αργίες και έκτακτα κλεισίματα στον πάροχο/τηλεφωνικό κέντρο και δοκιμάστε κάθε περίπτωση."
+                     if greek else "Configure weekly hours, weekends, holidays and exceptional closures in the provider/PBX schedule; test each case.")
+    if setup.get("busy_behavior") == "forward_to_ai" and mode != "overflow":
+        steps.append("Ενεργοποιήστε προώθηση κατειλημμένης γραμμής στον ίδιο αριθμό AI." if greek else
+                     "Enable busy/unavailable forwarding to the same AI destination.")
+    steps.append("Κάντε δοκιμαστικές κλήσεις στον δημόσιο αριθμό: κανονική, αναπάντητη και αποτυχημένη μεταφορά."
+                 if greek else "Place test calls through the public number for normal, missed and failed-transfer cases before confirming activation.")
+    return {"ready": True, "public_number": public, "ai_destination_number": target,
+            "mode": mode, "provider": setup.get("provider", ""), "steps": steps,
+            "mobile_codes_available": (mode == "human_first" and
+                                       setup.get("no_answer_seconds") in (5, 10, 15, 20, 25, 30))
+                                      and (setup.get("phone_system") == "mobile"
+                                       and setup.get("carrier_configuration_confirmed")
+                                       and setup.get("provider", "").lower() == "nova gr"),
+            "carrier_configuration_confirmed": setup.get("carrier_configuration_confirmed", False),
+            "note": ("Η προώθηση εξαρτάται από τον πάροχο ή το τηλεφωνικό κέντρο." if greek else
+                     "Forwarding and transfer behavior are controlled by the clinic's carrier/PBX.")}
+
+
 def forwarding_codes(target: str, mode: str, no_answer_seconds: int = 20) -> list[dict]:
-    """GSM codes for Cosmote, Vodafone and Nova mobiles: dialed on the business phone.
-    Landlines differ per provider."""
-    if mode == "full":
-        return [{"what": "all_calls", "code": f"**21*{target}#"}]
+    """Nova mobile codes from its published business support instructions.
+
+    Other carriers and PBX systems must be configured with their provider.
+    """
+    if mode != "backup" or no_answer_seconds not in (5, 10, 15, 20, 25, 30):
+        raise ValueError("unsupported Nova mobile forwarding mode or timeout")
     return [
-        {"what": "no_answer", "code": f"**61*{target}**{no_answer_seconds}#"},
+        {"what": "no_answer", "code": (f"**61*{target}#" if no_answer_seconds == 20 else
+                                       f"**61*{target}*11*{no_answer_seconds}#")},
         {"what": "busy", "code": f"**67*{target}#"},
-        {"what": "unreachable", "code": f"**62*{target}#"},
     ]
