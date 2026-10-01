@@ -7,6 +7,8 @@ from sqlalchemy import select, text
 
 from app.models import Appointment, BillingAccount, BillingDraft, Call, CallStatus
 
+PILOT_DAYS = 14
+
 
 def month_after(anchor: date, offset: int) -> date:
     year, month = divmod(anchor.year * 12 + anchor.month - 1 + offset, 12)
@@ -21,7 +23,7 @@ async def prepare_due(db, practice, now: datetime) -> list[BillingDraft]:
         return []
     tz = ZoneInfo(practice.timezone)
     today = now.astimezone(tz).date()
-    anchor = account.pilot_started_on + timedelta(days=30)
+    anchor = account.pilot_started_on + timedelta(days=PILOT_DAYS)
     offset, drafts = 0, []
     while (end := month_after(anchor, offset + 1)) <= today:
         start = month_after(anchor, offset)

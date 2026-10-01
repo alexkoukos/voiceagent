@@ -43,7 +43,7 @@ def test_text_pipeline_feeds_deepgram_transcript_to_text_model(monkeypatch):
     vad = object()
     models = []
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(worker, "caller_stt", lambda language: stt)
+    monkeypatch.setattr(worker, "caller_stt", lambda language, vocabulary=None: stt)
     monkeypatch.setattr(worker.google, "LLM", lambda **kwargs: llm)
     monkeypatch.setattr(worker.google.beta, "GeminiTTS", lambda **kwargs: models.append(kwargs["model"]) or object())
     monkeypatch.setattr(worker.livekit_tts, "FallbackAdapter", lambda providers, **kwargs: tts)

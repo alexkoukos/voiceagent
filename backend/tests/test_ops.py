@@ -4,11 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from app import alerts, receptionist, scheduler
 from app.config import get_settings
 from app.models import (
-    Alert, Appointment, Call, CallStatus, Customer, DataRequest, Message, Notification, Practice, TranscriptEntry,
+    Alert, Appointment, Call, CallStatus, Customer, DataRequest, Message, Notification, Practice, RoutingEvent, TranscriptEntry,
     TranscriptRole, WaitlistEntry,
 )
 from app.routers import ops
@@ -54,6 +55,7 @@ async def test_export_then_erase_one_caller(sessions, monkeypatch):
                              customer_id=customer.id)
         db.add_all([
             TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="Είμαι η Άντα"),
+            RoutingEvent(practice_id=practice.id, call_id=call.id, kind="known_caller", value=PHONE),
             Message(practice_id=practice.id, call_id=call.id, caller_name="Ada", callback_number=PHONE, reason="x"),
             WaitlistEntry(practice_id=practice.id, customer_name="Ada", phone=PHONE, service_id="check",
                           date_from=start.date(), date_to=start.date()),
@@ -79,6 +81,7 @@ async def test_export_then_erase_one_caller(sessions, monkeypatch):
         assert deleted == ["rec/1.ogg"]
         call, other = await db.get(Call, call.id), await db.get(Call, other.id)
         assert call.caller_number is None and call.summary is None and call.recording_url is None
+        assert (await db.execute(select(RoutingEvent).where(RoutingEvent.call_id == call.id))).scalar_one().value == ""
         assert other.summary == "someone else"
         again = await ops.export_caller(practice.id, PhoneIn(phone=PHONE), db)
         assert again["calls"] == [] and again["customer"] is None and again["messages"] == []
@@ -112,7 +115,7 @@ async def test_cost_cap_blocked_and_offboarded(sessions):
 
         assert await receptionist.practice_for_number(db, "+302100000000") is not None
         out = await ops.offboard(practice.id, db)
-        assert out["forwarding_off_code"] == "##002#"
+        assert out["forwarding_off_code"] is None  # provider/PBX was not verified
         assert await receptionist.practice_for_number(db, "+302100000000") is None
         await ops.reactivate(practice.id, db)
         assert await receptionist.practice_for_number(db, "+302100000000") is not None

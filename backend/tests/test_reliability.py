@@ -330,7 +330,8 @@ async def test_notification_metric_counts_pending_failed_and_missing(sessions):
 
 
 @pytest.mark.asyncio
-async def test_repeated_cancellation_offers_waitlist_slot_once(sessions):
+async def test_repeated_cancellation_offers_waitlist_slot_once(sessions, monkeypatch):
+    monkeypatch.setattr(receptionist, "utcnow", lambda: NOW)
     p = await seed(sessions, reminders={"waitlist": True})
     today = datetime.now(ATH).date()
     slot_day = today + timedelta(days=(7 - today.weekday()) % 7 + 7)

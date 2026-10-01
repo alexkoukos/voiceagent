@@ -4,6 +4,7 @@ caps (OP10), offboarding (OP7), and operator alerts (OP9)."""
 import csv
 import io
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -15,7 +16,7 @@ from app.database import get_db
 from app.models import AdminLink, Alert, Appointment, Call, CallStatus, DataRequest, Practice
 from app.routers.practices import _get
 from app.schemas import (
-    AdminPinIn, AlertOut, AppointmentOut, ConfigVersionOut, CostCapIn, DataRequestOut, GoogleImportIn, PhoneIn, PriceListIn,
+    AdminPinIn, AlertOut, AppointmentOut, CallRouting, ConfigVersionOut, CostCapIn, DataRequestOut, GoogleImportIn, PhoneIn, PriceListIn,
     UsageOut,
 )
 
@@ -24,6 +25,12 @@ alerts_router = APIRouter(prefix="/alerts", tags=["ops"])
 
 # Cancels every call forwarding on Greek mobile networks (Cosmote, Vodafone, Nova).
 FORWARDING_OFF = "##002#"
+
+
+def _mobile_forwarding_verified(practice: Practice) -> bool:
+    setup = practice.call_routing or {}
+    return (setup.get("phone_system") == "mobile" and setup.get("carrier_configuration_confirmed")
+            and setup.get("provider", "").lower() == "nova gr")
 
 
 # --- patient data requests (OP8) ---
@@ -117,16 +124,18 @@ async def offboard(practice_id: str, db: AsyncSession = Depends(get_db)):
         greek = practice.language == "el"
         subject = (f"{practice.name}: ο ψηφιακός βοηθός απενεργοποιήθηκε" if greek
                    else f"{practice.name}: the digital assistant is off")
-        body = (f"Για να σταματήσει η προώθηση, πληκτρολογήστε {FORWARDING_OFF} και πατήστε κλήση από το κινητό "
-                "της επιχείρησης. Για σταθερό, ρωτήστε τον πάροχό σας.\n"
-                "Οι ηχογραφήσεις και οι απομαγνητοφωνήσεις διαγράφονται σε 30 ημέρες." if greek else
-                f"To stop forwarding, dial {FORWARDING_OFF} and press call on the business mobile. For a landline, "
-                "ask your provider.\nRecordings and transcripts are deleted within 30 days.")
+        stop = (f"Πληκτρολογήστε {FORWARDING_OFF} από το κινητό της επιχείρησης."
+                if greek else f"Dial {FORWARDING_OFF} from the business mobile.") if _mobile_forwarding_verified(practice) else (
+                "Ζητήστε από τον πάροχο ή τον διαχειριστή τηλεφωνικού κέντρου να απενεργοποιήσει την προώθηση."
+                if greek else "Ask the phone provider or PBX administrator to disable forwarding.")
+        body = (f"{stop}\nΟι ηχογραφήσεις και οι απομαγνητοφωνήσεις διαγράφονται σε 30 ημέρες." if greek else
+                f"{stop}\nRecordings and transcripts are deleted within 30 days.")
         await notifications.queue_business(db, practice, kind="offboarded", subject=subject, body=body,
                                            dedupe_key=f"offboard:{practice.id}:{now.date()}")
     await db.commit()
     notifications.kick()
-    return {"offboarded_at": practice.offboarded_at, "forwarding_off_code": FORWARDING_OFF,
+    return {"offboarded_at": practice.offboarded_at,
+            "forwarding_off_code": FORWARDING_OFF if _mobile_forwarding_verified(practice) else None,
             "export_csv": f"/practices/{practice.id}/export.csv"}
 
 
@@ -196,15 +205,43 @@ async def import_price_list(practice_id: str, payload: PriceListIn, db: AsyncSes
 
 
 @router.get("/{practice_id}/forwarding")
-async def forwarding(practice_id: str, mode: str = "backup", db: AsyncSession = Depends(get_db)):
-    """Codes the owner dials once on the business mobile so unanswered calls reach the agent."""
+async def forwarding(practice_id: str, mode: Literal["backup", "full"] = "backup", db: AsyncSession = Depends(get_db)):
+    """Carrier-specific codes only for an explicitly confirmed compatible mobile setup."""
     practice = await _get(db, practice_id)
-    if not practice.phone_numbers:
+    setup = practice.call_routing or {}
+    if not _mobile_forwarding_verified(practice):
+        raise HTTPException(status_code=409, detail="Use the clinic-specific routing instructions; mobile codes are unverified")
+    target = setup.get("ai_destination_number")
+    if not target:
         raise HTTPException(status_code=409, detail="no_agent_number")
-    target = practice.phone_numbers[0]
+    if mode != "backup" or setup.get("mode") != "human_first":
+        raise HTTPException(status_code=409, detail="No verified mobile dial codes for this routing mode")
+    if setup.get("no_answer_seconds") not in (5, 10, 15, 20, 25, 30):
+        raise HTTPException(status_code=409, detail="No verified Nova no-answer timeout")
+    allowed = {"no_answer"}
+    if setup.get("busy_behavior") == "forward_to_ai":
+        allowed.add("busy")
+    codes = [code for code in onboarding.forwarding_codes(target, mode, setup["no_answer_seconds"])
+             if code["what"] in allowed]
     return {"target": target, "mode": mode,
-            "codes": onboarding.forwarding_codes(target, "full" if mode == "full" else "backup"),
+            "codes": codes,
             "off": FORWARDING_OFF}
+
+
+@router.get("/{practice_id}/routing/setup")
+async def routing_setup(practice_id: str, db: AsyncSession = Depends(get_db)):
+    return onboarding.routing_instructions(await _get(db, practice_id))
+
+
+@router.put("/{practice_id}/routing/setup")
+async def update_routing_setup(practice_id: str, payload: CallRouting, db: AsyncSession = Depends(get_db)):
+    practice = await _get(db, practice_id)
+    if payload.ai_destination_number and payload.ai_destination_number not in (practice.phone_numbers or []):
+        raise HTTPException(status_code=422, detail="AI destination must be a provisioned inbound number")
+    practice.call_routing = payload.model_dump(mode="json")
+    await db.commit()
+    events.publish(f"practice:{practice.id}")
+    return onboarding.routing_instructions(practice)
 
 
 # --- changes by phone and SMS (OP2) ---
@@ -242,7 +279,7 @@ async def ack_alert(alert_id: str, db: AsyncSession = Depends(get_db)):
     return alert
 
 
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from pydantic import BaseModel, Field
 from app.auth import require_master_token
@@ -276,7 +313,7 @@ async def billing_status(practice_id: str, db: AsyncSession = Depends(get_db)):
     drafts = (await db.execute(select(BillingDraft).where(BillingDraft.practice_id == practice_id)
                                .order_by(BillingDraft.period_start.desc()))).scalars()
     return {"pilot_started_on": account.pilot_started_on if account else None,
-            "paid_period_starts_on": account.pilot_started_on + timedelta(days=30) if account else None,
+            "paid_period_starts_on": account.pilot_started_on + timedelta(days=billing.PILOT_DAYS) if account else None,
             "monthly_fee": str(account.monthly_fee) if account else None,
             "guarantee_threshold": practice.guarantee_threshold,
             "provider_configured": False,

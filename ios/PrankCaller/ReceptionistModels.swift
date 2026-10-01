@@ -332,6 +332,18 @@ struct ForwardingInfo: Decodable {
     let off: String
 }
 
+struct RoutingSetupInfo: Decodable {
+    let ready: Bool
+    let mobileCodesAvailable: Bool
+    let publicNumber: String?
+    let aiDestinationNumber: String?
+    let mode: String?
+    let provider: String?
+    let steps: [String]
+    let carrierConfigurationConfirmed: Bool?
+    let note: String?
+}
+
 /// Only the counts, for the screen; the file itself is shared as-is.
 struct CallerExport: Decodable {
     let calls: Int
