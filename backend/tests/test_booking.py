@@ -100,3 +100,23 @@ def test_relative_time_words():
     assert relative_time("αργότερα") == "later"
     assert relative_time("later please") == "later"
     assert relative_time("την Τρίτη") is None
+
+
+def test_say_time_reads_times_as_words():
+    from app.booking import say_time
+    assert say_time("09:00") == "στις εννέα το πρωί"
+    assert say_time("09:15") == "στις εννέα και τέταρτο το πρωί"
+    assert say_time("13:00") == "στη μία το μεσημέρι"
+    assert say_time("17:30") == "στις πέντε και μισή το απόγευμα"
+    assert say_time("10:45") == "στις έντεκα παρά τέταρτο το πρωί"
+    assert say_time("12:00") == "στις δώδεκα το μεσημέρι"
+    assert say_time("21:00") == "στις εννέα το βράδυ"
+    assert say_time("09:07") == "στις 9:07"
+    assert say_time("09:00", "en") == "at 9 a.m."
+    assert say_time("17:30", "en") == "at 5:30 p.m."
+
+
+def test_say_phone_digit_by_digit():
+    from app.booking import say_phone
+    assert say_phone("+306912345678") == "6 9 1 2 3 4 5 6 7 8"
+    assert say_phone("+12025550100") == "1 2 0 2 5 5 5 0 1 0 0"
