@@ -356,9 +356,13 @@ class Harness:
             "transcript": [e["role"] + ": " + e["text"] for e in detail.get("transcript_entries", [])],
         }
 
-    @staticmethod
-    async def settle(rc, session, timeout=90):
-        """Wait until background tool work (read-backs, handoff waits) and speech are done."""
+    settle_timeouts = 0
+
+    @classmethod
+    async def settle(cls, rc, session, timeout=30):
+        """Wait until background tool work (read-backs, handoff waits) and speech are done.
+        A text-mode speech can stay unfinished; waiting 90 s three times once outlasted the
+        backend's 5-minute offer window (EVAL-012, 2026-10-01). Timeouts are counted."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         quiet = 0
@@ -379,6 +383,9 @@ class Harness:
             else:
                 quiet += 1
                 await asyncio.sleep(0.4)
+        if quiet < 2:
+            cls.settle_timeouts += 1
+            print(f"settle timed out after {timeout} s", file=sys.stderr)
 
     async def finished(self, call_id: str) -> dict:
         path = f"/practices/{self.practice['id']}/calls/{call_id}"
@@ -460,6 +467,8 @@ async def main() -> int:
     print_report(runs, stats)
     out = HERE / "results" / f"{datetime.now():%Y%m%d-%H%M%S}.json"
     out.parent.mkdir(exist_ok=True)
+    stats["harness_settle_timeouts"] = Harness.settle_timeouts
+    print(f"harness settle timeouts: {Harness.settle_timeouts}")
     out.write_text(json.dumps({"agent_version": os.environ["AGENT_VERSION"], "llm": worker.LLM_MODEL,
                                "stats": stats, "runs": runs}, ensure_ascii=False, indent=1, default=str))
     print(f"results: {out}")

@@ -201,6 +201,12 @@ The first call on the deployment (web demo, 3:16, booked, $0.15 measured) showed
 New evals: EVAL-012 («Μάλιστα»), EVAL-013 (caller vs dentist name), EVAL-014 (English
 mode stays), EVAL-015 («Σύμφωνοι»). EVAL-010 now includes the misheard line.
 
+Evals after the fixes (14 text evals × 3, local): 41/42 runs passed. The one failure was
+harness-made: a text-mode wait timed out three times and outlasted the backend's 5-minute
+offer window. Harness waits are now 30 s and counted. First reply p50 769 ms / p95 1839 ms
+(text only). Two of 227 turns had a failed model reply and recovered by asking the caller to
+repeat. CI passed on PR #22.
+
 Planned but not done: cutting the prompt to under ~6k tokens. It is dense and every rule has
 a reason, and Gemini already caches about half the input. Decide after measuring
 `model_ttft` on real calls. End-of-turn timing is a Railway setting (`TURN_MAX_DELAY_MS`,
