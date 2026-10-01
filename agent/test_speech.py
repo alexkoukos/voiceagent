@@ -213,3 +213,11 @@ async def test_fixed_line_falls_back_to_streaming(monkeypatch, tmp_path):
     monkeypatch.setattr(opening, "FIXED_CACHE_DIR", tmp_path)
     monkeypatch.setattr(opening, "_fixed", {})
     assert await opening.fixed_audio("Γεια σας.", "voice", "el") is None
+
+
+@pytest.mark.asyncio
+async def test_greek_speech_has_no_exclamations():
+    assert Pronunciation("el").apply("Παρακαλώ πολύ! Καλό σας απόγευμα.") == "Παρακαλώ πολύ. Καλό σας απόγευμα."
+    assert Pronunciation("en").apply("Great!") == "Great!"
+    parts = [part async for part in Pronunciation("el").stream(chunks(["Ναι", "! Γεια"]))]
+    assert "".join(parts) == "Ναι. Γεια"

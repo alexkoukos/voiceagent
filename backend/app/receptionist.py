@@ -650,6 +650,10 @@ async def _offered(db: AsyncSession, call: Call, *, day: str, time: str, service
     return False
 
 
+PHONE_REQUIRED = {"error": "phone_required",
+                  "next": "Ask which phone number we can reach them on, then call prepare_action again with customer_phone."}
+
+
 async def tool_prepare_action(db: AsyncSession, call: Call, args) -> dict:
     """Produce the readback from trusted appointment data and arm one confirmation."""
     practice = await _practice(db, call)
@@ -693,15 +697,31 @@ async def tool_prepare_action(db: AsyncSession, call: Call, args) -> dict:
     staff = await booking.staff_of(db, practice.id)
     person = booking.match_staff(staff, staff_name) if staff_name else None
     staff_spoken = f", με {person.name}" if person else ""
-    spoken_day = booking.say_date(date_cls.fromisoformat(day), _lang(call, practice))
-    if _lang(call, practice) == "el":
+    language = _lang(call, practice)
+    spoken_day = booking.say_date(date_cls.fromisoformat(day), language)
+    spoken_time = booking.say_time(time, language)
+    # The contact phone is part of the readback, so the caller can change it with the same
+    # answer: the calling number, or another one read back digit by digit.
+    phone = args.customer_phone if action == "book" and args.customer_phone != call.caller_number else None
+    if action == "book" and not phone and not call.caller_number:
+        return PHONE_REQUIRED
+    if language == "el":
         verb = "Να ακυρώσω" if action == "cancel" else "Να επιβεβαιώσω"
-        line = f"{verb}: {name}, {spoken_day} στις {time}, για {service['name']}{staff_spoken}. Σωστά;"
+        # The service in the nominative at the start: "για Καθαρισμός" was wrong Greek.
+        service_spoken = service["name"][:1].lower() + service["name"][1:]
+        phone_spoken = ("" if action != "book" else f", με τηλέφωνο {booking.say_phone(phone)}" if phone
+                        else ", με τηλέφωνο τον αριθμό από τον οποίο καλείτε")
+        line = (f"{verb}: {service_spoken}, {spoken_day} {spoken_time}{staff_spoken}, "
+                f"στο όνομα {name}{phone_spoken}. Σωστά;")
     else:
         verb = "Shall I cancel" if action == "cancel" else "Please confirm"
-        line = f"{verb}: {name}, {spoken_day} at {time}, for {service['name']}{staff_spoken}. Is that correct?"
+        phone_spoken = ("" if action != "book" else f", phone {booking.say_phone(phone)}" if phone
+                        else ", reachable on the number you're calling from")
+        line = (f"{verb}: {service['name']}, {spoken_day} {spoken_time}{staff_spoken}, "
+                f"for {name}{phone_spoken}. Is that correct?")
     data = {"action": action, "date": day, "time": time, "service_id": service_id,
-            "customer_name": name, "staff": staff_name, "appointment_id": appointment_id}
+            "customer_name": name, "staff": staff_name, "appointment_id": appointment_id,
+            "customer_phone": phone}
     event = RoutingEvent(practice_id=practice.id, call_id=call.id, kind="confirmation",
                          value=json.dumps(data, ensure_ascii=False), rule="B3 trusted readback", path="pending")
     db.add(event)
@@ -723,7 +743,8 @@ async def _confirmed(db: AsyncSession, call: Call, args, action: str) -> bool:
         matches = (data["date"] == args.date.isoformat() and data["time"] == args.time
                    and data["service_id"] == args.service_id
                    and data["customer_name"] == args.customer_name.strip()
-                   and booking._plain(data["staff"]) == booking._plain(args.staff or ""))
+                   and booking._plain(data["staff"]) == booking._plain(args.staff or "")
+                   and (data.get("customer_phone") or None) in (None, args.customer_phone))
     elif action == "reschedule":
         matches = (data["appointment_id"] == args.appointment_id and data["date"] == args.date.isoformat()
                    and data["time"] == args.time)
