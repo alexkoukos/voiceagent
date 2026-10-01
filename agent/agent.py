@@ -454,7 +454,7 @@ class ReceptionistAgent(PrankCallerAgent):
     @function_tool
     async def prepare_action(
         self, action: str, date: str = "", time: str = "", service_id: str = "",
-        customer_name: str = "", staff: str = "", appointment_id: str = "",
+        customer_name: str = "", staff: str = "", appointment_id: str = "", customer_phone: str = "",
     ) -> str | None:
         """Reads back trusted details and asks for a clear yes before booking, moving or cancelling.
 
@@ -466,6 +466,7 @@ class ReceptionistAgent(PrankCallerAgent):
             customer_name: The full name, for a new booking.
             staff: Same staff wording used in check_availability.
             appointment_id: From find_appointments, for reschedule or cancel.
+            customer_phone: For book, a contact number the caller gave other than the one they're calling from.
         """
         # Realtime speech models can invent a surname even when the separate STT got it
         # right. A short, clearly spoken name in the latest caller turn wins over the
@@ -476,9 +477,11 @@ class ReceptionistAgent(PrankCallerAgent):
             "action": action, "date": date or None, "time": time or None,
             "service_id": service_id or None, "customer_name": prepared_name or None,
             "staff": staff or None, "appointment_id": appointment_id or None,
+            "customer_phone": (customer_phone or None) if action == "book" else None,
         })
         if result.get("confirmation_id"):
-            self._rc.read_back(result, customer_name=prepared_name if action == "book" else None)
+            self._rc.read_back(result, customer_name=prepared_name if action == "book" else None,
+                               customer_phone=customer_phone if action == "book" else None)
             return self._spoken_already(json.dumps(
                 {"next": "Wait for the caller to answer the spoken readback. Only a clear yes permits the action."}))
         return json.dumps(result, ensure_ascii=False)
@@ -502,7 +505,8 @@ class ReceptionistAgent(PrankCallerAgent):
         return await self._tool("book_appointment", {
             "date": date, "time": time, "service_id": service_id,
             "customer_name": self._rc._prepared_name or customer_name,
-            "customer_phone": customer_phone or None, "staff": staff or None, "name_uncertain": name_uncertain,
+            "customer_phone": self._rc._prepared_phone or customer_phone or None,
+            "staff": staff or None, "name_uncertain": name_uncertain,
         })
 
     @function_tool
@@ -721,6 +725,8 @@ GREEK_VOCABULARY = [
     "ρε", "μωρέ", "κομπλέ", "γαμώτο", "άσ' το", "θα 'ρθω", "κάνα", "τίποτα", "εντάξει", "μπορείς",
     "απογευματάκι", "πρωινό", "ραντεβουδάκι", "ρε φίλε", "έλα", "λέγε", "άντε", "οκ", "ναι ρε",
     "English", "ίνγκλις", "ένγκλις", "αγγλικά",
+    # Scribe heard "Τετάρτη" as "Δευτέρα" twice on a real call (2026-10-01).
+    "Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο", "Κυριακή",
 ]
 
 
@@ -1057,6 +1063,7 @@ class ReceptionistCall:
         self._confirmation_floor = 0
         self._confirmation_armed = False
         self._prepared_name: str | None = None
+        self._prepared_phone: str | None = None
         self._availability_checked = False
         self._handoff_pending = False
         self._tool_lock = asyncio.Lock()
@@ -1115,12 +1122,14 @@ class ReceptionistCall:
         self._user_turn += 1
         self._last_user_text = text
 
-    def read_back(self, result: dict, *, customer_name: str | None = None) -> None:
+    def read_back(self, result: dict, *, customer_name: str | None = None,
+                  customer_phone: str | None = None) -> None:
         if self.telemetry:
             self.telemetry.answer_started(None)
         self._confirmation_id = result["confirmation_id"]
         self._confirmation_armed = False
         self._prepared_name = customer_name
+        self._prepared_phone = customer_phone or None
         if self.engine in ("pipeline", "text_pipeline"):
             handle = self.session.say(result["say"], allow_interruptions=False)
         else:
@@ -1146,6 +1155,7 @@ class ReceptionistCall:
         self._confirmation_id = None
         self._confirmation_armed = False
         self._prepared_name = None
+        self._prepared_phone = None
 
     async def tool(self, name: str, args: dict) -> dict:
         # One backend call at a time, in the order they were made. Gemini emits parallel

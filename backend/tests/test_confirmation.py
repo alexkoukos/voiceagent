@@ -38,7 +38,7 @@ async def test_booking_requires_trusted_offer_and_explicit_yes(sessions):
             action="book", date=day, time="12:00", service_id="check", customer_name="Ada")))["error"] == "check_availability_first"
         readback = await receptionist.tool_prepare_action(db, call, PrepareAction(
             action="book", date=day, time="09:00", service_id="check", customer_name="Ada"))
-        assert "Ada" in readback["say"] and "09:00" in readback["say"]
+        assert "Ada" in readback["say"] and "at 9 a.m." in readback["say"]
         for answer in ("", "yes, but wait", "no", "maybe"):
             args = raw.model_copy(update={"confirmation_id": readback["confirmation_id"],
                                           "confirmation_text": answer})
