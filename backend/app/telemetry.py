@@ -69,7 +69,7 @@ class TelemetryEvent(BaseModel):
         "caller_speech_started", "caller_speech_stopped", "agent_state_changed",
         "response_latency_estimate", "message_metrics", "tool_completed",
         "tool_request_started", "tool_request_ended", "transfer_started", "transfer_ended",
-        "usage_reported",
+        "usage_reported", "answer_latency_estimate", "model_ttft",
     ]
     call_id: Identifier
     session_id: UUID
@@ -79,10 +79,10 @@ class TelemetryEvent(BaseModel):
     observed_at_unix_ns: Annotated[int, Field(ge=0, le=9_223_372_036_854_775_807)]
     elapsed_ns: Annotated[int, Field(ge=0, le=9_223_372_036_854_775_807)]
     turn_id: UUID | None = None
-    source: Literal["sdk_state", "sdk_message_metrics", "sdk_tool_batch", "worker_http", "worker_transfer", "sdk_usage"] | None = None
+    source: Literal["sdk_state", "sdk_message_metrics", "sdk_tool_batch", "worker_http", "worker_transfer", "sdk_usage", "worker_llm_node"] | None = None
     old_state: Literal["initializing", "idle", "listening", "thinking", "speaking"] | None = None
     new_state: Literal["initializing", "idle", "listening", "thinking", "speaking"] | None = None
-    accuracy: Literal["proxy_not_handset_playback"] | None = None
+    accuracy: Literal["proxy_not_handset_playback", "proxy_text_ready_not_playback"] | None = None
     latency_ms: Milliseconds | None = None
     duration_ms: Milliseconds | None = None
     message_id: Identifier | None = None
@@ -109,6 +109,8 @@ class TelemetryEvent(BaseModel):
             "transfer_ended": ("span_id", "handoff_id", "mode", "duration_ms", "outcome"),
             "agent_state_changed": ("old_state", "new_state"),
             "usage_reported": ("usage",),
+            "answer_latency_estimate": ("latency_ms", "accuracy"),
+            "model_ttft": ("latency_ms",),
         }
         if any(getattr(self, name) is None for name in requirements.get(self.event, ())):
             raise ValueError("Missing fields for telemetry event")

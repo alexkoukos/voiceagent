@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from collections.abc import Callable
 
@@ -55,7 +56,7 @@ from livekit.agents.voice.turn import TurnHandlingOptions
 
 from fillers import FillerPicker
 from telemetry import observe_span, track_telemetry
-from opening import prepare_opening, ready_opening
+from opening import fixed_audio, prepare_opening, prerender, ready_opening
 from voices import elevenlabs_voice, gemini_voice, openai_voice
 from speech import (
     ELEVENLABS_TTS_MODEL, Pronunciation, elevenlabs_voice_settings, env_number,
@@ -204,6 +205,9 @@ DEFAULT_PROFANITY_SCRIPT = {
 }
 
 
+CLOSING_LINE = {"el": "Ευχαριστούμε που καλέσατε. Γεια σας.", "en": "Thank you for calling. Goodbye."}
+
+
 def _for_language(texts: dict[str, str], language: str, language_name: str) -> str:
     return texts["el"] if language == "el" else texts["other"].format(language=language_name)
 
@@ -259,8 +263,11 @@ class PrankCallerAgent(Agent):
         if silent:
             await get_job_context().room.disconnect()
             return "call ended"
-        closing = "Ευχαριστούμε που καλέσατε. Γεια σας." if self.language == "el" else "Thank you for calling. Goodbye."
-        if self._fillers is not None:
+        closing = CLOSING_LINE["el" if self.language == "el" else "en"]
+        rc = getattr(self, "_rc", None)
+        if rc is not None and self._fillers is not None:
+            handle = await rc.say_fixed(closing, allow_interruptions=False)
+        elif self._fillers is not None:
             handle = self.session.say(closing, allow_interruptions=False)
         else:
             quote = "Πες μόνο αυτή τη φράση" if self.language == "el" else "Say only this phrase"
@@ -313,9 +320,22 @@ class PrankCallerAgent(Agent):
         # a short "Ε…" / "Κοίτα…" so the friend isn't left in silence. It's part of the reply
         # itself, so it always plays before the answer.
         stream = Agent.default.llm_node(self, chat_ctx, tools, model_settings)
+        started = time.perf_counter()
+        answered = False
+
+        def observe(chunk):
+            # The model's first words, not our filler: the answer the caller waits for.
+            nonlocal answered
+            if not answered and _chunk_text(chunk).strip():
+                answered = True
+                telemetry = getattr(getattr(self, "_rc", None), "telemetry", None)
+                if telemetry:
+                    telemetry.answer_started((time.perf_counter() - started) * 1000)
+            return chunk
+
         if self._fillers is None or not self._opened:
             async for chunk in stream:
-                yield chunk
+                yield observe(chunk)
             return
         it = stream.__aiter__()
         first = asyncio.ensure_future(it.__anext__())
@@ -327,14 +347,20 @@ class PrankCallerAgent(Agent):
                 self._last_filler_at = now
                 yield self._fillers.pick(self.language) + " "
             try:
-                yield await first
+                yield observe(await first)
             except StopAsyncIteration:
                 return
             async for chunk in it:
-                yield chunk
+                yield observe(chunk)
         finally:
             if not first.done():
                 first.cancel()
+
+
+def _chunk_text(chunk) -> str:
+    if isinstance(chunk, str):
+        return chunk
+    return getattr(getattr(chunk, "delta", None), "content", None) or ""
 
 
 class ReceptionistAgent(PrankCallerAgent):
@@ -364,7 +390,7 @@ class ReceptionistAgent(PrankCallerAgent):
 
     @function_tool
     async def route_call(self, context: RunContext, intent: str, staff: str = "", department: str = "") -> str | None:
-        """Call first, as soon as you know what the caller wants, and again if it changes.
+        """Call first, as soon as you know what the caller wants, and again only if it changes (not when they answer your own question).
 
         Args:
             intent: One of book, change, cancel, confirm, question, message, human, emergency, unclear, off_topic (not about the business, insults, nonsense or trolling: call it at once, before saying anything).
@@ -597,7 +623,7 @@ class ReceptionistAgent(PrankCallerAgent):
         if instruction:
             await self.session.generate_reply(instructions=instruction)
         elif self._rc.engine in ("pipeline", "text_pipeline"):
-            handle = self.session.say(self._rc.metadata["greeting"], add_to_chat_ctx=True)
+            handle = await self._rc.say_fixed(self._rc.metadata["greeting"], add_to_chat_ctx=True)
             if wait_for_playout:
                 await asyncio.wait_for(handle.wait_for_playout(), timeout=20)
         else:
@@ -1035,6 +1061,29 @@ class ReceptionistCall:
         self._handoff_pending = False
         self._tool_lock = asyncio.Lock()
 
+    def fixed_voice(self) -> str | None:
+        """ElevenLabs voice for pre-voiced fixed lines (pipeline engine only)."""
+        if self.engine != "pipeline" or not os.environ.get("ELEVEN_API_KEY"):
+            return None
+        return elevenlabs_voice(self.metadata.get("voice", "default"), self.language)
+
+    def prewarm_fixed_lines(self) -> None:
+        """Voice the greeting and goodbyes while the call is being set up."""
+        voice = self.fixed_voice()
+        if voice is None:
+            return
+        texts = {self.metadata.get("greeting"), self.metadata.get("greeting_without_recording"),
+                 CLOSING_LINE["el" if self.language == "el" else "en"]}
+        for text in filter(None, texts):
+            prerender(text, voice, self.language)
+
+    async def say_fixed(self, text: str, **kwargs):
+        voice = self.fixed_voice()
+        audio = await fixed_audio(text, voice, self.language) if voice else None
+        if audio is not None:
+            return self.session.say(text, audio=audio, **kwargs)
+        return self.session.say(text, **kwargs)
+
     def watch_llm_errors(self) -> None:
         """Text engines: when a reply fails after the SDK's retries (Gemini empty or malformed
         completions, EVAL-003/010, 2026-10-01) the caller heard silence and the turn was
@@ -1067,6 +1116,8 @@ class ReceptionistCall:
         self._last_user_text = text
 
     def read_back(self, result: dict, *, customer_name: str | None = None) -> None:
+        if self.telemetry:
+            self.telemetry.answer_started(None)
         self._confirmation_id = result["confirmation_id"]
         self._confirmation_armed = False
         self._prepared_name = customer_name
@@ -1150,7 +1201,7 @@ class ReceptionistCall:
         await asyncio.sleep(0.1)
         try:
             if self.engine in ("pipeline", "text_pipeline"):
-                handle = self.session.say(line, allow_interruptions=False)
+                handle = await self.say_fixed(line, allow_interruptions=False)
             else:
                 quote = "Πες ακριβώς αυτό" if self.language == "el" else "Say exactly this"
                 handle = self.session.generate_reply(instructions=f"{quote}: {line}", allow_interruptions=False)
@@ -1447,6 +1498,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
             return
 
     rc = ReceptionistCall(ctx, metadata, await pick_engine(metadata["call_id"], receptionist=True))
+    rc.prewarm_fixed_lines()
     call_id = rc.call_id
     max_duration_seconds = metadata.get("max_duration_seconds", 300)
     logger.info("call %s: receptionist (%s, %s), engine %s, language %s",
@@ -1577,8 +1629,19 @@ LANGUAGE_MODE_LINE = {
 }
 
 
+# A request, not a mention: «Did you hear my conversation in Greek?» switched an English
+# call back to Greek (real call, 2026-10-01).
+LANGUAGE_REQUEST = ("mode", "μοντ", "μιλα", "μιλη", "παρακαλ")
+# English requests by shape: «Did you hear me speaking Greek?» is not one (EVAL-014).
+LANGUAGE_REQUEST_EN = re.compile(r"\b(?:do|can|could|would) (?:you|we) speak\b|\bplease\b|\bswitch to\b")
+
+
 def wants_language(text: str) -> str | None:
     plain = _plain(text)
+    words = re.findall(r"\w+", plain)
+    if (len(words) > 4 and not any(w in plain for w in LANGUAGE_REQUEST)
+            and not LANGUAGE_REQUEST_EN.search(plain)):
+        return None
     if any(w in plain for w in ENGLISH_MODE):
         return "en"
     if any(w in plain for w in GREEK_MODE):

@@ -87,3 +87,16 @@ async def test_web_transcript_hides_latin_garble_in_greek_mode():
 
     await worker.publish_web_transcript(room, "friend", "I'd like an appointment", "caller", "en")
     assert published[-1].segments[0].text == "I'd like an appointment"
+
+
+def test_mentioning_a_language_is_not_a_request():
+    # Real call, 2026-10-01: an English call switched back to Greek on this sentence.
+    assert worker.wants_language("Yeah. Did you hear my conversation in Greek?") is None
+    assert worker.wants_language("Did you hear me speaking Greek before?") is None
+    assert worker.wants_language("Can we switch to Greek, please?") == "el"
+    assert worker.wants_language("Η γυναίκα μου είναι Αγγλίδα αλλά μιλάει καλά") is None
+    assert worker.wants_language("English mode. Where are you located?") == "en"
+    assert worker.wants_language("Hi, do you speak English? I'd like to book a check-up.") == "en"
+    assert worker.wants_language("Μπορούμε να μιλήσουμε στα αγγλικά;") == "en"
+    assert worker.wants_language("Ελληνικά παρακαλώ") == "el"
+    assert worker.wants_language("Greek mode") == "el"
