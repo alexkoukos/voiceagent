@@ -330,3 +330,21 @@ def test_no_filler_before_a_goodbye():
         assert agent._closing(text), text
     for text in ("Δευτέρα", "Θέλω ραντεβού", "Ναι, σωστά", ""):
         assert not agent._closing(text), text
+
+
+@pytest.mark.asyncio
+async def test_model_filler_after_ours_is_dropped():
+    import agent
+
+    async def stream(parts):
+        for p in parts:
+            yield p
+
+    async def run(parts):
+        return "".join([c async for c in agent._drop_leading_fillers(stream(parts))])
+
+    assert await run(["Ένα λε", "πτό… Υπάρχει ελεύθερη ώρα την Παρασκευή στις πέντε."]) == \
+        "Υπάρχει ελεύθερη ώρα την Παρασκευή στις πέντε."
+    assert await run(["Μια στιγμή να δω… Ένα λεπτό… Ναι, έχουμε."]) == "Ναι, έχουμε."
+    assert await run(["Η πρώτη επίσκεψη κοστίζει πενήντα ευρώ."]) == "Η πρώτη επίσκεψη κοστίζει πενήντα ευρώ."
+    assert await run(["Ένα λεπτό…"]) == ""
