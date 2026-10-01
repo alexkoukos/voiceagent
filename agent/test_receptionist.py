@@ -105,13 +105,15 @@ async def test_readback_and_booking_use_the_transcribed_name():
     class Call:
         _last_user_text = "Αντρέας Αντετοκούμπο"
         _prepared_name = None
+        _prepared_phone = None
 
         async def tool(self, name, args):
             calls.append((name, args))
             return {"confirmation_id": "confirmation", "say": "Να επιβεβαιώσω;"}
 
-        def read_back(self, result, *, customer_name=None):
+        def read_back(self, result, *, customer_name=None, customer_phone=None):
             self._prepared_name = customer_name
+            self._prepared_phone = customer_phone
 
     rc = Call()
 

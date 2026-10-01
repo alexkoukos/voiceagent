@@ -171,6 +171,36 @@ def say_date(d: date, language: str = "el") -> str:
     return f"{WEEKDAY_EN[d.weekday()]} {d.strftime('%B')} {d.day}"
 
 
+HOURS_EL = ("δώδεκα", "μία", "δύο", "τρεις", "τέσσερις", "πέντε", "έξι", "επτά", "οχτώ", "εννέα", "δέκα", "έντεκα")
+MINUTES_EL = {5: "πέντε", 10: "δέκα", 15: "τέταρτο", 20: "είκοσι", 25: "είκοσι πέντε", 30: "μισή"}
+
+
+def say_time(hhmm: str, language: str = "el") -> str:
+    """How the agent reads a time back: '09:00' -> 'στις εννέα το πρωί'. Digits made the TTS
+    read '09:00' wrongly on a real call (2026-10-01)."""
+    hour, minute = map(int, hhmm.split(":"))
+    if language != "el":
+        clock = f"{hour % 12 or 12}" + (f":{minute:02d}" if minute else "")
+        return f"at {clock} {'a.m.' if hour < 12 else 'p.m.'}"
+    part = ("το πρωί" if hour < 12 else "το μεσημέρι" if hour < 15
+            else "το απόγευμα" if hour < 21 else "το βράδυ")
+    if minute == 0:
+        words = HOURS_EL[hour % 12]
+    elif minute in MINUTES_EL:
+        words = f"{HOURS_EL[hour % 12]} και {MINUTES_EL[minute]}"
+    elif 60 - minute in MINUTES_EL:
+        words = f"{HOURS_EL[(hour + 1) % 12]} παρά {MINUTES_EL[60 - minute]}"
+    else:
+        return f"στις {hour}:{minute:02d}"
+    return f"{'στη' if words.startswith('μία') else 'στις'} {words} {part}"
+
+
+def say_phone(phone: str) -> str:
+    """A phone number read back digit by digit, without the Greek country code."""
+    digits = phone[3:] if phone.startswith("+30") else phone.lstrip("+")
+    return " ".join(digits)
+
+
 def rules_for(practice: Practice) -> dict:
     return {**DEFAULT_RULES, **(practice.rules or {})}
 
@@ -788,6 +818,7 @@ def describe(practice: Practice, appt: Appointment, staff: list[Staff], language
         "date": local.date().isoformat(),
         "date_spoken": say_date(local.date(), language),
         "time": local.strftime("%H:%M"),
+        "time_spoken": say_time(local.strftime("%H:%M"), language),
         "service_id": appt.service_id,
         "service": appt.service_name,
         "customer_name": appt.customer_name,
