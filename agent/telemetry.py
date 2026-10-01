@@ -34,6 +34,7 @@ class CallTelemetry:
         self.closed = False
         self.turn_id = None
         self.speech_end_ns = None
+        self.answer_from_ns = None
         self.session = None
 
     @staticmethod
@@ -71,9 +72,10 @@ class CallTelemetry:
         if ev.new_state == "speaking" and ev.old_state != "speaking":
             self.turn_id = str(uuid.uuid4())
             self.speech_end_ns = None
+            self.answer_from_ns = None
             self.emit("caller_speech_started", source="sdk_state")
         elif ev.old_state == "speaking" and ev.new_state != "speaking":
-            self.speech_end_ns = self.clock()
+            self.speech_end_ns = self.answer_from_ns = self.clock()
             self.emit("caller_speech_stopped", source="sdk_state")
 
     def agent_state(self, ev):
@@ -88,6 +90,19 @@ class CallTelemetry:
                 self.speech_end_ns = None
                 # Human-readable line for plain log tailing; no content.
                 logger.info("call %s reply after %.0f ms", self.call_id, latency_ms)
+
+    def answer_started(self, model_ttft_ms):
+        """The reply's first real words are ready (not a filler): text from the model, or a
+        fixed read-back. The response estimate above stops at any sound, fillers included."""
+        if model_ttft_ms is not None:
+            self.emit("model_ttft", latency_ms=model_ttft_ms, source="worker_llm_node")
+        if self.answer_from_ns is None:
+            return
+        latency_ms = (self.clock() - self.answer_from_ns) / 1_000_000
+        self.answer_from_ns = None
+        self.emit("answer_latency_estimate", latency_ms=latency_ms, source="worker_llm_node",
+                  accuracy="proxy_text_ready_not_playback")
+        logger.info("call %s answer after %.0f ms", self.call_id, latency_ms)
 
     def message(self, ev):
         item = ev.item

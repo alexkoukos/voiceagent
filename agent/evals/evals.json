@@ -219,6 +219,7 @@
       "mode": "text",
       "lines": [
         "Ναι, γεια σας, για εκείνο το θέμα.",
+        "Μακρόνησος. Τίποτα.",
         "Ραντεβού, για έλεγχο.",
         "Αύριο ή μεθαύριο, όποια μέρα είστε ανοιχτά.",
         "Όποια ώρα έχετε.",
@@ -233,7 +234,8 @@
           "unclear",
           "book"
         ]
-      }
+      },
+      "note": "Line 2 is a speech-recognition garble from a real call (2026-10-01): it must not count as off-topic."
     },
     {
       "id": "EVAL-011",
@@ -248,6 +250,93 @@
         "new_appointments": 0
       },
       "critical_all": true
+    },
+    {
+      "id": "EVAL-012",
+      "title": "Confirmation with «Μάλιστα»",
+      "mode": "text",
+      "lines": [
+        "Θέλω ένα ραντεβού για καθαρισμό την άλλη Τετάρτη το πρωί.",
+        "Την πρώτη ώρα που είπατε.",
+        "Αντώνης Δημητρίου.",
+        "Μάλιστα.",
+        "Όχι, ευχαριστώ. Γεια σας."
+      ],
+      "expect": {
+        "outcome": "booked",
+        "new_appointments": 1,
+        "service_id": "cleaning",
+        "weekday": "wed",
+        "no_reconfirm": true
+      },
+      "note": "Real call 2026-10-01: «Μάλιστα» was asked to repeat."
+    },
+    {
+      "id": "EVAL-013",
+      "title": "Caller's name vs the dentist's name",
+      "mode": "text",
+      "lines": [
+        "Καλησπέρα, είμαι ο Στέφανος Ιωάννου.",
+        "Θέλω έναν έλεγχο την άλλη Πέμπτη το πρωί, με την κυρία Αλεξίου.",
+        "Την πρώτη ώρα που είπατε.",
+        "Στέφανος Ιωάννου.",
+        "Ναι, σωστά.",
+        "Γεια σας."
+      ],
+      "expect": {
+        "outcome": "booked",
+        "new_appointments": 1,
+        "weekday": "thu",
+        "customer_not_staff": [
+          "αλεξίου",
+          "αλεξιου",
+          "παπαδόπουλ"
+        ],
+        "customer_name_contains": [
+          "ιωάνν",
+          "ιωανν"
+        ]
+      },
+      "note": "Real call 2026-10-01: booked under «κυρία Παπαδοπούλου», the dentist."
+    },
+    {
+      "id": "EVAL-014",
+      "title": "English mode stays on when Greek is mentioned",
+      "mode": "text",
+      "lines": [
+        "English mode.",
+        "Did you hear me speaking Greek before?",
+        "I'd like a check-up next Monday morning.",
+        "The first time you have is fine.",
+        "Maria Konstantinou.",
+        "Yes, that's right.",
+        "Thanks, bye."
+      ],
+      "expect": {
+        "outcome": "booked",
+        "new_appointments": 1,
+        "weekday": "mon",
+        "no_language_switch_to": "el"
+      },
+      "note": "Real call 2026-10-01: «conversation in Greek» switched back to Greek."
+    },
+    {
+      "id": "EVAL-015",
+      "title": "Confirmation with «Σύμφωνοι»",
+      "mode": "text",
+      "lines": [
+        "Ένα ραντεβού για έλεγχο την άλλη Παρασκευή το πρωί, παρακαλώ.",
+        "Ναι, την πρώτη.",
+        "Ελένη Μαρκάκη.",
+        "Σύμφωνοι.",
+        "Τίποτα άλλο, ευχαριστώ."
+      ],
+      "expect": {
+        "outcome": "booked",
+        "new_appointments": 1,
+        "weekday": "fri",
+        "no_reconfirm": true
+      }
     }
   ]
 }
