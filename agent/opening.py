@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -135,7 +136,7 @@ def language_segments(text: str, language: str) -> list[tuple[str, str]]:
     return segments
 
 
-FIXED_CACHE_DIR = Path(os.environ.get("FIXED_LINE_CACHE", "/tmp/fixed-lines"))
+FIXED_CACHE_DIR = Path(tempfile.gettempdir()) / "fixed-lines"
 
 
 async def _render_fixed(text: str, voice_id: str, language: str) -> list[rtc.AudioFrame]:
