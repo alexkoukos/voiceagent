@@ -614,22 +614,30 @@ async def tool_check_availability(db: AsyncSession, call: Call, args) -> dict:
 
 
 YES_WORDS = {  # after booking._plain: no accents, final ς as σ
-    "ναι", "σωστα", "σωστο", "βεβαια", "βεβαιωσ", "επιβεβαιωνω", "ενταξει", "οκ", "οκει",
-    # Everyday Greek yeses: «Μάλιστα.» was asked to repeat on a real call (2026-10-01).
-    "μαλιστα", "συμφωνοι", "συμφωνω", "ακριβωσ", "φυσικα", "τελεια", "εγινε", "αμε", "προχωρα",
-    "yes", "yeah", "yep", "correct", "confirm", "okay", "ok", "sure", "right",
+    "ναι", "ναισκε", "οκ", "οκει", "αμε", "εγινε", "προχωρα", "προχωρηστε",
+    "yes", "yeah", "yep", "yup", "correct", "confirm", "confirmed", "okay", "ok", "sure", "right",
+    "absolutely", "exactly", "perfect", "definitely", "certainly", "fine",
 }
-YES_PHRASES = ("κλεισ το", "κλειστε το", "κλεισε το", "go ahead", "book it")
+# Word starts, so every form counts: «Ολόσωστα.» was asked to repeat on a real call
+# (2026-10-01), like «Μάλιστα.» before it. σωστ is matched anywhere in the word.
+YES_STEMS = (
+    "σωστ", "μαλιστ", "βεβαι", "επιβεβαι", "εγκριν", "θετικ", "συμφων", "ακριβωσ", "φυσικα",
+    "τελει", "ενταξ", "σαφωσ", "ασφαλωσ", "οπωσδηποτε", "σιγουρ", "εννοειται", "κομπλε",
+)
+YES_PHRASES = ("κλεισ το", "κλειστε το", "κλεισε το", "μια χαρα", "ετσι ειναι", "ετσι ακριβωσ",
+               "go ahead", "book it", "that s right", "sounds good")
 
 
 def _affirmative(text: str | None) -> bool:
     """Require an unambiguous yes in the caller's transcribed reply."""
     plain = booking._plain(text or "")
     words = set(re.findall(r"[\w]+", plain))
-    if words & {"οχι", "μη", "μην", "δεν", "no", "not", "wait", "αλλα", "but"}:
+    if words & {"οχι", "μη", "μην", "δεν", "no", "not", "wait", "αλλα", "but", "λαθοσ", "wrong"}:
         return False
     spaced = " ".join(re.findall(r"[\w]+", plain))
-    return bool(words & YES_WORDS) or any(phrase in spaced for phrase in YES_PHRASES)
+    return (bool(words & YES_WORDS)
+            or any(w.startswith(YES_STEMS) or "σωστ" in w for w in words)
+            or any(phrase in spaced for phrase in YES_PHRASES))
 
 
 async def _offered(db: AsyncSession, call: Call, *, day: str, time: str, service_id: str,

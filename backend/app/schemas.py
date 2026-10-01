@@ -22,6 +22,9 @@ def normalize_phone(value: str) -> str:
     cleaned = re.sub(r"[\s\-(). ]", "", value)
     if cleaned.startswith("00"):
         cleaned = "+" + cleaned[2:]
+    # A Greek number said on a call has no country code ("6907626384"): SMS needs it.
+    if re.fullmatch(r"69\d{8}|2\d{9}", cleaned):
+        cleaned = "+30" + cleaned
     return cleaned
 
 
