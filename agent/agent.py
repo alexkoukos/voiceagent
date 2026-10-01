@@ -37,7 +37,7 @@ import httpx
 from google.genai import types as genai_types
 from google.protobuf.duration_pb2 import Duration
 from livekit import api, rtc
-from livekit.agents import inference, room_io, tts as livekit_tts
+from livekit.agents import inference, llm, room_io, tts as livekit_tts
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -1035,6 +1035,28 @@ class ReceptionistCall:
         self._handoff_pending = False
         self._tool_lock = asyncio.Lock()
 
+    def watch_llm_errors(self) -> None:
+        """Text engines: when a reply fails after the SDK's retries (Gemini empty or malformed
+        completions, EVAL-003/010, 2026-10-01) the caller heard silence and the turn was
+        lost. Ask them to repeat instead, at most once per caller turn."""
+        if self.engine not in ("pipeline", "text_pipeline"):
+            return
+        recovered_turn = [-1]
+
+        def _on_error(ev) -> None:
+            error = getattr(ev, "error", None)
+            if not isinstance(error, llm.LLMError) or error.recoverable or recovered_turn[0] == self._user_turn:
+                return
+            recovered_turn[0] = self._user_turn
+            logger.warning("call %s: reply failed, asking the caller to repeat", self.call_id)
+            line = "Συγγνώμη, μπορείτε να το πείτε ξανά;" if self.language == "el" else "Sorry, could you say that again?"
+            try:
+                self.session.say(line, add_to_chat_ctx=True)
+            except Exception:
+                logger.exception("call %s: recovery line failed", self.call_id)
+
+        self.session.on("error", _on_error)
+
     def spawn(self, coro) -> None:
         t = asyncio.create_task(coro)
         self._tasks.add(t)
@@ -1473,6 +1495,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
         language=lambda: rc.language,
     )
     rc.telemetry = track_telemetry(session, ctx, call_id, rc.engine)
+    rc.watch_llm_errors()
     log_latency(session, call_id)
     guard_repetition(session, ctx, call_id)
     rc.track_latency()
