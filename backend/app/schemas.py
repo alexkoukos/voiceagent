@@ -720,6 +720,12 @@ class PrepareAction(BaseModel):
     customer_name: str | None = Field(default=None, max_length=SHORT_TEXT)
     staff: str | None = Field(default=None, max_length=SHORT_TEXT)
     appointment_id: str | None = None
+    customer_phone: str | None = Field(default=None, max_length=30)
+
+    @field_validator("customer_phone")
+    @classmethod
+    def _phone(cls, v):
+        return normalize_phone(v) if v else v
 
 
 class MessageArgs(BaseModel):
