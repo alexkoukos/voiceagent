@@ -25,6 +25,9 @@ struct NewCallView: View {
     /// nil = automatic, from the friend's phone prefix.
     @State private var language: String?
     @State private var showAddFriend = false
+    /// Speed dial: call a typed number instead of a saved friend.
+    @AppStorage("dialMode") private var dialMode = false
+    @State private var dialed = ""
     @State private var editingFriend: Friend?
     @State private var deletingFriend: Friend?
     @State private var showSettings = false
@@ -37,8 +40,12 @@ struct NewCallView: View {
 
     private var needsSetup: Bool { Settings.apiKey.isEmpty }
     private var selectedFriend: Friend? { friends.first { $0.id == friendId } }
+    private var hasTarget: Bool { dialMode ? DialPadView.isDialable(dialed) : selectedFriend != nil }
     private var canCall: Bool {
-        selectedFriend != nil && !starting && !scenario.trimmed.isEmpty
+        hasTarget && !starting && !scenario.trimmed.isEmpty
+    }
+    private var targetName: String? {
+        dialMode ? (DialPadView.isDialable(dialed) ? DialPadView.display(dialed) : nil) : selectedFriend?.name
     }
 
     var body: some View {
@@ -120,7 +127,15 @@ struct NewCallView: View {
     private var friendSection: some View {
         VStack(alignment: .leading, spacing: Space.m) {
             SectionTitle("Σε ποιον;")
-            if loaded && friends.isEmpty {
+            Picker("Τρόπος", selection: $dialMode) {
+                Text("Επαφές").tag(false)
+                Text("Πληκτρολόγιο").tag(true)
+            }
+            .pickerStyle(.segmented)
+            if dialMode {
+                DialPadView(number: $dialed)
+                    .padding(.vertical, Space.s)
+            } else if loaded && friends.isEmpty {
                 Button { showAddFriend = true } label: {
                     Label("Πρόσθεσε τον πρώτο σου φίλο", systemImage: "person.badge.plus")
                         .frame(maxWidth: .infinity, minHeight: 52)
@@ -197,7 +212,7 @@ struct NewCallView: View {
                 .pickerStyle(.menu)
                 if !languages.isEmpty {
                     Picker("Γλώσσα", selection: $language) {
-                        Text("Αυτόματα (\(languageName(selectedFriend?.language)))").tag(String?.none)
+                        Text(dialMode ? "Αυτόματα, από τον αριθμό" : "Αυτόματα (\(languageName(selectedFriend?.language)))").tag(String?.none)
                         ForEach(languages) { Text($0.name).tag(Optional($0.code)) }
                     }
                     .pickerStyle(.menu)
@@ -221,7 +236,8 @@ struct NewCallView: View {
 
     private var callBar: some View {
         Button { Task { await startCall() } } label: {
-            Label(starting ? "Ξεκινάει…" : (selectedFriend.map { "Κάλεσε · \($0.name)" } ?? "Διάλεξε φίλο και γράψε τι θα γίνει"),
+            Label(starting ? "Ξεκινάει…" : (targetName.map { "Κάλεσε · \($0)" }
+                    ?? (dialMode ? "Πληκτρολόγησε αριθμό και γράψε τι θα γίνει" : "Διάλεξε φίλο και γράψε τι θα γίνει")),
                   systemImage: "phone.fill")
         }
         .buttonStyle(PrimaryButtonStyle())
@@ -262,17 +278,18 @@ struct NewCallView: View {
     }
 
     private func startCall() async {
-        guard let friend = selectedFriend else { return }
+        guard let name = targetName else { return }
         starting = true
         defer { starting = false }
-        let request = NewCall(friendId: friend.id, persona: "", scenario: scenario.trimmed,
+        let request = NewCall(friendId: dialMode ? nil : selectedFriend?.id,
+                              phoneNumber: dialMode ? dialed : nil, persona: "", scenario: scenario.trimmed,
                               context: "", reveal: "", voice: voice,
                               maxDurationSeconds: maxMinutes * 60, fromOwnNumber: fromOwnNumber,
                               language: language)
         do {
             errorMessage = nil
             let call = try await api.startCall(request)
-            liveCall = LiveCallRequest(call: call, friendName: friend.name, request: request)
+            liveCall = LiveCallRequest(call: call, friendName: name, request: request)
         } catch { errorMessage = friendlyMessage(error) }
     }
 
