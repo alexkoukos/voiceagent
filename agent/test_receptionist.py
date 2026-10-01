@@ -155,9 +155,14 @@ async def test_web_pipeline_greeting_waits_for_playout():
             return Handle()
 
     greeting = "Οδοντιατρείο Παπαδοπούλου. For English, say English."
+    session = Session()
+
+    async def say_fixed(text, **kwargs):  # pre-voiced audio unavailable: streamed as before
+        return session.say(text, **kwargs)
+
     receiver = SimpleNamespace(
-        _rc=SimpleNamespace(metadata={"greeting": greeting}, engine="pipeline"),
-        session=Session(), language="el",
+        _rc=SimpleNamespace(metadata={"greeting": greeting}, engine="pipeline", say_fixed=say_fixed),
+        session=session, language="el",
     )
     await worker.ReceptionistAgent.greet(receiver, wait_for_playout=True)
     assert played == [greeting, "finished"]
@@ -295,3 +300,23 @@ def test_realtime_engine_does_not_add_a_recovery_line():
     rc.session = SimpleNamespace(on=lambda event, cb: handlers.setdefault(event, cb))
     rc.watch_llm_errors()
     assert handlers == {}
+
+
+@pytest.mark.asyncio
+async def test_llm_node_reports_the_first_real_words_not_the_filler(monkeypatch):
+    seen = []
+
+    async def model(*_args):
+        await worker.asyncio.sleep(0.02)
+        yield SimpleNamespace(delta=SimpleNamespace(content=None, tool_calls=["route_call"]))
+        yield SimpleNamespace(delta=SimpleNamespace(content="Την Τρίτη έχω στις δέκα."))
+        yield SimpleNamespace(delta=SimpleNamespace(content=" Σας βολεύει;"))
+
+    monkeypatch.setattr(worker.Agent.default, "llm_node", model)
+    monkeypatch.setattr(worker, "FILLER_DELAY_SECONDS", 0.001)
+    receiver = SimpleNamespace(_fillers=SimpleNamespace(pick=lambda language: "Λοιπόν…"), _opened=True,
+                               _last_filler_at=-100, language="el",
+                               _rc=SimpleNamespace(telemetry=SimpleNamespace(answer_started=seen.append)))
+    chunks = [c async for c in worker.PrankCallerAgent.llm_node(receiver, None, None, None)]
+    assert chunks[0] == "Λοιπόν… "
+    assert len(seen) == 1 and seen[0] >= 15  # model time to the answer text, filler excluded

@@ -21,6 +21,7 @@ import os
 import random
 import sys
 import time
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,9 +29,11 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).resolve().parent
+RECOVERY_LINES = {"Συγγνώμη, μπορείτε να το πείτε ξανά;", "Sorry, could you say that again?"}
 WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 CRITICAL = {"new_appointments", "service_id", "weekday", "not_weekday_afternoon", "seeded_status",
-            "seeded_weekday", "handoff_status_in", "messages"}
+            "seeded_weekday", "handoff_status_in", "messages", "no_reconfirm", "customer_not_staff",
+            "no_language_switch_to"}
 
 
 # --- checks (pure; unit-tested in test_evals.py) ---
@@ -40,6 +43,12 @@ def local(value: str, tz: str) -> datetime:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(ZoneInfo(tz))
+
+
+def plain(text: str) -> str:
+    """Lowercase, no accents, final ς as σ (like the backend's booking._plain)."""
+    decomposed = unicodedata.normalize("NFD", text.lower())
+    return "".join(c for c in decomposed if unicodedata.category(c) != "Mn").replace("ς", "σ")
 
 
 def subsequence(wanted: list[str], called: list[str]) -> bool:
@@ -75,7 +84,7 @@ def check(expect: dict, obs: dict, critical_all: bool = False) -> list[dict]:
             add(name, bool(new) and not bad, [a["starts_at"] for a in new])
         elif name == "customer_name_contains":  # a string, or a list of accepted spellings
             options = [want] if isinstance(want, str) else want
-            add(name, bool(new) and all(any(o.lower() in a["customer_name"].lower() for o in options) for a in new),
+            add(name, bool(new) and all(any(plain(o) in plain(a["customer_name"]) for o in options) for a in new),
                 [a["customer_name"] for a in new])
         elif name == "seeded_status":
             seeded = obs.get("seeded") or {}
@@ -104,6 +113,17 @@ def check(expect: dict, obs: dict, critical_all: bool = False) -> list[dict]:
                 add(name, bool(statuses) and statuses[-1] in want, statuses)
         elif name == "messages":
             add(name, len(obs.get("messages", [])) == want, f"got {len(obs.get('messages', []))}")
+        elif name == "no_reconfirm":  # the first clear yes was accepted
+            rejected = [t for t, _a, r in obs.get("tools", []) if isinstance(r, dict)
+                        and r.get("error") == "confirmation_required"]
+            add(name, not rejected, rejected)
+        elif name == "customer_not_staff":
+            bad = [a["customer_name"] for a in new
+                   if any(plain(w) in plain(a["customer_name"]) for w in want)]
+            add(name, bool(new) and not bad, [a["customer_name"] for a in new])
+        elif name == "no_language_switch_to":
+            switched = [a for t, a, _r in obs.get("tools", []) if t == "set_language" and a.get("language") == want]
+            add(name, not switched, switched)
         elif name == "first_route_intent_in":
             intents = [args.get("intent") for tool, args, _ in obs.get("tools", []) if tool == "route_call"]
             add(name, bool(intents) and intents[0] in want, intents)
@@ -141,6 +161,7 @@ def summarize(runs: list[dict]) -> dict:
         "tool_calls": len(tools),
         "tool_error_rate": (sum(1 for t in tools if isinstance(t[2], dict) and t[2].get("error")) / len(tools)
                             if tools else None),
+        "recoveries": sum(run.get("recoveries", 0) for run in runs),
         "cost_usd_per_call": sum(costs) / len(costs) if costs else None,
         "cost_known_calls": len(costs),
     }
@@ -268,11 +289,13 @@ class Harness:
         rc.watch_llm_errors()
         await session.start(agent=rc.agent)
         started = time.perf_counter()
-        turn_ms, first_reply_ms, error = [], [], None
+        turn_ms, first_reply_ms, error, recoveries = [], [], None, 0
         try:
             await rc.agent.greet()
             await self.settle(rc, session)
-            for line in spec["lines"]:
+            pending = list(spec["lines"])
+            while pending:
+                line = pending.pop(0)
                 if ctx.room.disconnected:
                     break
                 rc.heard_user(line)
@@ -291,6 +314,11 @@ class Harness:
                 replies = [at for at, text in agent_lines[seen:] if text.strip()]
                 if replies:
                     first_reply_ms.append((replies[0] - t0) * 1000)
+                if any(text.strip() in RECOVERY_LINES for _, text in agent_lines[seen:]):
+                    # The reply failed and the agent asked to repeat: a real caller would.
+                    recoveries += 1
+                    if recoveries <= 2:
+                        pending.insert(0, line)
         except Exception as e:  # a crash is a failed eval, not a crashed suite
             error = f"{type(e).__name__}: {e}"
         finally:
@@ -316,7 +344,7 @@ class Harness:
             "passed": all(c["passed"] for c in checks),
             "critical_passed": all(c["passed"] for c in checks if c["critical"]),
             "checks": checks, "duration_s": round(time.perf_counter() - started, 1),
-            "turn_ms": turn_ms, "first_reply_ms": first_reply_ms, "tools": tools,
+            "turn_ms": turn_ms, "first_reply_ms": first_reply_ms, "tools": tools, "recoveries": recoveries,
             "outcome": obs["outcome"], "cost_usd": cost.get("known_usd") if cost else None,
             "transcript": [e["role"] + ": " + e["text"] for e in detail.get("transcript_entries", [])],
         }
@@ -367,6 +395,7 @@ def print_report(runs: list[dict], stats: dict) -> None:
     print(f"\nruns {stats['runs']}  success {stats['success_rate']:.0%}  critical failures {stats['critical_failures']}")
     print(f"turn ms: {fmt(stats['turn_ms'])}")
     print(f"first reply ms: {fmt(stats['first_reply_ms'])}")
+    print(f"failed replies recovered by asking to repeat: {stats['recoveries']}")
     if stats["tool_error_rate"] is not None:
         print(f"tool calls {stats['tool_calls']}  tool error rate {stats['tool_error_rate']:.1%}")
     if stats["cost_usd_per_call"] is not None:
@@ -399,6 +428,7 @@ async def main() -> int:
         if not os.environ.get(name):
             sys.exit(f"Set {name}.")
     os.environ["BACKEND_PUBLIC_URL"] = args.backend
+    os.environ["ELEVEN_API_KEY"] = ""  # text mode: no pre-voiced audio (and no TTS spend)
     os.environ.setdefault("AGENT_VERSION", "eval")
     sys.path.insert(0, str(HERE.parent))
     import httpx

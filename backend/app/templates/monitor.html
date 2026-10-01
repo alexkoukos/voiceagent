@@ -89,17 +89,19 @@
     <div id="content" hidden>
       <div class="row panel"><div><b id="c-title"></b><div class="muted" id="c-sub"></div></div><div id="c-state"></div></div>
       <div class="tiles">
-        <div class="tile"><span class="muted">Last reply</span><b id="t-last">–</b></div>
-        <div class="tile"><span class="muted">p50 reply</span><b id="t-p50">–</b></div>
-        <div class="tile"><span class="muted">p95 reply</span><b id="t-p95">–</b></div>
-        <div class="tile"><span class="muted">Replies</span><b id="t-turns">0</b></div>
+        <div class="tile"><span class="muted">Last answer</span><b id="t-last">–</b></div>
+        <div class="tile"><span class="muted">p50 answer</span><b id="t-p50">–</b></div>
+        <div class="tile"><span class="muted">p95 answer</span><b id="t-p95">–</b></div>
+        <div class="tile"><span class="muted">First sound p50</span><b id="t-sound">–</b></div>
+        <div class="tile"><span class="muted">Model TTFT p50</span><b id="t-ttft">–</b></div>
+        <div class="tile"><span class="muted">Answers</span><b id="t-turns">0</b></div>
         <div class="tile"><span class="muted">Tool p50</span><b id="t-tool">–</b></div>
         <div class="tile"><span class="muted">Duration</span><b id="t-dur">–</b></div>
       </div>
       <div class="panel">
-        <h2>Caller stops speaking → agent starts speaking</h2>
+        <h2>Caller stops speaking → real answer ready</h2>
         <div id="bars"></div>
-        <div class="muted">Green under 1 s, amber under 2 s, red above. Measured on the worker (SDK state), not handset playback.</div>
+        <div class="muted">Green under 1 s, amber under 2 s, red above. Time until the answer's first words are ready (fillers like «Λοιπόν…» excluded), measured on the worker; the caller hears it about a TTS first byte later. Older calls without answer events show first sound instead.</div>
       </div>
       <div class="panel">
         <h2>Stage timings per message (ms)</h2>
@@ -211,8 +213,12 @@
     const live = call.status === "active" || call.status === "dialing";
     $("c-state").replaceChildren(el("span", live ? "● live" : [call.status, call.outcome || call.end_reason].filter(Boolean).join(" · "), live ? "live" : "muted"));
 
-    const replies = events.filter((e) => e.event === "response_latency_estimate");
+    const sounds = events.filter((e) => e.event === "response_latency_estimate");
+    const answerEvents = events.filter((e) => e.event === "answer_latency_estimate");
+    const replies = answerEvents.length ? answerEvents : sounds;
     const values = replies.map((e) => e.latency_ms);
+    $("t-sound").textContent = fmtMs(pct(sounds.map((e) => e.latency_ms), .5));
+    $("t-ttft").textContent = fmtMs(pct(events.filter((e) => e.event === "model_ttft").map((e) => e.latency_ms), .5));
     const last = values[values.length - 1];
     for (const [id, v] of [["t-last", last], ["t-p50", pct(values, .5)], ["t-p95", pct(values, .95)]]) {
       $(id).textContent = fmtMs(v); $(id).className = cls(v);
@@ -256,12 +262,14 @@
     try {
       const d = await api(`/monitor/api/summary?days=${$("days").value}`);
       $("summary").hidden = false;
-      const c = d.cost, r = d.reply_ms;
+      const c = d.cost, r = d.answer_ms.n ? d.answer_ms : d.reply_ms, sound = d.reply_ms;
       const items = [
         ["Calls", d.calls], ["Minutes", d.minutes], ["Successful", `${d.successful} / ${d.calls}`],
         ["Appointments", d.appointments], ["Transfers", d.transfers], ["Failed", d.failed], ["Tool errors", d.tool_errors],
-        ["Reply p50 / p95 / p99", `${fmtMs(r.p50)} / ${fmtMs(r.p95)} / ${fmtMs(r.p99)}`, cls(r.p95)],
-        ["Replies measured", r.n],
+        ["Answer p50 / p95 / p99", `${fmtMs(r.p50)} / ${fmtMs(r.p95)} / ${fmtMs(r.p99)}`, cls(r.p95)],
+        ["Answers measured", r.n],
+        ["First sound p50 (incl. filler)", fmtMs(sound.p50)],
+        ["Model TTFT p50", fmtMs(d.model_ttft_ms.p50)],
         ["STT p50", fmtMs(d.stages_ms.transcription_delay.p50)], ["End of turn p50", fmtMs(d.stages_ms.end_of_turn_delay.p50)],
         ["LLM first token p50", fmtMs(d.stages_ms.llm_node_ttft.p50)], ["TTS first byte p50", fmtMs(d.stages_ms.tts_node_ttfb.p50)],
         ["Tool p50 / p95", `${fmtMs(d.tool_ms.p50)} / ${fmtMs(d.tool_ms.p95)}`],
@@ -280,7 +288,9 @@
       case "session_observation_ended": return "session ended";
       case "caller_speech_started": return "caller started speaking";
       case "caller_speech_stopped": return "caller stopped speaking";
-      case "response_latency_estimate": return `▶ agent replied after ${fmtMs(e.latency_ms)}`;
+      case "response_latency_estimate": return `agent first sound after ${fmtMs(e.latency_ms)}`;
+      case "answer_latency_estimate": return `▶ answer ready after ${fmtMs(e.latency_ms)}`;
+      case "model_ttft": return `model first token ${fmtMs(e.latency_ms)}`;
       case "agent_state_changed": return `agent ${e.old_state} → ${e.new_state}`;
       case "message_metrics": {
         const parts = Object.entries(e.latencies || {}).map(([k, v]) => `${k.replace(/_ms$/, "")}=${Math.round(v)}`);

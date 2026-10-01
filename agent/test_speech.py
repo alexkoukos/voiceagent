@@ -168,3 +168,48 @@ async def test_prepared_opening_uses_same_pronunciation_and_delivery_as_replies(
     assert body["model_id"] == worker.ELEVENLABS_TTS_MODEL
     assert body["language_code"] == "el"
     assert body["voice_settings"] == worker.elevenlabs_voice_settings()
+
+
+def test_fixed_lines_split_greek_and_english():
+    from opening import language_segments
+    greeting = "Οδοντιατρείο Παπαδοπούλου. Είμαι ο ψηφιακός βοηθός. Πώς μπορώ να σας βοηθήσω; For English, say English mode."
+    assert language_segments(greeting, "el") == [
+        ("Οδοντιατρείο Παπαδοπούλου. Είμαι ο ψηφιακός βοηθός. Πώς μπορώ να σας βοηθήσω;", "el"),
+        ("For English, say English mode.", "en"),
+    ]
+    assert language_segments("Thank you for calling. Goodbye.", "en") == [("Thank you for calling. Goodbye.", "en")]
+
+
+@pytest.mark.asyncio
+async def test_fixed_lines_are_voiced_once_and_reused_from_disk(monkeypatch, tmp_path):
+    import opening
+    from livekit import rtc
+    calls = []
+
+    async def voice(text, voice_id, language, model):
+        calls.append((text, language, model))
+        return [rtc.AudioFrame(b"\x01\x00" * 480, opening.SAMPLE_RATE, 1, 480)]
+
+    monkeypatch.setattr(opening, "_voice_line", voice)
+    monkeypatch.setattr(opening, "FIXED_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(opening, "_fixed", {})
+    text = "Γεια σας. For English, say English mode."
+    audio = await opening.fixed_audio(text, "voice", "el")
+    assert len([f async for f in audio]) == 2
+    assert [(t, lang) for t, lang, _ in calls] == [("Γεια σας.", "el"), ("For English, say English mode.", "en")]
+    monkeypatch.setattr(opening, "_fixed", {})  # a new call process: only the disk cache is left
+    again = await opening.fixed_audio(text, "voice", "el")
+    assert len([f async for f in again]) == 2 and len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_fixed_line_falls_back_to_streaming(monkeypatch, tmp_path):
+    import opening
+
+    async def broken(*_args):
+        raise RuntimeError("no credits")
+
+    monkeypatch.setattr(opening, "_voice_line", broken)
+    monkeypatch.setattr(opening, "FIXED_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(opening, "_fixed", {})
+    assert await opening.fixed_audio("Γεια σας.", "voice", "el") is None

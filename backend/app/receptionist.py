@@ -505,6 +505,12 @@ async def _department_staff(db: AsyncSession, practice: Practice, call: Call) ->
 
 async def tool_route(db: AsyncSession, call: Call, args) -> dict:
     practice = await _practice(db, call)
+    if args.intent == "off_topic" and await _short_last_turn(db, call):
+        # Two words or fewer is more likely misheard audio («Μακρόνησος. Τίποτα.» for
+        # «Μ' ακούτε;», 2026-10-01) than trolling: never a strike towards hanging up.
+        await routing.log(db, call, "intent", "short_turn", "short turn not counted as off-topic", "clarify")
+        await db.commit()
+        return {"path": "clarify", "next": "You may have misheard. Briefly ask them to repeat what they need."}
     result = await routing.route(
         db, practice, call, intent=args.intent, staff_name=args.staff or "", department=args.department or "",
         language=args.language or "", now=utcnow(),
@@ -520,6 +526,34 @@ async def tool_route(db: AsyncSession, call: Call, args) -> dict:
     await db.commit()
     notifications.kick()
     return result
+
+
+TITLES = {"κυρια", "κυριε", "κυριοσ", "κυριου", "κ", "δρ", "δοκτωρ", "γιατροσ", "γιατρο", "γιατρε",
+          "γιατρινα", "dr", "doctor", "mrs", "mr", "ms", "miss"}
+NAME_IS_STAFF = {"error": "name_is_staff", "hint": "That is a staff member's name. Ask the caller for their own full name."}
+
+
+async def _names_staff(db: AsyncSession, practice: Practice, name: str | None) -> bool:
+    """«κυρία Παπαδοπούλου» meant the dentist, not the caller (real call, 2026-10-01).
+    Only a title + staff surname or a staff member's exact name: patients often share a
+    common surname with the practice («Γιώργος Παπαδόπουλος»)."""
+    words = re.findall(r"\w+", booking._plain(name or ""))
+    if not words:
+        return False
+    staff = await booking.staff_of(db, practice.id)
+    if any(re.findall(r"\w+", booking._plain(person.name)) == words for person in staff):
+        return True
+    rest = [w for w in words if w not in TITLES]
+    if len(rest) == len(words) or not rest:
+        return False
+    return booking.match_staff(staff, " ".join(rest)) is not None
+
+
+async def _short_last_turn(db: AsyncSession, call: Call) -> bool:
+    last = (await db.execute(select(TranscriptEntry).where(
+        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.friend,
+    ).order_by(TranscriptEntry.created_at.desc()).limit(1))).scalar_one_or_none()
+    return last is not None and len(re.findall(r"\w+", last.text)) <= 2
 
 
 async def _emergency(db: AsyncSession, practice: Practice, call: Call) -> None:
@@ -579,14 +613,23 @@ async def tool_check_availability(db: AsyncSession, call: Call, args) -> dict:
     return result
 
 
+YES_WORDS = {  # after booking._plain: no accents, final ς as σ
+    "ναι", "σωστα", "σωστο", "βεβαια", "βεβαιωσ", "επιβεβαιωνω", "ενταξει", "οκ", "οκει",
+    # Everyday Greek yeses: «Μάλιστα.» was asked to repeat on a real call (2026-10-01).
+    "μαλιστα", "συμφωνοι", "συμφωνω", "ακριβωσ", "φυσικα", "τελεια", "εγινε", "αμε", "προχωρα",
+    "yes", "yeah", "yep", "correct", "confirm", "okay", "ok", "sure", "right",
+}
+YES_PHRASES = ("κλεισ το", "κλειστε το", "κλεισε το", "go ahead", "book it")
+
+
 def _affirmative(text: str | None) -> bool:
     """Require an unambiguous yes in the caller's transcribed reply."""
     plain = booking._plain(text or "")
     words = set(re.findall(r"[\w]+", plain))
-    if words & {"οχι", "μη", "δεν", "no", "not", "wait", "αλλα", "but"}:
+    if words & {"οχι", "μη", "μην", "δεν", "no", "not", "wait", "αλλα", "but"}:
         return False
-    return bool(words & {"ναι", "σωστα", "βεβαια", "επιβεβαιωνω", "ενταξει", "οκ",
-                         "yes", "correct", "confirm", "okay", "ok"})
+    spaced = " ".join(re.findall(r"[\w]+", plain))
+    return bool(words & YES_WORDS) or any(phrase in spaced for phrase in YES_PHRASES)
 
 
 async def _offered(db: AsyncSession, call: Call, *, day: str, time: str, service_id: str,
@@ -629,6 +672,8 @@ async def tool_prepare_action(db: AsyncSession, call: Call, args) -> dict:
         day, time = args.date.isoformat(), args.time
         service_id = args.service_id
         name = (args.customer_name or appt.customer_name).strip()
+        if action == "book" and await _names_staff(db, practice, name):
+            return NAME_IS_STAFF
         staff_name = args.staff or ""
         if appt and appt.staff_id:
             # A move is checked against the appointment's own staff (tool_check_availability);
@@ -710,6 +755,8 @@ async def tool_book(db: AsyncSession, call: Call, args) -> dict:
     practice = await _practice(db, call)
     language = _lang(call, practice)
     source = "waitlist" if (call.purpose or "").startswith("waitlist:") else "agent"
+    if await _names_staff(db, practice, args.customer_name):
+        return {"booked": False, **NAME_IS_STAFF}
     if not await _confirmed(db, call, args, "book"):
         return {"booked": False, "error": "confirmation_required"}
     try:

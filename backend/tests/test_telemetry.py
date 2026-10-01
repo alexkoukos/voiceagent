@@ -211,3 +211,16 @@ async def test_usage_event_is_validated_and_prices_the_call(telemetry_http, sess
         call = await db.get(Call, cid)
         stt = next(line for line in call.cost_breakdown["lines"] if line["component"] == "stt")
         assert stt["cost_usd"] == pytest.approx(0.0058)
+
+
+@pytest.mark.asyncio
+async def test_answer_and_model_ttft_events_are_accepted(telemetry_http):
+    http, cid = telemetry_http
+    path = f"/internal/calls/{cid}/telemetry"
+    answer = event(cid, 1, event="answer_latency_estimate", source="worker_llm_node",
+                   latency_ms=1850.5, accuracy="proxy_text_ready_not_playback")
+    ttft = event(cid, 2, answer["session_id"], event="model_ttft", source="worker_llm_node", latency_ms=640.0)
+    response = await http.post(path, headers=AGENT, json={"events": [answer, ttft]})
+    assert response.json()["inserted"] == 2, response.text
+    missing = event(cid, 3, answer["session_id"], event="answer_latency_estimate", latency_ms=1.0)
+    assert (await http.post(path, headers=AGENT, json={"events": [missing]})).status_code == 422
