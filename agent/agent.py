@@ -95,6 +95,10 @@ FILLER_GAP_SECONDS = 4
 # Pipeline engine: pause that ends a transcribed segment, and the least wait after the caller
 # stops before replying. Lower is snappier but splits normal-speed speech into fragments.
 SCRIBE_SILENCE_SECS = env_number("SCRIBE_SILENCE_SECS", 0.7, 0.3, 2.0)
+# The caller's answer to a readback gets more time before their turn ends: with a short
+# silence, «Ναι… ολόσωστα» could be cut after «Ναι…» (2026-10-01).
+CONFIRM_MIN_DELAY = env_number("CONFIRM_MIN_DELAY", 0.8, 0.2, 3.0)
+CONFIRM_MAX_DELAY = env_number("CONFIRM_MAX_DELAY", 1.6, 0.5, 5.0)
 ENDPOINT_MIN_DELAY = float(os.environ.get("ENDPOINT_MIN_DELAY", "0.5"))
 # If the callee stays silent after answering, open the conversation after this long.
 GREETING_WAIT_SECONDS = 4
@@ -343,7 +347,9 @@ class PrankCallerAgent(Agent):
             done, _ = await asyncio.wait({first}, timeout=FILLER_DELAY_SECONDS)
             # One filler per turn: a reply started early and then restarted must not add a second.
             now = asyncio.get_event_loop().time()
-            if not done and now - self._last_filler_at > FILLER_GAP_SECONDS:
+            # No filler before the goodbye: «Ευχαριστώ, γεια.» got «Μάλιστα…» and then the
+            # closing line, which sounded broken (2026-10-01).
+            if not done and now - self._last_filler_at > FILLER_GAP_SECONDS and not _closing(_last_user_text(chat_ctx)):
                 self._last_filler_at = now
                 yield self._fillers.pick(self.language) + " "
             try:
@@ -355,6 +361,22 @@ class PrankCallerAgent(Agent):
         finally:
             if not first.done():
                 first.cancel()
+
+
+CLOSING_WORDS = re.compile(
+    r"\b(ευχαριστ\w*|γει[αά]\w*|αντίο|αντιο|καληνύχτα|καλή συνέχεια|τίποτα άλλο|"
+    r"thanks?|thank you|bye|goodbye|nothing else)\b", re.I)
+
+
+def _closing(text: str) -> bool:
+    return bool(text and CLOSING_WORDS.search(text))
+
+
+def _last_user_text(chat_ctx) -> str:
+    for item in reversed(getattr(chat_ctx, "items", [])):
+        if getattr(item, "role", None) == "user":
+            return getattr(item, "text_content", None) or ""
+    return ""
 
 
 def _chunk_text(chunk) -> str:
@@ -1058,6 +1080,7 @@ class ReceptionistCall:
         self._switching_language = False
         self._tasks: set[asyncio.Task] = set()
         self._user_turn = 0
+        self._patient = False
         self._last_user_text = ""
         self._confirmation_id: str | None = None
         self._confirmation_floor = 0
@@ -1121,6 +1144,17 @@ class ReceptionistCall:
     def heard_user(self, text: str) -> None:
         self._user_turn += 1
         self._last_user_text = text
+        if self._patient:
+            self._patient = False
+            self._set_endpointing(ENDPOINT_MIN_DELAY, TURN_MAX_DELAY_MS / 1000)
+
+    def _set_endpointing(self, min_delay: float, max_delay: float) -> None:
+        if self.engine != "pipeline":
+            return
+        try:
+            self.session.update_options(endpointing_opts={"min_delay": min_delay, "max_delay": max_delay})
+        except Exception:
+            logger.exception("call %s: endpointing update failed", self.call_id)
 
     def read_back(self, result: dict, *, customer_name: str | None = None,
                   customer_phone: str | None = None) -> None:
@@ -1141,6 +1175,8 @@ class ReceptionistCall:
                 await asyncio.wait_for(handle.wait_for_playout(), timeout=20)
                 self._confirmation_floor = self._user_turn
                 self._confirmation_armed = True
+                self._patient = True
+                self._set_endpointing(CONFIRM_MIN_DELAY, CONFIRM_MAX_DELAY)
             except Exception:
                 logger.exception("call %s: confirmation readback failed", self.call_id)
 
