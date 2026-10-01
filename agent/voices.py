@@ -27,6 +27,15 @@ ELEVENLABS_VOICES: dict[str, str] = {
 }
 
 
+# Native Greek voices for Greek calls (2026-10-01): the English premade voices spoke
+# Greek with a foreign, almost Cypriot accent. The practice's male/female toggle picks
+# Zubenelgenubi or Kore. ELEVENLABS_VOICE_MAP_EL still overrides these.
+ELEVENLABS_VOICES_EL: dict[str, str] = {
+    "Zubenelgenubi": "cuab90umcstNgL8U7orz",  # Fatsis: male, Athenian, warm
+    "Kore": "mRTQIE2xdk2oMdoKFGJu",  # Aria: female, warm
+}
+
+
 def _overrides(variable: str = "ELEVENLABS_VOICE_MAP") -> dict[str, str]:
     raw = os.environ.get(variable, "")
     if not raw:
@@ -44,7 +53,9 @@ def _overrides(variable: str = "ELEVENLABS_VOICE_MAP") -> dict[str, str]:
 def elevenlabs_voice(key: str, language: str | None = None) -> str:
     mapping = {**ELEVENLABS_VOICES, **_overrides()}
     localized = _overrides(f"ELEVENLABS_VOICE_MAP_{language.upper()}") if language in {"el", "en"} else {}
-    return localized.get(key) or localized.get("default") or mapping.get(key) or mapping["default"]
+    native = ELEVENLABS_VOICES_EL.get(key) if language == "el" else None
+    return (localized.get(key) or localized.get("default") or native
+            or mapping.get(key) or mapping["default"])
 
 
 # OpenAI Realtime voices, matched to each key's label in the app.
