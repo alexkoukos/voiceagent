@@ -248,9 +248,16 @@ class Harness:
         caller = f"+3069{random.randrange(10**7, 10**8)}"
         seeded_id = None
         if seed := spec.get("seed_appointment"):
-            r = await self.http.post(f"/practices/{pid}/appointments", headers=self.founder, json={
-                "date": seed_date(seed["days_ahead_weekday"], tz).isoformat(), "time": seed["time"],
-                "service_id": seed["service_id"], "customer_name": seed["customer_name"], "customer_phone": caller})
+            # Earlier evals in this practice may hold the slot: take the next free one that morning.
+            hour, minute = map(int, seed["time"].split(":"))
+            for step in range(12):
+                total = hour * 60 + minute + 15 * step
+                r = await self.http.post(f"/practices/{pid}/appointments", headers=self.founder, json={
+                    "date": seed_date(seed["days_ahead_weekday"], tz).isoformat(),
+                    "time": f"{total // 60:02d}:{total % 60:02d}", "service_id": seed["service_id"],
+                    "customer_name": seed["customer_name"], "customer_phone": caller})
+                if r.status_code != 409:
+                    break
             r.raise_for_status()
             seeded_id = r.json()["id"]
         before = {a["id"] for a in await self.appointments()}
