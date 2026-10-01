@@ -818,6 +818,7 @@ def describe(practice: Practice, appt: Appointment, staff: list[Staff], language
         "date": local.date().isoformat(),
         "date_spoken": say_date(local.date(), language),
         "time": local.strftime("%H:%M"),
+        "time_spoken": say_time(local.strftime("%H:%M"), language),
         "service_id": appt.service_id,
         "service": appt.service_name,
         "customer_name": appt.customer_name,
