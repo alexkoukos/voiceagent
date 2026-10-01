@@ -201,24 +201,25 @@ struct DocumentScanner: UIViewControllerRepresentable {
 
 struct ForwardingView: View {
     let practice: Practice
-    @State private var full = false
     @State private var info: ForwardingInfo?
+    @State private var setup: RoutingSetupInfo?
     @State private var copied: String?
     @State private var errorMessage: String?
 
-    private static let labels = ["no_answer": "Δεν απαντάτε σε 20″", "busy": "Μιλάτε", "unreachable": "Εκτός δικτύου",
+    private static let labels = ["no_answer": "Δεν απαντάτε", "busy": "Μιλάτε", "unreachable": "Εκτός δικτύου",
                                  "all_calls": "Όλες οι κλήσεις"]
 
     var body: some View {
         Form {
-            Section {
-                Picker("Τρόπος", selection: $full) {
-                    Text("Αναπληρωματικά").tag(false)
-                    Text("Όλες οι κλήσεις").tag(true)
+            if let setup {
+                Section("Αριθμοί") {
+                    if let publicNumber = setup.publicNumber { Text("Υπάρχων αριθμός: \(publicNumber)") }
+                    if let aiNumber = setup.aiDestinationNumber { Text("Προώθηση προς: \(aiNumber)") }
+                    if let provider = setup.provider, !provider.isEmpty { Text("Πάροχος: \(provider)") }
                 }
-                .pickerStyle(.segmented)
-            } footer: {
-                Text(full ? "Ο βοηθός απαντά σε κάθε κλήση." : "Ο βοηθός απαντά μόνο όταν δεν προλαβαίνετε.")
+                Section("Ρύθμιση με τον πάροχο") {
+                    ForEach(setup.steps, id: \.self) { Text($0) }
+                }
             }
             if let info {
                 Section {
@@ -226,7 +227,7 @@ struct ForwardingView: View {
                 } header: {
                     Text("Πληκτρολογήστε στο κινητό της επιχείρησης")
                 } footer: {
-                    Text("Cosmote, Vodafone, Nova. Κάθε κωδικός και πράσινο κουμπί. Για σταθερό, ρωτήστε τον πάροχο. Μετά κάντε μια δοκιμαστική κλήση.")
+                    Text("Κάθε κωδικός και πράσινο κουμπί. Μετά κάντε μια δοκιμαστική κλήση από τον υπάρχοντα αριθμό.")
                 }
                 Section("Απενεργοποίηση") { code("Όλες οι προωθήσεις", info.off) }
             }
@@ -234,11 +235,19 @@ struct ForwardingView: View {
         }
         .navigationTitle("Προώθηση κλήσεων")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: full) {
-            do { info = try await APIClient().forwarding(practice.id, full: full); errorMessage = nil }
+        .task {
+            do {
+                let current = try await APIClient().routingSetup(practice.id)
+                setup = current
+                if current.mobileCodesAvailable {
+                    info = try await APIClient().forwarding(practice.id, full: current.mode == "ai_first")
+                } else {
+                    info = nil
+                }
+                errorMessage = nil
+            }
             catch {
-                if case APIError.badStatus(409, _) = error { errorMessage = "Η επιχείρηση δεν έχει ακόμα αριθμό βοηθού." }
-                else { errorMessage = friendlyMessage(error) }
+                errorMessage = friendlyMessage(error)
             }
         }
     }

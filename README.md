@@ -1,5 +1,9 @@
 # AI Voice Receptionist
 
+Company priorities and working principles: [Astra operating brief](ASTRA.md).
+Incremental implementation record: [Build progress](docs/build-progress.md).
+Telemetry setup and retrieval: [Call telemetry](docs/telemetry.md).
+
 A Greek and English AI phone receptionist for small practices. It answers calls through LiveKit and Telnyx, handles appointments and messages, and gives staff an iOS view of calls and operations. The repository also contains the original outbound calling flow; the receptionist is the current product direction.
 
 This is an active pilot project. Feature code and automated tests are present, but provider setup and live acceptance still need to be completed for each deployment. See [PRD_STATUS.md](PRD_STATUS.md) for the detailed verification record.
@@ -13,6 +17,8 @@ This is an active pilot project. Feature code and automated tests are present, b
 | `ios/` | SwiftUI app for call history, receptionist settings, appointments, messages, and handoff |
 
 Receptionist calls can answer common questions, check availability, book or change appointments, take messages, and hand off to a person. Practices can configure hours, services, staff, routing rules, calendars, and notifications. A web demo is available at `/demo/<slug>` once a practice is configured. The backend also includes import review, calendar feeds, usage controls, and data export/erasure operations.
+
+The Greek landing page is served at `/`. Its demo-request form stores leads and queues an email to `FOUNDER_EMAIL`. Configure `FOUNDER_EMAIL`, `SMTP_HOST`, `EMAIL_FROM`, and `DATA_ENCRYPTION_KEY` before accepting requests; without them the form shows an unavailable message and saves nothing. Set `BACKEND_PUBLIC_URL` to the public site origin for the social preview image. Set `LANDING_DEMO_SLUG` only to a fictional practice with no real customer calendar or records. When unset, the page offers a personal demo instead of a live voice call. Review the site's public privacy and demo-terms pages with counsel and add the final business identity before launch.
 
 ## Requirements
 
@@ -84,6 +90,8 @@ For recurring pronunciation errors, set `TTS_PRONUNCIATION_ALIASES` to a JSON ob
 GitHub Actions runs backend tests against Postgres, agent tests, and an iOS Simulator build for changes proposed to `main`. The branch is protected so its required checks must pass before merge. Railway follows `main` and automatically deploys the backend and agent after a merge; a green build confirms the code passed automated checks, while live voice and provider acceptance remain separate pilot gates.
 
 ## Deployment notes
+
+For clinic forwarding that keeps the existing public number, see [Existing-number call routing](docs/call-routing.md).
 
 Both `backend/` and `agent/` have Dockerfiles. The backend runs migrations on startup and needs Postgres; the agent needs the same LiveKit project and the backend URL. Set secrets in your host's secret manager, not in the repository. Keep the backend at one replica until the in-memory live update and scheduler behavior is adapted for multiple instances.
 

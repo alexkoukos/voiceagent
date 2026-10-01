@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="light dark">
+<title>Live Call Monitor</title>
+<style>
+  :root {
+    --page: #f3f5f4; --surface: #ffffff; --soft: #eef2f0; --ink: #16231e; --muted: #5a6a63;
+    --line: #d6e0da; --accent: #175f4a; --good: #1f7a4d; --warn: #a86a00; --bad: #b3322f;
+    --caller: #e8eef9; --agent: #e7f3ec; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0f1613; --surface: #17211c; --soft: #1e2a24; --ink: #eef4f0; --muted: #a8b9b0;
+      --line: #33453c; --accent: #6fcfa8; --good: #5fd08f; --warn: #f0b34a; --bad: #ff7b72;
+      --caller: #1c2638; --agent: #1b2e24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, sans-serif; }
+  header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 16px;
+           background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
+  h1 { font-size: 16px; margin: 0 auto 0 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  input, button, label.toggle { font: inherit; }
+  input[type=password] { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); color: var(--ink); width: 220px; max-width: 100%; }
+  button { padding: 6px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); cursor: pointer; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.ok { background: var(--good); } .dot.err { background: var(--bad); }
+  main { display: grid; grid-template-columns: 300px 1fr; gap: 16px; padding: 16px; max-width: 1500px; margin: 0 auto; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+  #calls { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 150px); overflow: auto; }
+  #calls li { padding: 8px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+  #calls li:hover { background: var(--soft); }
+  #calls li.sel { border-color: var(--accent); background: var(--soft); }
+  .row { display: flex; justify-content: space-between; gap: 8px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .live { color: var(--bad); font-weight: 600; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .tile { background: var(--soft); border-radius: 8px; padding: 10px; }
+  .tile b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  .good { color: var(--good); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  .panel { margin-bottom: 16px; }
+  #bars { display: flex; align-items: flex-end; gap: 3px; height: 90px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  #bars div { flex: 0 0 14px; border-radius: 3px 3px 0 0; min-height: 2px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  .scroll { overflow-x: auto; }
+  #log { font-family: var(--mono); font-size: 12px; max-height: 60vh; overflow: auto; background: var(--soft); border-radius: 8px; padding: 8px; }
+  #log div { padding: 2px 4px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
+  #log .friend { background: var(--caller); } #log .agent { background: var(--agent); }
+  #log .t { color: var(--muted); margin-right: 8px; }
+  .controls { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; font-size: 13px; }
+  #summary { max-width: 1500px; margin: 16px auto 0; padding: 0 16px; }
+  #summary section { padding: 12px 14px; }
+  .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 16px; }
+  .kv div span { display: block; }
+  .kv b { font-variant-numeric: tabular-nums; }
+  select { font: inherit; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--soft); color: var(--ink); }
+  .empty { color: var(--muted); padding: 20px 0; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Live call monitor</h1>
+  <span class="dot" id="status" title="connection"></span>
+  <form id="keyform" style="display:flex;gap:8px">
+    <input type="password" id="key" placeholder="Founder API key" autocomplete="off">
+    <button>Connect</button>
+  </form>
+</header>
+<div id="summary" hidden><section>
+  <div class="row"><h2>Summary</h2><label class="muted">window <select id="days"><option value="1">24 h</option><option value="7" selected>7 days</option><option value="30">30 days</option></select></label></div>
+  <div class="kv" id="sum-kv"></div>
+  <div class="muted" id="sum-note"></div>
+</section></div>
+<main>
+  <section>
+    <div class="row"><h2>Recent calls</h2><label class="toggle muted"><input type="checkbox" id="follow" checked> follow newest</label></div>
+    <ul id="calls"><li class="empty">Enter the founder key to load calls.</li></ul>
+  </section>
+  <section id="detail">
+    <div class="empty" id="placeholder">Select a call.</div>
+    <div id="content" hidden>
+      <div class="row panel"><div><b id="c-title"></b><div class="muted" id="c-sub"></div></div><div id="c-state"></div></div>
+      <div class="tiles">
+        <div class="tile"><span class="muted">Last reply</span><b id="t-last">–</b></div>
+        <div class="tile"><span class="muted">p50 reply</span><b id="t-p50">–</b></div>
+        <div class="tile"><span class="muted">p95 reply</span><b id="t-p95">–</b></div>
+        <div class="tile"><span class="muted">Replies</span><b id="t-turns">0</b></div>
+        <div class="tile"><span class="muted">Tool p50</span><b id="t-tool">–</b></div>
+        <div class="tile"><span class="muted">Duration</span><b id="t-dur">–</b></div>
+      </div>
+      <div class="panel">
+        <h2>Caller stops speaking → agent starts speaking</h2>
+        <div id="bars"></div>
+        <div class="muted">Green under 1 s, amber under 2 s, red above. Measured on the worker (SDK state), not handset playback.</div>
+      </div>
+      <div class="panel">
+        <h2>Stage timings per message (ms)</h2>
+        <div class="scroll"><table>
+          <thead><tr><th>Time</th><th>Who</th><th>STT</th><th>End of turn</th><th>LLM first token</th><th>TTS first byte</th><th>End-to-end</th></tr></thead>
+          <tbody id="stages"></tbody>
+        </table></div>
+      </div>
+      <div class="panel">
+        <h2>Cost <span id="cost-total" style="text-transform:none"></span></h2>
+        <div class="scroll"><table>
+          <thead><tr><th>Component</th><th>Provider / model</th><th>Usage</th><th>USD</th></tr></thead>
+          <tbody id="costs"></tbody>
+        </table></div>
+      </div>
+      <div class="panel">
+        <h2>Tools and transfers</h2>
+        <div class="scroll"><table>
+          <thead><tr><th>Time</th><th>Name</th><th>Outcome</th><th>ms</th></tr></thead>
+          <tbody id="tools"></tbody>
+        </table></div>
+      </div>
+      <div class="panel">
+        <h2>Log</h2>
+        <div class="controls">
+          <label><input type="checkbox" id="f-transcript" checked> transcript</label>
+          <label><input type="checkbox" id="f-events" checked> timing events</label>
+          <label><input type="checkbox" id="f-states"> agent states</label>
+          <label><input type="checkbox" id="f-scroll" checked> auto-scroll</label>
+        </div>
+        <div id="log"></div>
+        <div class="muted">Transcript times are backend receive times; event times are worker clock times.</div>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const store = { get(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+                  set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+  let key = store.get("monitor-key");
+  let selected = null, cursor = 0, events = [], latest = null, pollTimer = null, listTimer = null;
+
+  const fmtMs = (ms) => ms == null ? "–" : ms >= 1000 ? (ms / 1000).toFixed(2) + " s" : Math.round(ms) + " ms";
+  const cls = (ms) => ms == null ? "" : ms < 1000 ? "good" : ms < 2000 ? "warn" : "bad";
+  const clock = (d) => d ? d.toLocaleTimeString([], { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0") : "";
+  const pct = (vals, p) => { if (!vals.length) return null; const s = [...vals].sort((a, b) => a - b);
+                             return s[Math.min(s.length - 1, Math.round(p * (s.length - 1)))]; };
+  const usd = (v, complete) => v == null ? "" : (complete ? "" : "≥") + "$" + (v < 0.1 ? v.toFixed(4) : v.toFixed(2));
+  const qty = (q) => Object.entries(q || {}).filter(([, v]) => v != null).map(([k, v]) => `${k.replace(/_tokens$/, " tok").replace(/_/g, " ")} ${Number.isInteger(v) ? v : v.toFixed(1)}`).join(", ");
+  const evTime = (e) => new Date(Number(e.observed_at_unix_ns) / 1e6);
+  const el = (tag, text, className) => { const n = document.createElement(tag);
+                                          if (text != null) n.textContent = text; if (className) n.className = className; return n; };
+
+  async function api(path) {
+    const r = await fetch(path, { headers: { "x-api-key": key }, cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    return r.json();
+  }
+  function setStatus(ok) { $("status").className = "dot " + (ok ? "ok" : "err"); }
+
+  async function loadCalls() {
+    if (!key) return;
+    try {
+      const { calls } = await api("/monitor/api/calls?limit=30");
+      setStatus(true);
+      const list = $("calls"); list.replaceChildren();
+      if (!calls.length) list.append(el("li", "No calls yet.", "empty"));
+      for (const c of calls) {
+        const li = el("li"); if (c.id === selected) li.className = "sel";
+        const live = c.status === "active" || c.status === "dialing";
+        const top = el("div", null, "row");
+        top.append(el("span", c.practice || c.direction), el("span", live ? "● live" : c.status, live ? "live" : "muted"));
+        const bottom = el("div", null, "row muted");
+        bottom.append(el("span", new Date(c.created_at).toLocaleString([], { hour12: false })),
+                      el("span", [c.turns ? `${c.turns} replies · p50 ${fmtMs(c.p50_ms)}` : (c.outcome || c.end_reason || ""), usd(c.cost_usd, c.cost_complete)].filter(Boolean).join(" · ")));
+        li.append(top, bottom);
+        li.onclick = () => { $("follow").checked = false; select(c.id); };
+        list.append(li);
+      }
+      if ($("follow").checked && calls[0] && calls[0].id !== selected) select(calls[0].id);
+    } catch (e) { setStatus(false); if (String(e.message) === "403") $("calls").replaceChildren(el("li", "Wrong key.", "empty")); }
+  }
+
+  function select(id) {
+    selected = id; cursor = 0; events = []; latest = null;
+    $("log").replaceChildren(); $("placeholder").hidden = true; $("content").hidden = false;
+    document.querySelectorAll("#calls li").forEach((li) => li.classList.remove("sel"));
+    clearTimeout(pollTimer); poll();
+  }
+
+  async function poll() {
+    const id = selected;
+    try {
+      const data = await api(`/monitor/api/calls/${encodeURIComponent(id)}?after=${cursor}`);
+      if (id !== selected) return;
+      setStatus(true);
+      events.push(...data.events); cursor = data.next_after; latest = data;
+      render();
+    } catch { setStatus(false); }
+    if (id === selected) pollTimer = setTimeout(poll, latest && ["active", "dialing", "pending", "queued"].includes(latest.call.status) ? 1000 : 4000);
+  }
+
+  function render() {
+    const { call, transcript, routing } = latest;
+    $("c-title").textContent = call.practice || call.direction;
+    $("c-sub").textContent = [call.id.slice(0, 8), call.direction, call.language, events[0] && `${events[0].engine} · ${events[0].agent_version}`].filter(Boolean).join(" · ");
+    const live = call.status === "active" || call.status === "dialing";
+    $("c-state").replaceChildren(el("span", live ? "● live" : [call.status, call.outcome || call.end_reason].filter(Boolean).join(" · "), live ? "live" : "muted"));
+
+    const replies = events.filter((e) => e.event === "response_latency_estimate");
+    const values = replies.map((e) => e.latency_ms);
+    const last = values[values.length - 1];
+    for (const [id, v] of [["t-last", last], ["t-p50", pct(values, .5)], ["t-p95", pct(values, .95)]]) {
+      $(id).textContent = fmtMs(v); $(id).className = cls(v);
+    }
+    $("t-turns").textContent = values.length;
+    const toolEnds = events.filter((e) => e.event === "tool_request_ended");
+    $("t-tool").textContent = fmtMs(pct(toolEnds.map((e) => e.duration_ms), .5));
+    const start = call.started_at ? new Date(call.started_at) : null;
+    const end = call.ended_at ? new Date(call.ended_at) : new Date();
+    $("t-dur").textContent = call.duration_seconds != null ? call.duration_seconds + " s" : start ? Math.round((end - start) / 1000) + " s" : "–";
+
+    const max = Math.max(3000, ...values);
+    $("bars").replaceChildren(...replies.map((e) => {
+      const b = el("div"); b.style.height = (e.latency_ms / max * 100) + "%";
+      b.style.background = `var(--${cls(e.latency_ms)})`; b.title = `${clock(evTime(e))}  ${fmtMs(e.latency_ms)}`; return b;
+    }));
+
+    const cols = ["transcription_delay_ms", "end_of_turn_delay_ms", "llm_node_ttft_ms", "tts_node_ttfb_ms", "e2e_latency_ms"];
+    $("stages").replaceChildren(...events.filter((e) => e.event === "message_metrics" && Object.keys(e.latencies || {}).length)
+      .map((e) => { const tr = el("tr"); tr.append(el("td", clock(evTime(e))), el("td", e.role === "user" ? "caller" : "agent"),
+        ...cols.map((c) => el("td", e.latencies[c] == null ? "" : Math.round(e.latencies[c]), c === "e2e_latency_ms" ? cls(e.latencies[c]) : ""))); return tr; }));
+
+    $("tools").replaceChildren(...events.filter((e) => e.event === "tool_request_ended" || e.event === "transfer_ended" || (e.event === "tool_completed" && e.is_error))
+      .map((e) => { const tr = el("tr"); tr.append(el("td", clock(evTime(e))),
+        el("td", e.event === "transfer_ended" ? `transfer (${e.mode})` : e.tool_name),
+        el("td", e.event === "tool_completed" ? "error" : e.outcome, e.outcome === "returned" || e.outcome === "joined" ? "good" : "bad"),
+        el("td", e.duration_ms == null ? "" : Math.round(e.duration_ms))); return tr; }));
+
+    const cb = call.cost_breakdown;
+    $("cost-total").textContent = cb ? `${usd(cb.known_usd, cb.complete)} · prices ${cb.pricing_version}` : "";
+    $("costs").replaceChildren(...(cb ? cb.lines : []).map((l) => { const tr = el("tr");
+      tr.append(el("td", l.component), el("td", `${l.provider} / ${l.model}`), el("td", qty(l.quantity)),
+        el("td", l.cost_usd == null ? (l.unpriced || "unknown") : usd(l.cost_usd, true), l.cost_usd == null ? "warn" : "")); return tr; }));
+    if (!cb) $("costs").append((() => { const tr = el("tr"); const td = el("td", "No usage yet: it arrives when the session ends.", "muted"); td.colSpan = 4; tr.append(td); return tr; })());
+
+    renderLog(transcript, routing);
+  }
+
+  async function loadSummary() {
+    if (!key) return;
+    try {
+      const d = await api(`/monitor/api/summary?days=${$("days").value}`);
+      $("summary").hidden = false;
+      const c = d.cost, r = d.reply_ms;
+      const items = [
+        ["Calls", d.calls], ["Minutes", d.minutes], ["Successful", `${d.successful} / ${d.calls}`],
+        ["Appointments", d.appointments], ["Transfers", d.transfers], ["Failed", d.failed], ["Tool errors", d.tool_errors],
+        ["Reply p50 / p95 / p99", `${fmtMs(r.p50)} / ${fmtMs(r.p95)} / ${fmtMs(r.p99)}`, cls(r.p95)],
+        ["Replies measured", r.n],
+        ["STT p50", fmtMs(d.stages_ms.transcription_delay.p50)], ["End of turn p50", fmtMs(d.stages_ms.end_of_turn_delay.p50)],
+        ["LLM first token p50", fmtMs(d.stages_ms.llm_node_ttft.p50)], ["TTS first byte p50", fmtMs(d.stages_ms.tts_node_ttfb.p50)],
+        ["Tool p50 / p95", `${fmtMs(d.tool_ms.p50)} / ${fmtMs(d.tool_ms.p95)}`],
+        ["Cost (known)", usd(c.known_total, c.calls_complete === c.calls_priced)], ["Cost / call", usd(c.per_call, true)],
+        ["Cost / minute", usd(c.per_minute, true)], ["Cost / success", usd(c.per_successful_outcome, true)],
+        ...Object.entries(c.by_component).map(([k, v]) => [`Cost: ${k}`, usd(v, true)]),
+      ];
+      $("sum-kv").replaceChildren(...items.map(([k, v, klass]) => { const n = el("div"); n.append(el("span", k, "muted"), el("b", v == null || v === "" ? "–" : String(v), klass)); return n; }));
+      $("sum-note").textContent = c.unpriced.length ? `Priced ${c.calls_complete}/${c.calls_priced} calls completely. Unpriced: ${c.unpriced.join("; ")}. Add rates in backend/config/pricing.json.` : "";
+    } catch {}
+  }
+
+  function describe(e) {
+    switch (e.event) {
+      case "session_observation_started": return `session started (${e.engine}, ${e.agent_version})`;
+      case "session_observation_ended": return "session ended";
+      case "caller_speech_started": return "caller started speaking";
+      case "caller_speech_stopped": return "caller stopped speaking";
+      case "response_latency_estimate": return `▶ agent replied after ${fmtMs(e.latency_ms)}`;
+      case "agent_state_changed": return `agent ${e.old_state} → ${e.new_state}`;
+      case "message_metrics": {
+        const parts = Object.entries(e.latencies || {}).map(([k, v]) => `${k.replace(/_ms$/, "")}=${Math.round(v)}`);
+        return parts.length ? `${e.role} timings: ${parts.join(" ")}` : null;
+      }
+      case "tool_request_started": return `tool ${e.tool_name} …`;
+      case "tool_request_ended": return `tool ${e.tool_name} ${e.outcome} in ${fmtMs(e.duration_ms)}`;
+      case "tool_completed": return e.is_error ? `tool ${e.tool_name} returned an error` : null;
+      case "transfer_started": return `transfer (${e.mode}) started`;
+      case "transfer_ended": return `transfer (${e.mode}) ${e.outcome} in ${fmtMs(e.duration_ms)}`;
+      default: return e.event;
+    }
+  }
+
+  function renderLog(transcript, routing) {
+    const rows = [];
+    if ($("f-transcript").checked) {
+      for (const t of transcript) rows.push({ at: new Date(t.at), text: `${t.role === "friend" ? "CALLER" : "AGENT "}  ${t.text}`, cls: t.role });
+      for (const r of routing) rows.push({ at: new Date(r.at), text: `routing ${r.kind}=${r.value} ${r.rule}`.trim() });
+    }
+    for (const e of events) {
+      const isState = e.event === "agent_state_changed";
+      if (isState ? !$("f-states").checked : !$("f-events").checked) continue;
+      const text = describe(e); if (text) rows.push({ at: evTime(e), text });
+    }
+    rows.sort((a, b) => a.at - b.at);
+    const log = $("log");
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    log.replaceChildren(...rows.map((r) => { const d = el("div", null, r.cls); d.append(el("span", clock(r.at), "t"), document.createTextNode(r.text)); return d; }));
+    if ($("f-scroll").checked && atBottom) log.scrollTop = log.scrollHeight;
+  }
+
+  for (const id of ["f-transcript", "f-events", "f-states"]) $(id).onchange = () => latest && renderLog(latest.transcript, latest.routing);
+  $("keyform").onsubmit = (ev) => { ev.preventDefault(); key = $("key").value.trim(); store.set("monitor-key", key); $("key").value = ""; start(); };
+  let summaryTimer = null;
+  $("days").onchange = loadSummary;
+  function start() { clearInterval(listTimer); clearInterval(summaryTimer); loadCalls(); loadSummary();
+                     listTimer = setInterval(loadCalls, 3000); summaryTimer = setInterval(loadSummary, 15000); }
+  if (key) start();
+})();
+</script>
+</body>
+</html>

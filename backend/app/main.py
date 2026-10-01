@@ -9,7 +9,9 @@ from app.auth import is_master, require_app_token, require_admin_token, require_
 from app.config import get_settings
 from app.database import get_db
 from app.languages import LANGUAGES
-from app.routers import calls, demo, friends, internal, manage, oauth, ops, practices, recordings, templates, webhooks
+from app.routers import calls, demo, friends, internal, landing, manage, monitor, oauth, ops, practices, recordings, templates, webhooks
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 
 _docs = get_settings().enable_docs
 
@@ -54,6 +56,9 @@ app.include_router(manage.router)
 app.include_router(recordings.router)
 app.include_router(oauth.public)
 app.include_router(webhooks.router)
+app.include_router(landing.router)
+app.include_router(monitor.router)
+app.mount("/landing-assets", StaticFiles(directory=Path(__file__).resolve().parent / "templates" / "landing-assets"), name="landing-assets")
 
 
 @app.get("/health")
