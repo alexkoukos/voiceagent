@@ -650,6 +650,10 @@ async def _offered(db: AsyncSession, call: Call, *, day: str, time: str, service
     return False
 
 
+PHONE_REQUIRED = {"error": "phone_required",
+                  "next": "Ask which phone number we can reach them on, then call prepare_action again with customer_phone."}
+
+
 async def tool_prepare_action(db: AsyncSession, call: Call, args) -> dict:
     """Produce the readback from trusted appointment data and arm one confirmation."""
     practice = await _practice(db, call)
@@ -696,18 +700,23 @@ async def tool_prepare_action(db: AsyncSession, call: Call, args) -> dict:
     language = _lang(call, practice)
     spoken_day = booking.say_date(date_cls.fromisoformat(day), language)
     spoken_time = booking.say_time(time, language)
-    # A contact number other than the one calling is read back too, digit by digit.
+    # The contact phone is part of the readback, so the caller can change it with the same
+    # answer: the calling number, or another one read back digit by digit.
     phone = args.customer_phone if action == "book" and args.customer_phone != call.caller_number else None
+    if action == "book" and not phone and not call.caller_number:
+        return PHONE_REQUIRED
     if language == "el":
         verb = "Να ακυρώσω" if action == "cancel" else "Να επιβεβαιώσω"
         # The service in the nominative at the start: "για Καθαρισμός" was wrong Greek.
         service_spoken = service["name"][:1].lower() + service["name"][1:]
-        phone_spoken = f", τηλέφωνο {booking.say_phone(phone)}" if phone else ""
+        phone_spoken = ("" if action != "book" else f", με τηλέφωνο {booking.say_phone(phone)}" if phone
+                        else ", με τηλέφωνο τον αριθμό από τον οποίο καλείτε")
         line = (f"{verb}: {service_spoken}, {spoken_day} {spoken_time}{staff_spoken}, "
                 f"στο όνομα {name}{phone_spoken}. Σωστά;")
     else:
         verb = "Shall I cancel" if action == "cancel" else "Please confirm"
-        phone_spoken = f", phone {booking.say_phone(phone)}" if phone else ""
+        phone_spoken = ("" if action != "book" else f", phone {booking.say_phone(phone)}" if phone
+                        else ", reachable on the number you're calling from")
         line = (f"{verb}: {service['name']}, {spoken_day} {spoken_time}{staff_spoken}, "
                 f"for {name}{phone_spoken}. Is that correct?")
     data = {"action": action, "date": day, "time": time, "service_id": service_id,
