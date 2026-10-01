@@ -114,7 +114,7 @@ run the real receptionist agent in text mode against a local backend, and critic
 checks are on database state. CI workflow `evals.yml` (needs the `GEMINI_API_KEY`
 secret). See [evals.md](evals.md).
 
-First runs found seven real bugs, all fixed, each with a regression test:
+First runs found eight real bugs, all fixed, each with a regression test:
 
 1. **Extra LLM turn after tools that already spoke** (read-back, goodbye, end of call).
    Gemini returned empty completions (four retries, then an error) or said «Συγγνώμη,
@@ -137,11 +137,15 @@ First runs found seven real bugs, all fixed, each with a regression test:
 7. **Reschedule offered another dentist's times.** Availability for a move was "anyone
    free", but a move keeps the appointment's own dentist, so the move failed with
    `slot_taken` after the caller's yes. A move now offers only that dentist's times.
-8. Harness issues found while building it: read-backs went through the LLM (production
+8. **Silent turn on a failed reply.** When Gemini returned empty or malformed completions
+   through every retry, the caller heard nothing and the turn was lost (CI run of EVAL-003).
+   Text engines now say «Συγγνώμη, μπορείτε να το πείτε ξανά;», at most once per caller turn.
+9. Harness issues found while building it: read-backs went through the LLM (production
    uses `say`), and a finished speech stayed "current" after an agent swap. Both fixed in
    the harness; neither affected production.
 
-Seen but not fixed: Gemini once blocked a "say exactly this" read-back as
+Seen but not fixed: the model sometimes checks the wrong window for an exact time
+("στις δέκα" checked as "after 09:15") and wrongly says it is taken. Gemini once blocked a "say exactly this" read-back as
 `PROHIBITED_CONTENT` (that is the `realtime` engine's path), and once produced a
 malformed function call four times in a row. Repeat runs measure how often.
 English read-backs say the service's Greek name ("for Έλεγχος").

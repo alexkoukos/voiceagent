@@ -265,6 +265,7 @@ class Harness:
         worker.track_transcript(session, call_id, rc.engine, room=None, caller_identity=None,
                                 language=lambda: rc.language)
         rc.telemetry = worker.track_telemetry(session, ctx, call_id, "text_eval")
+        rc.watch_llm_errors()
         await session.start(agent=rc.agent)
         started = time.perf_counter()
         turn_ms, first_reply_ms, error = [], [], None

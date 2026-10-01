@@ -268,3 +268,30 @@ async def test_parallel_backend_tools_run_in_call_order(monkeypatch):
     await worker.asyncio.gather(rc.tool("check_availability", {}), rc.tool("prepare_action", {}))
     assert order == [("start", "check_availability"), ("end", "check_availability"),
                      ("start", "prepare_action"), ("end", "prepare_action")]
+
+
+def test_failed_reply_asks_the_caller_to_repeat_once_per_turn():
+    # EVAL-003/010: Gemini's empty or malformed completions left the caller in silence.
+    from livekit.agents import llm
+    handlers, said = {}, []
+    session = SimpleNamespace(on=lambda event, cb: handlers.setdefault(event, cb),
+                              say=lambda text, **kwargs: said.append(text))
+    rc = worker.ReceptionistCall(SimpleNamespace(), {"call_id": "call"}, "pipeline")
+    rc.session = session
+    rc.watch_llm_errors()
+    fatal = SimpleNamespace(error=llm.LLMError(timestamp=0, label="google.LLM", error=RuntimeError("empty"), recoverable=False))
+    retrying = SimpleNamespace(error=llm.LLMError(timestamp=0, label="google.LLM", error=RuntimeError("empty"), recoverable=True))
+    handlers["error"](retrying)
+    handlers["error"](fatal)
+    handlers["error"](fatal)  # same caller turn: no second apology
+    rc.heard_user("Ελένη Γεωργίου")
+    handlers["error"](fatal)
+    assert said == ["Συγγνώμη, μπορείτε να το πείτε ξανά;"] * 2
+
+
+def test_realtime_engine_does_not_add_a_recovery_line():
+    handlers = {}
+    rc = worker.ReceptionistCall(SimpleNamespace(), {"call_id": "call"}, "realtime")
+    rc.session = SimpleNamespace(on=lambda event, cb: handlers.setdefault(event, cb))
+    rc.watch_llm_errors()
+    assert handlers == {}
