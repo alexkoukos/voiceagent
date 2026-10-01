@@ -171,6 +171,9 @@ struct APIClient {
     func editDraft(_ pid: String, _ version: String, changes: [String: JSONValue]) async throws -> ConfigVersion {
         try await send("PATCH", "/practices/\(pid)/versions/\(version)", body: ["changes": changes])
     }
+    func setVoice(_ pid: String, female: Bool) async throws {
+        _ = try await request("PUT", "/practices/\(pid)/voice", body: ["gender": female ? "female" : "male"])
+    }
     func freezePublishing(_ pid: String, frozen: Bool) async throws {
         _ = try await request("PUT", "/practices/\(pid)/publish-freeze", body: ["frozen": frozen])
     }

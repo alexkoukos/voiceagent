@@ -155,7 +155,7 @@ def busy_line(practice: Practice, language: str) -> str:
 
 async def start_call(
     db: AsyncSession, practice: Practice, *, direction: str, caller_number: str | None,
-    forwarding_reason: str | None = None,
+    forwarding_reason: str | None = None, voice: str | None = None,
 ) -> tuple[Call, dict]:
     """Creates the call record for an inbound or web call and returns the agent's metadata.
     Raises Busy when the practice is at its concurrent-call cap (G8), Blocked for a blocked
@@ -183,7 +183,8 @@ async def start_call(
         customer_id=customer.id if customer else None,
         persona="",
         scenario="",
-        voice=practice.voice,
+        # The web demo's male/female toggle picks the voice for this one call.
+        voice=voice or practice.voice,
         language=language,
         max_duration_seconds=get_settings().max_call_duration_seconds,
         status=CallStatus.active if direction == "inbound" else CallStatus.dialing,
@@ -262,7 +263,7 @@ async def build_metadata(
         "greeting": greeting,
         "greeting_without_recording": default_greeting(practice, language=language),
         "greeting_instruction": instruction,
-        "voice": practice.voice,
+        "voice": call.voice or practice.voice,
         "language": language,
         "language_name": english_name(language),
         "max_duration_seconds": call.max_duration_seconds,

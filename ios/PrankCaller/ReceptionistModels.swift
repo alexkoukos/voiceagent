@@ -5,6 +5,8 @@ struct Practice: Codable, Identifiable, Hashable {
     let name: String
     let slug: String?
     let language: String
+    /// "Kore" (female) or "Zubenelgenubi" (male); older backends don't send it.
+    let voice: String?
 }
 
 struct RoutingDecision: Codable, Identifiable {

@@ -9,8 +9,11 @@ from html import escape
 from pathlib import Path
 from string import Template
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, Response
+from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +22,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.dispatcher import active_count
 from app.models import CallStatus, Practice
+from app.schemas import VOICE_BY_GENDER
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 PAGE = Template((Path(__file__).resolve().parents[1] / "templates" / "demo.html").read_text(encoding="utf-8"))
@@ -61,18 +65,27 @@ async def demo_page(slug: str, db: AsyncSession = Depends(get_db), embed: bool =
         you="Εσείς" if greek else "You",
         assistant="Βοηθός" if greek else "Assistant",
         new_messages="Νέες φράσεις ↓" if greek else "New turns ↓",
+        voice_label="Φωνή" if greek else "Voice",
+        female="Γυναικεία" if greek else "Female",
+        male="Ανδρική" if greek else "Male",
+        default_gender="male" if practice.voice == VOICE_BY_GENDER["male"] else "female",
     )
 
 
+class DemoSessionIn(BaseModel):
+    gender: Literal["female", "male"] | None = None
+
+
 @router.post("/{slug}/session")
-async def demo_session(slug: str, db: AsyncSession = Depends(get_db)):
+async def demo_session(slug: str, payload: DemoSessionIn | None = None, db: AsyncSession = Depends(get_db)):
     practice = await _practice(db, slug)
+    voice = VOICE_BY_GENDER[payload.gender] if payload and payload.gender else None
     settings = get_settings()
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('global-demo-admission'))"))
     if await active_count(db) >= settings.max_concurrent_calls:
         raise HTTPException(status_code=429, detail="busy")
     try:
-        call, metadata = await receptionist.start_call(db, practice, direction="web", caller_number=None)
+        call, metadata = await receptionist.start_call(db, practice, direction="web", caller_number=None, voice=voice)
     except (receptionist.Busy, receptionist.OverCap):
         raise HTTPException(status_code=429, detail="busy")
     room = receptionist.room_of(call)
