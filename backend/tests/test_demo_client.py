@@ -12,7 +12,7 @@ from app.routers import demo
 @pytest.mark.asyncio
 async def test_demo_embedded_page_is_localized_and_escapes_practice_name(monkeypatch):
     monkeypatch.setattr(demo, "_practice", AsyncMock(return_value=SimpleNamespace(
-        name="Κομμωτήριο <Αθηνά>", language="el")))
+        name="Κομμωτήριο <Αθηνά>", language="el", voice="Zubenelgenubi")))
     html = await demo.demo_page("preview", None, embed=True)
     assert '<html lang="el" class="embed">' in html
     assert "Κομμωτήριο &lt;Αθηνά&gt;" in html
@@ -82,7 +82,7 @@ process.stdin.on('end', async () => {
 async def test_demo_recovers_and_releases_audio(monkeypatch,mode):
     if not shutil.which("node"):
         pytest.skip("Node is required for client JavaScript checks")
-    monkeypatch.setattr(demo,"_practice",AsyncMock(return_value=SimpleNamespace(name="Test",language="en")))
+    monkeypatch.setattr(demo,"_practice",AsyncMock(return_value=SimpleNamespace(name="Test",language="en",voice="Kore")))
     html=await demo.demo_page("test-demo",None)
     js=re.findall(r'<script>(.*?)</script>',html,re.S)[-1]
     result=subprocess.run(["node","-e",NODE_TEST,mode],input=js,text=True,capture_output=True,timeout=10)

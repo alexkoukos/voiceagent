@@ -278,7 +278,7 @@ class PracticeIn(BaseModel):
     slug: str | None = Field(default=None, pattern=r"^[a-z0-9\-]{6,64}$")
     timezone: str = "Europe/Athens"
     language: Literal["el", "en"] = "el"
-    voice: Voice = "Zubenelgenubi"
+    voice: Voice = "Kore"
     greeting: str = Field(default="", max_length=LONG_TEXT)
     phone_numbers: list[str] = []
     # "mon".."sun" -> [["09:00", "14:00"], ["17:00", "21:00"]]
@@ -346,6 +346,15 @@ class PracticeOut(PracticeIn):
     id: str
     services: list[Service]
     publish_frozen: bool = False
+
+
+# The receptionist's voice toggle: female (Kore) or male (Zubenelgenubi). Greek calls use
+# native Greek voices for both (agent/voices.py).
+VOICE_BY_GENDER = {"female": "Kore", "male": "Zubenelgenubi"}
+
+
+class VoiceIn(BaseModel):
+    gender: Literal["female", "male"]
 
 
 class PublishFreezeIn(BaseModel):

@@ -120,6 +120,12 @@ async def test_import_edit_freeze_approve_and_rollback_http(http, sessions):
         await db.commit(); vid = draft.id
     base = f"/practices/{a['id']}"
     assert (await http.get(base, headers=key)).json()["name"] == "Alpha"
+    # Male/female toggle: female is the default.
+    assert (await http.get(base, headers=key)).json()["voice"] == "Kore"
+    assert (await http.put(base + "/voice", headers=key, json={"gender": "male"})).json()["voice"] == "Zubenelgenubi"
+    assert (await http.get(base, headers=key)).json()["voice"] == "Zubenelgenubi"
+    assert (await http.put(base + "/voice", headers=key, json={"gender": "robot"})).status_code == 422
+    await http.put(base + "/voice", headers=key, json={"gender": "female"})
     evidence = (await http.get(base + "/imports", headers=key)).json()
     assert evidence[0]["version_id"] == vid and evidence[0]["confidence"]["review_required"]
     edit = await http.patch(base + f"/versions/{vid}", headers=key, json={"changes": {"name": "Reviewed name"}})
@@ -295,3 +301,16 @@ async def test_public_demo_global_admission_is_atomic(http, monkeypatch):
     monkeypatch.setattr(receptionist,"room_token",lambda *args,**kwargs: "test-token")
     results=await asyncio.gather(*(http.post(f"/demo/{a['slug']}/session") for _ in range(2)))
     assert sorted(r.status_code for r in results)==[200,429]
+
+
+@pytest.mark.asyncio
+async def test_demo_voice_toggle_picks_the_call_voice(http, monkeypatch):
+    from app import receptionist
+    a=await create(http,"Alpha")
+    dispatch=AsyncMock()
+    monkeypatch.setattr(receptionist,"dispatch",dispatch)
+    monkeypatch.setattr(receptionist,"room_token",lambda *args,**kwargs: "test-token")
+    page=await http.get(f"/demo/{a['slug']}")
+    assert 'data-default="female"' in page.text and "Ανδρική" in page.text
+    assert (await http.post(f"/demo/{a['slug']}/session",json={"gender":"male"})).status_code==200
+    assert dispatch.await_args.args[1]["voice"]=="Zubenelgenubi"
