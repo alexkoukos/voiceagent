@@ -58,7 +58,9 @@ class FriendOut(BaseModel):
 
 
 class CallCreate(BaseModel):
-    friend_id: str
+    # A saved friend, or a number typed on the keypad (speed dial, nothing saved).
+    friend_id: str | None = None
+    phone_number: str | None = Field(default=None, max_length=30)
     # The call's free-text description is `scenario`; persona is only sent by older app builds.
     persona: str = Field(default="", max_length=LONG_TEXT)
     scenario: str = Field(min_length=1, max_length=LONG_TEXT)
@@ -77,6 +79,22 @@ class CallCreate(BaseModel):
         if v is not None and v not in LANGUAGES:
             raise ValueError("unsupported language")
         return v
+
+    @field_validator("phone_number")
+    @classmethod
+    def _dialed(cls, v):
+        if v is None or not v.strip():
+            return None
+        v = normalize_phone(v)
+        if not re.fullmatch(r"\+\d{8,15}", v):
+            raise ValueError("phone number must be like +306912345678")
+        return v
+
+    @model_validator(mode="after")
+    def _one_target(self):
+        if bool(self.friend_id) == bool(self.phone_number):
+            raise ValueError("give either friend_id or phone_number")
+        return self
 
 
 class CallEvent(BaseModel):

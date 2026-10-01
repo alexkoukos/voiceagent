@@ -11,6 +11,9 @@ struct PrankCallerApp: App {
             // Design check without a real call: launch with `-previewPlayerFile <audio file path>`.
             if let path = UserDefaults.standard.string(forKey: "previewPlayerFile") {
                 PlayerPreview(url: URL(fileURLWithPath: path))
+            } else if let number = UserDefaults.standard.string(forKey: "previewDialPad") {
+                // `-previewDialPad 6907626384` (or "" for empty): the speed-dial keypad.
+                DialPadPreview(number: number)
             } else {
                 tabs
             }
@@ -44,6 +47,18 @@ struct PrankCallerApp: App {
 }
 
 #if DEBUG
+private struct DialPadPreview: View {
+    @State var number: String
+
+    var body: some View {
+        ScrollView {
+            DialPadView(number: $number).padding(Space.l)
+        }
+        .background(Palette.background)
+        .tint(Palette.ink)
+    }
+}
+
 private struct PlayerPreview: View {
     let url: URL
     @State private var player: RecordingPlayer?
