@@ -54,7 +54,7 @@ from livekit.agents import (
 from livekit.plugins import elevenlabs, google, noise_cancellation, silero
 from livekit.agents.voice.turn import TurnHandlingOptions
 
-from fillers import FillerPicker
+from fillers import FILLERS, FillerPicker
 from telemetry import observe_span, track_telemetry
 from opening import fixed_audio, prepare_opening, prerender, ready_opening
 from voices import elevenlabs_voice, gemini_voice, openai_voice
@@ -351,12 +351,20 @@ class PrankCallerAgent(Agent):
             # closing line, which sounded broken (2026-10-01).
             if not done and now - self._last_filler_at > FILLER_GAP_SECONDS and not _closing(_last_user_text(chat_ctx)):
                 self._last_filler_at = now
+                said_filler = True
                 yield self._fillers.pick(self.language) + " "
+            else:
+                said_filler = False
             try:
-                yield observe(await first)
+                head = await first
             except StopAsyncIteration:
                 return
-            async for chunk in it:
+            rest = _chain(head, it)
+            if said_filler:
+                # The model sometimes opens with its own «Ένα λεπτό…» too, which came out as
+                # «Ένα λεπτό… Ένα λεπτό…» (2026-10-01).
+                rest = _drop_leading_fillers(rest)
+            async for chunk in rest:
                 yield observe(chunk)
         finally:
             if not first.done():
@@ -377,6 +385,44 @@ def _last_user_text(chat_ctx) -> str:
         if getattr(item, "role", None) == "user":
             return getattr(item, "text_content", None) or ""
     return ""
+
+
+LEADING_FILLER = re.compile(
+    r"^(?:\s*(?:" + "|".join(sorted({re.escape(f.rstrip("…")) for lang in ("el", "en") for f in FILLERS[lang]}
+                                    | {"Μια στιγμή να δω", "Μια στιγμή", "Ένα λεπτό να δω", "Let me check"},
+                                    key=len, reverse=True))
+    + r")\s*[.,…!]*)+\s*", re.I)
+
+
+async def _chain(head, rest):
+    yield head
+    async for chunk in rest:
+        yield chunk
+
+
+async def _drop_leading_fillers(chunks):
+    """Strip filler phrases from the start of the model's text. Text is held back until
+    there's enough of it to tell (40 characters, a tool call, or the end)."""
+    buffered = ""
+    stream = chunks.__aiter__()
+    async for chunk in stream:
+        text = _chunk_text(chunk)
+        if isinstance(chunk, str) or (text and not getattr(getattr(chunk, "delta", None), "tool_calls", None)):
+            buffered += text
+            if len(buffered) < 40:
+                continue
+            chunk = None
+        cleaned = LEADING_FILLER.sub("", buffered)
+        if cleaned:
+            yield cleaned
+        if chunk is not None:
+            yield chunk
+        async for later in stream:
+            yield later
+        return
+    cleaned = LEADING_FILLER.sub("", buffered)
+    if cleaned:
+        yield cleaned
 
 
 def _chunk_text(chunk) -> str:
