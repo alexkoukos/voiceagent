@@ -1,0 +1,308 @@
+[
+  {
+    "url": "https://www.fonio.ai/logo.webp",
+    "alt": "fonio.ai",
+    "local": "assets/logo.webp",
+    "bytes": 4340
+  },
+  {
+    "url": "https://www.fonio.ai/images/careers-team.webp",
+    "alt": "The fonio.ai team",
+    "local": "assets/careers-team.webp",
+    "bytes": 79686
+  },
+  {
+    "url": "https://www.fonio.ai/icons/flags/en.svg",
+    "alt": "",
+    "local": "assets/en.svg",
+    "bytes": 1800
+  },
+  {
+    "url": "https://www.fonio.ai/icons/flags/us.svg",
+    "alt": "",
+    "local": "assets/us.svg",
+    "bytes": 3367
+  },
+  {
+    "url": "https://www.fonio.ai/icons/flags/fr.svg",
+    "alt": "",
+    "local": "assets/fr.svg",
+    "bytes": 572
+  },
+  {
+    "url": "https://www.fonio.ai/icons/flags/de.png",
+    "alt": "",
+    "local": "assets/de.png",
+    "bytes": 318
+  },
+  {
+    "url": "https://www.fonio.ai/icons/flags/es.svg",
+    "alt": "",
+    "local": "assets/es.svg",
+    "bytes": 1309
+  },
+  {
+    "url": "https://www.fonio.ai/icons/flags/nl.svg",
+    "alt": "",
+    "local": "assets/nl.svg",
+    "bytes": 562
+  },
+  {
+    "url": "https://www.fonio.ai/icons/flags/pt-br.svg",
+    "alt": "",
+    "local": "assets/pt-br.svg",
+    "bytes": 1396
+  },
+  {
+    "url": "https://www.fonio.ai/icons/flags/pl.svg",
+    "alt": "",
+    "local": "assets/pl.svg",
+    "bytes": 518
+  },
+  {
+    "url": "https://www.fonio.ai/icons/flags/it.svg",
+    "alt": "",
+    "local": "assets/it.svg",
+    "bytes": 572
+  },
+  {
+    "url": "https://www.fonio.ai/icons/verified_badge.webp",
+    "alt": "",
+    "local": "assets/verified_badge.webp",
+    "bytes": 4210
+  },
+  {
+    "url": "https://www.fonio.ai/images/clients-badge-avatar-3.webp",
+    "alt": "",
+    "local": "assets/clients-badge-avatar-3.webp",
+    "bytes": 2260
+  },
+  {
+    "url": "https://www.fonio.ai/images/clients-badge-avatar-2.webp",
+    "alt": "",
+    "local": "assets/clients-badge-avatar-2.webp",
+    "bytes": 1910
+  },
+  {
+    "url": "https://www.fonio.ai/images/clients-badge-avatar-1.webp",
+    "alt": "",
+    "local": "assets/clients-badge-avatar-1.webp",
+    "bytes": 1716
+  },
+  {
+    "url": "https://www.fonio.ai/icons/google.svg",
+    "alt": "",
+    "local": "assets/google.svg",
+    "bytes": 987
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/edd907e6eb/tk-elevator.png/m/0x100/filters:format(webp):quality(80)",
+    "alt": "",
+    "local": "assets/39075a43.webp",
+    "bytes": 2440
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/b256dd764d/mahle.png/m/0x100/filters:format(webp):quality(80)",
+    "alt": "",
+    "local": "assets/4350e3ec.webp",
+    "bytes": 2114
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/4e2a630f50/yorpower.png/m/0x100/filters:format(webp):quality(80)",
+    "alt": "",
+    "local": "assets/ae911841.webp",
+    "bytes": 6746
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/e6d695de03/holcim.png/m/0x100/filters:format(webp):quality(80)",
+    "alt": "",
+    "local": "assets/a1a16bb8.webp",
+    "bytes": 5448
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/ea9e058ba0/volkswagen.png/m/0x100/filters:format(webp):quality(80)",
+    "alt": "",
+    "local": "assets/efc12fd4.webp",
+    "bytes": 3614
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/6d85c76737/magnum.png/m/0x100/filters:format(webp):quality(80)",
+    "alt": "",
+    "local": "assets/013a5605.webp",
+    "bytes": 7090
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/300x300/0065ceb707/amanda-300.webp/m/80x80/filters:format(webp):quality(80)",
+    "alt": "Dr. Amanda Reyes",
+    "local": "assets/35fcfc98.webp",
+    "bytes": 2508
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/987x1366/568a482aba/mike-donovan.webp/m/80x80/filters:format(webp):quality(80)",
+    "alt": "Mike Donovan",
+    "local": "assets/bcdad4ea.webp",
+    "bytes": 1712
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/3456x5184/534c532472/jasmine-torres.webp/m/80x80/filters:format(webp):quality(80)",
+    "alt": "Jasmine Torres",
+    "local": "assets/f93d2481.webp",
+    "bytes": 1746
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/300x300/c326b829d7/headshot-300.webp/m/80x80/filters:format(webp):quality(80)",
+    "alt": "Brian Callahan",
+    "local": "assets/5d4e18e7.webp",
+    "bytes": 1378
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/1480x1200/b744301e45/steps-1.webp/m/800x0/filters:format(webp):quality(80)",
+    "alt": "",
+    "local": "assets/ebb38612.webp",
+    "bytes": 10330
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/1480x1200/0d77953e5f/steps-2.png/m/800x0/filters:format(webp):quality(80)",
+    "alt": "",
+    "local": "assets/6fb0668b.webp",
+    "bytes": 13448
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/1480x1200/bcc7052d13/steps-3-1.webp/m/800x0/filters:format(webp):quality(80)",
+    "alt": "",
+    "local": "assets/c0fab8e4.webp",
+    "bytes": 6562
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/1542x1178/420479fc5f/integrations.webp",
+    "alt": "Diagram of floating logos representing fonio.ai integrations, including Slack, Salesforce, HubSpot, Calendly, Trello, Notion, and more",
+    "local": "assets/a62811c2.webp",
+    "bytes": 47458
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/300x149/b1adfb3410/graham.svg",
+    "alt": "",
+    "local": "assets/35bab7a0.svg",
+    "bytes": 12407
+  },
+  {
+    "url": "https://cdn.prod.website-files.com/66cdd640b6eaf9b4ea2f225b/6863b399386e5454aab43fc9_lim.webp",
+    "alt": "",
+    "local": "assets/c8e9f5d6.webp",
+    "bytes": 4218
+  },
+  {
+    "url": "https://a.storyblok.com/f/293491369270379/259x261/d6bfc2fd0f/spitta-logo.webp",
+    "alt": "",
+    "local": "assets/4fc38403.webp",
+    "bytes": 7288
+  },
+  {
+    "url": "https://www.fonio.ai/fonts/roboto/Roboto-Variable.woff2",
+    "alt": "fonts/roboto/Roboto-Variable.woff2",
+    "local": "assets/Roboto-Variable.woff2",
+    "bytes": 221068
+  },
+  {
+    "url": "https://www.fonio.ai/videos/hero-bg-1.mp4",
+    "alt": "videos/hero-bg-1.mp4",
+    "local": "assets/hero-bg-1.mp4",
+    "bytes": 284876
+  },
+  {
+    "url": "https://www.fonio.ai/videos/hero-bg-2.mp4",
+    "alt": "videos/hero-bg-2.mp4",
+    "local": "assets/hero-bg-2.mp4",
+    "bytes": 284876
+  },
+  {
+    "url": "https://www.fonio.ai/videos/hero-sphere.mp4",
+    "alt": "videos/hero-sphere.mp4",
+    "local": "assets/hero-sphere.mp4",
+    "bytes": 447174
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/telephone-fill.svg",
+    "alt": "telephone-fill",
+    "local": "assets/telephone-fill.svg",
+    "bytes": 521
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/chevron-down.svg",
+    "alt": "chevron-down",
+    "local": "assets/chevron-down.svg",
+    "bytes": 289
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/arrow-up-right.svg",
+    "alt": "arrow-up-right",
+    "local": "assets/arrow-up-right.svg",
+    "bytes": 284
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/list.svg",
+    "alt": "list",
+    "local": "assets/list.svg",
+    "bytes": 341
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/x-lg.svg",
+    "alt": "x-lg",
+    "local": "assets/x-lg.svg",
+    "bytes": 308
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/star-fill.svg",
+    "alt": "star-fill",
+    "local": "assets/star-fill.svg",
+    "bytes": 399
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/pause-fill.svg",
+    "alt": "pause-fill",
+    "local": "assets/pause-fill.svg",
+    "bytes": 287
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/play-fill.svg",
+    "alt": "play-fill",
+    "local": "assets/play-fill.svg",
+    "bytes": 272
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/headset.svg",
+    "alt": "headset",
+    "local": "assets/headset.svg",
+    "bytes": 391
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/calendar-check.svg",
+    "alt": "calendar-check",
+    "local": "assets/calendar-check.svg",
+    "bytes": 467
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/chat-text.svg",
+    "alt": "chat-text",
+    "local": "assets/chat-text.svg",
+    "bytes": 770
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/file-text.svg",
+    "alt": "file-text",
+    "local": "assets/file-text.svg",
+    "bytes": 472
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/icons/building.svg",
+    "alt": "building",
+    "local": "assets/building.svg",
+    "bytes": 1010
+  },
+  {
+    "url": "https://cdn.jsdelivr.net/npm/libphonenumber-js@1.12.24/bundle/libphonenumber-max.js",
+    "alt": "phone-validation",
+    "local": "assets/libphonenumber-max.js",
+    "bytes": 251774
+  }
+]
