@@ -322,3 +322,11 @@ async def test_llm_node_reports_the_first_real_words_not_the_filler(monkeypatch)
     chunks = [c async for c in worker.PrankCallerAgent.llm_node(receiver, None, None, None)]
     assert chunks[0] == "Λοιπόν… "
     assert len(seen) == 1 and seen[0] >= 15  # model time to the answer text, filler excluded
+
+
+def test_no_filler_before_a_goodbye():
+    import agent
+    for text in ("Ευχαριστώ, γεια.", "Γεια σας", "Όχι, τίποτα άλλο", "Thanks, bye", "ευχαριστούμε"):
+        assert agent._closing(text), text
+    for text in ("Δευτέρα", "Θέλω ραντεβού", "Ναι, σωστά", ""):
+        assert not agent._closing(text), text
