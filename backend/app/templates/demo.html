@@ -86,6 +86,16 @@
   }
   #btn.end { background: #a93235; color: #fff; }
   #btn:disabled { opacity: .65; cursor: wait; }
+  .voice { flex: 1 0 100%; display: flex; align-items: center; gap: 10px; }
+  .voice-label { color: var(--muted); font-size: .84rem; }
+  .seg { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+  .seg label { position: relative; }
+  .seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+  .seg span { display: block; padding: 7px 14px; border-radius: 9px; color: var(--muted); font-size: .86rem; font-weight: 650; }
+  .seg input:checked + span { background: var(--accent); color: var(--accent-ink); }
+  .seg input:focus-visible + span { outline: 3px solid #d58d28; outline-offset: 2px; }
+  .seg input:disabled { cursor: default; }
+  .seg input:disabled:not(:checked) + span { opacity: .5; }
   .help { flex: 1 0 100%; margin: 0; color: var(--muted); font-size: .84rem; }
   .transcript { padding: 22px clamp(20px, 4vw, 36px) 28px; }
   .transcript-header { margin-bottom: 14px; }
@@ -120,6 +130,7 @@
   .embed h1 { font-size: 1.13rem; }
   .embed .call-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 18px 14px; }
   .embed .call-status { min-width: 0; font-size: .84rem; }
+  .embed .voice { grid-column: 1 / -1; }
   .embed #btn { width: auto; min-height: 42px; padding: 8px 12px; font-size: .86rem; }
   .embed .transcript { padding: 16px 18px; }
   .embed .transcript-header { margin-bottom: 10px; }
@@ -136,6 +147,13 @@
     <p class="subtitle">$subtitle</p>
   </header>
   <section id="call-panel" class="call-panel" data-state="ready">
+    <div id="voice" class="voice" role="radiogroup" aria-label="$voice_label" data-default="$default_gender">
+      <span class="voice-label">$voice_label</span>
+      <div class="seg">
+        <label><input id="voice-female" type="radio" name="gender" value="female"><span>$female</span></label>
+        <label><input id="voice-male" type="radio" name="gender" value="male"><span>$male</span></label>
+      </div>
+    </div>
     <div class="call-status"><span class="status-dot" aria-hidden="true"></span><span id="status" aria-live="polite">$s_ready</span></div>
     <button id="btn" type="button" data-call="$call" data-hang-up="$hang_up">$call</button>
     <p class="help">$note</p>
@@ -169,8 +187,13 @@ function setStatus(message, state) {
   statusEl.textContent = message;
   panel.dataset.state = state;
 }
+const voiceInputs = [document.getElementById("voice-female"), document.getElementById("voice-male")].filter(Boolean);
+const voiceDefault = document.getElementById("voice")?.dataset?.default || "female";
+for (const input of voiceInputs) input.checked = input.value === voiceDefault;
+function lockVoice(locked) { for (const input of voiceInputs) input.disabled = locked; }
 function idle() {
   room = null;
+  lockVoice(false);
   btn.textContent = btn.dataset.call;
   btn.className = "";
   btn.disabled = false;
@@ -216,6 +239,7 @@ function show(segments, participant) {
 }
 async function start() {
   btn.disabled = true;
+  lockVoice(true);
   setStatus("$s_connecting", "connecting");
   log.replaceChildren();
   log.hidden = true;
@@ -227,7 +251,11 @@ async function start() {
   function cleanup() { for (const element of media) element.remove(); media.clear(); }
   try {
     const sessionPath = window.location.pathname.replace(/\/$$/, "") + "/session";
-    const response = await fetch(sessionPath, { method: "POST", signal: AbortSignal.timeout(15000) });
+    const gender = voiceInputs.find((input) => input.checked)?.value || voiceDefault;
+    const response = await fetch(sessionPath, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gender }), signal: AbortSignal.timeout(15000),
+    });
     if (!response.ok) {
       setStatus(response.status === 429 ? "$s_busy" : "$s_error", "error");
       idle();
