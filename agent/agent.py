@@ -29,6 +29,7 @@ import difflib
 import json
 import logging
 import os
+import random
 import re
 import time
 import uuid
@@ -423,6 +424,43 @@ async def _drop_leading_fillers(chunks):
     cleaned = LEADING_FILLER.sub("", buffered)
     if cleaned:
         yield cleaned
+
+
+# Sparring page only (backend/app/routers/sparring.py): the agent plays a bully who
+# doesn't let you finish. Never used on phone calls.
+HECKLES = ("Σκάσε ρε!", "Τι βλακείες λες;", "Άσε τις μπούρδες!", "Έλα, τελείωνε!", "Πάλι τα ίδια;",
+           "Ρε άκου τι λες!", "Άντε ρε, σοβαρά τώρα;", "Μπλα μπλα μπλα!")
+HECKLE_AFTER_SECONDS = 2.5
+HECKLE_GAP_SECONDS = 5.0
+
+
+def heckle_while_talking(session: AgentSession, call_id: str) -> None:
+    """Cut in with a short heckle when the caller talks for too long, and answer sooner.
+    The heckle doesn't end their turn; the real reply still follows it."""
+    state = {"turn": None, "last": 0.0}
+    try:
+        session.update_options(endpointing_opts={"min_delay": 0.2, "max_delay": 0.5})
+    except Exception:
+        logger.exception("call %s: sparring endpointing not set", call_id)
+
+    async def cut_in(turn: object) -> None:
+        await asyncio.sleep(HECKLE_AFTER_SECONDS)
+        now = time.monotonic()
+        if state["turn"] is not turn or now - state["last"] < HECKLE_GAP_SECONDS:
+            return
+        state["last"] = now
+        try:
+            session.say(random.choice(HECKLES), allow_interruptions=False, add_to_chat_ctx=True)
+        except Exception:
+            logger.exception("call %s: heckle failed", call_id)
+
+    @session.on("user_state_changed")
+    def _on_user_state(ev) -> None:
+        if ev.new_state == "speaking":
+            turn = state["turn"] = object()
+            asyncio.create_task(cut_in(turn))
+        else:
+            state["turn"] = None
 
 
 def _chunk_text(chunk) -> str:
@@ -1795,6 +1833,8 @@ async def entrypoint(ctx: JobContext) -> None:
     track_telemetry(session, ctx, call_id, engine)
     log_latency(session, call_id)
     guard_repetition(session, ctx, call_id)
+    if metadata.get("sparring") and engine == "pipeline":
+        heckle_while_talking(session, call_id)
 
     @session.on("close")
     def _on_close(_ev) -> None:
