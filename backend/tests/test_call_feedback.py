@@ -11,13 +11,18 @@ from app.schemas import RouteArgs
 
 @pytest.mark.parametrize("text", ["Μάλιστα.", "Σύμφωνοι.", "Συμφωνώ", "Βεβαίως", "Ακριβώς έτσι", "Φυσικά",
                                   "Τέλεια", "Έγινε", "Άμε", "Εντάξει, κλείσ' το.", "Κλείστε το", "Ναι",
-                                  "Σωστό", "Okay", "yeah, go ahead"])
+                                  "Σωστό", "Okay", "yeah, go ahead",
+                                  # Second call (2026-10-01): «Ολόσωστα.» was asked to repeat.
+                                  "Ολόσωστα.", "Σωστότατα", "Πολύ σωστά", "Βεβαιότατα", "Εγκρίνω",
+                                  "Θετικό", "Θετικότατο", "Επιβεβαιώνω", "Ασφαλώς", "Σίγουρα", "Μια χαρά",
+                                  "Έτσι είναι", "Κομπλέ", "Εννοείται", "Ναι ναι", "Οπωσδήποτε", "Ok"])
 def test_everyday_yes(text):
     assert _affirmative(text)
 
 
 @pytest.mark.parametrize("text", ["Όχι μάλιστα", "Μάλιστα, αλλά την Πέμπτη", "Μην το κλείσετε", "Καλά",
-                                  "Δεν ξέρω", "Περιμένετε", "not right now", ""])
+                                  "Δεν ξέρω", "Περιμένετε", "not right now", "",
+                                  "Λάθος", "Σωστά, όχι, λάθος το τηλέφωνο", "wrong time"])
 def test_not_a_yes(text):
     assert not _affirmative(text)
 
@@ -60,3 +65,42 @@ async def test_two_word_off_topic_is_not_a_strike(sessions, monkeypatch):
         rules = [e.rule for e in (await db.execute(select(RoutingEvent).where(RoutingEvent.call_id == call.id)
                                                    .order_by(RoutingEvent.created_at))).scalars()]
         assert rules[-1] == "off-topic 1/3"  # the short turn did not count
+
+
+def test_greek_number_said_without_country_code():
+    from app.schemas import normalize_phone
+    assert normalize_phone("690 762 6384") == "+306907626384"
+    assert normalize_phone("2101234567") == "+302101234567"
+    assert normalize_phone("+12025550100") == "+12025550100"
+
+
+@pytest.mark.asyncio
+async def test_answer_to_our_clarification_is_not_a_strike(sessions, monkeypatch):
+    from datetime import datetime, timedelta
+    monkeypatch.setattr(receptionist.notifications, "kick", lambda: None)
+    async with sessions() as db:
+        practice = await _practice(db)
+        call = Call(persona="", scenario="", status=CallStatus.active, direction="web", practice_id=practice.id)
+        db.add(call)
+        await db.flush()
+        t = datetime.utcnow()
+        db.add_all([
+            TranscriptEntry(call_id=call.id, role=TranscriptRole.agent, created_at=t,
+                            text="Συγγνώμη, δεν σας κατάλαβα. Μπορείτε να επαναλάβετε τι χρειάζεστε;"),
+            TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, created_at=t + timedelta(seconds=3),
+                            text="Όχι, όχι, ρε, τώρα το έφτανα."),
+            # This turn's filler, stored before the tool ran.
+            TranscriptEntry(call_id=call.id, role=TranscriptRole.agent, created_at=t + timedelta(seconds=4),
+                            text="Ένα λεπτό…"),
+        ])
+        await db.commit()
+        assert (await receptionist.tool_route(db, call, RouteArgs(intent="off_topic")))["path"] == "clarify"
+        # After a normal agent line, the same reply is a strike.
+        db.add_all([
+            TranscriptEntry(call_id=call.id, role=TranscriptRole.agent, created_at=t + timedelta(seconds=6),
+                            text="Θα θέλετε να κλείσουμε ένα ραντεβού;"),
+            TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, created_at=t + timedelta(seconds=9),
+                            text="Πες μου ένα ανέκδοτο για γάτες."),
+        ])
+        await db.commit()
+        assert (await receptionist.tool_route(db, call, RouteArgs(intent="off_topic")))["path"] == "refuse"

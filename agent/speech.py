@@ -79,6 +79,9 @@ class Pronunciation:
     """
 
     def __init__(self, language: str):
+        # Greek TTS broke up "Παρακαλώ πολύ! Καλό σας απόγευμα." on a real call (2026-10-01):
+        # a receptionist doesn't exclaim, so "!" is spoken as a full stop.
+        self.calm = language == "el"
         self.aliases: dict[str, str] = {}
         raw = os.environ.get("TTS_PRONUNCIATION_ALIASES", "")
         if raw:
@@ -109,11 +112,15 @@ class Pronunciation:
         return self.aliases.get(value.casefold(), value)
 
     def apply(self, text: str) -> str:
+        if self.calm:
+            text = text.replace("!", ".")
         if self.pattern is None:
             return text
         return self.pattern.sub(self.replacement, text)
 
     async def stream(self, chunks: AsyncIterable[str]) -> AsyncIterable[str]:
+        if self.calm:
+            chunks = _calm(chunks)
         if self.pattern is None:
             async for chunk in chunks:
                 yield chunk
@@ -146,3 +153,8 @@ class Pronunciation:
                                if match.start() >= len(previous) else match.group()), source,
             )
             yield result[len(previous):]
+
+
+async def _calm(chunks: AsyncIterable[str]) -> AsyncIterable[str]:
+    async for chunk in chunks:
+        yield chunk.replace("!", ".")
