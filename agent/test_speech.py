@@ -213,3 +213,23 @@ async def test_fixed_line_falls_back_to_streaming(monkeypatch, tmp_path):
     monkeypatch.setattr(opening, "FIXED_CACHE_DIR", tmp_path)
     monkeypatch.setattr(opening, "_fixed", {})
     assert await opening.fixed_audio("Γεια σας.", "voice", "el") is None
+
+@pytest.mark.asyncio
+async def test_greek_clock_times_in_every_stream_boundary(monkeypatch):
+    monkeypatch.delenv("TTS_PRONUNCIATION_ALIASES", raising=False)
+    text = "Στις 09:30 ή 15:00. Τηλέφωνο 2101234567."
+    expected = "Στις εννέα και μισή το πρωί ή τρεις το απόγευμα. Τηλέφωνο 2101234567."
+    pronunciation = Pronunciation("el")
+    assert pronunciation.apply(text) == expected
+    for split in range(len(text) + 1):
+        assert "".join([part async for part in pronunciation.stream(chunks([text[:split], text[split:]]))]) == expected
+    assert "".join([part async for part in pronunciation.stream(chunks(text))]) == expected
+    assert Pronunciation("en").apply("09:30") == "09:30"
+
+
+def test_demo_voices_are_explicit_even_with_localized_default(monkeypatch):
+    from voices import gemini_voice
+    monkeypatch.setenv("ELEVENLABS_VOICE_MAP_EL", '{"default":"custom"}')
+    assert elevenlabs_voice("eleven_sarah", "el") == "EXAVITQu4vr4xnSDxMaL"
+    assert elevenlabs_voice("eleven_brian", "el") == "nPczCjzI2devNBz1zQrb"
+    assert gemini_voice("eleven_brian") == "Kore"

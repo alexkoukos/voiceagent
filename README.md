@@ -59,7 +59,9 @@ For the iOS app, run `cd ios && xcodegen && open PrankCaller.xcodeproj`, then se
 
 Keep `ADMIN_API_TOKEN` on the founder's device and server only. With that key, `POST /practices/{practice_id}/api-keys` issues a random key for one practice; the response shows the key only once. Give each practice its own key for the iOS app. Its practice list contains only that practice, and another practice's URLs return 404. The legacy `APP_API_TOKEN` cannot open practice administration or patient records. Revoke a lost key with `DELETE /practices/{practice_id}/api-keys/{key_id}` using the founder key, then issue a replacement. Never send the founder or worker key to a practice.
 
-The public `/demo/{slug}` link intentionally lets anyone place a test call. Treat the slug as a shareable caller link, not as an administration credential.
+The public `/demo/{slug}` link intentionally lets anyone place a test call and view services, prices, and weekly opening hours. `/demo/{slug}/info` exposes only those public fields plus name and timezone. Treat the slug as a shareable caller link, not as an administration credential. The page has no live transcription display.
+
+For a reproducible fictional Papadopoulou dental demo, sample pricing data, a revocable live dashboard link with optional no-expiry mode, setup instructions, and an email draft, see [Dental demo](docs/dental-demo.md). The shared dashboard includes only web calls started through that link; the founder monitor remains private. Apply migrations through `0030` before deploying these changes.
 
 ## Tests
 
@@ -77,7 +79,7 @@ The scripted voice scenarios in `agent/scripts/` require a running backend and w
 
 Set `NOISE_CANCELLATION=on` on the **agent service** as well as locally. The worker uses BVC for browser microphones and BVCTelephony for phone audio, before transcription and turn detection. These filters require LiveKit Cloud transport. Each call logs the selected source and filter; an explicit `off`, `false`, `0`, or `no` disables filtering. The last checked Railway configuration (2026-09-28) had this set to `off`, so deploying code alone will not enable it.
 
-The default realtime pause is 700 ms and Scribe's silence threshold is 0.7 seconds. Existing deployment overrides still take precedence. The pipeline retains its interruption duration/word checks and resumes after false interruptions. Compare quiet speech, traffic, music and a nearby talker before shortening the pauses; measure missed words, unwanted interruptions, correct names/times, and reply latency.
+The default realtime pause is 700 ms and Scribe's silence threshold is 0.7 seconds. Greek Scribe calls use its end-of-speech event directly, without an additional endpointing pause. Existing deployment overrides still take precedence. The pipeline retains its interruption duration/word checks and resumes after false interruptions. Compare quiet speech, traffic, music and a nearby talker before shortening the pauses; measure missed words, unwanted interruptions, correct names/times, and reply latency.
 
 Text pipelines use explicit delivery settings: ElevenLabs speaks at `TTS_SPEED=0.93` using PCM audio, and Gemini TTS receives instructions for clear, slightly slower speech. The outgoing pipeline opening uses the same ElevenLabs model/settings as the conversation. Language switches update both recognition and speech settings. `ELEVENLABS_TTS_MODEL` can select another compatible model for a listening comparison; keep the current model until the alternative's quality and latency are verified.
 

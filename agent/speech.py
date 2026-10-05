@@ -54,12 +54,28 @@ def speech_instructions(language: str) -> str:
     )
 
 
+def spoken_greek_time(value: str) -> str:
+    hour, minute = map(int, value.split(":"))
+    hours = ("δώδεκα", "μία", "δύο", "τρεις", "τέσσερις", "πέντε", "έξι", "επτά", "οκτώ", "εννέα", "δέκα", "έντεκα")
+    units = ("", "ένα", "δύο", "τρία", "τέσσερα", "πέντε", "έξι", "επτά", "οκτώ", "εννέα", "δέκα", "έντεκα", "δώδεκα", "δεκατρία", "δεκατέσσερα", "δεκαπέντε", "δεκαέξι", "δεκαεπτά", "δεκαοκτώ", "δεκαεννέα")
+    period = "το πρωί" if 5 <= hour < 12 else "το μεσημέρι" if 12 <= hour < 15 else "το απόγευμα" if 15 <= hour < 20 else "το βράδυ"
+    result = hours[hour % 12]
+    if minute == 30:
+        result += " και μισή"
+    elif minute == 15:
+        result += " και τέταρτο"
+    elif minute:
+        word = units[minute] if minute < 20 else ("είκοσι", "τριάντα", "σαράντα", "πενήντα")[minute // 10 - 2] + (" " + units[minute % 10] if minute % 10 else "")
+        result += " και " + word
+    return result + " " + period
+
+
 class Pronunciation:
     """Replace whole words/phrases without changing the transcript or booking data.
 
     Keep enough original text across streaming chunks to match a split name. A
     left-context character prevents replacing a suffix at the next chunk's start.
-    No buffering is added when no aliases are configured.
+    Greek clock times are spoken in words; booking data stays unchanged.
     """
 
     def __init__(self, language: str):
@@ -80,14 +96,22 @@ class Pronunciation:
             except (ValueError, AttributeError):
                 logger.warning("Invalid TTS_PRONUNCIATION_ALIASES; ignoring pronunciation overrides")
         keys = sorted(self.aliases, key=len, reverse=True)
-        self.pattern = (re.compile(r"(?<!\w)(?:" + "|".join(map(re.escape, keys)) + r")(?!\w)", re.I)
-                        if keys else None)
-        self.lookahead = max(map(len, keys), default=0) + 1
+        alternatives = [r"(?<![\w:])(?:[01]?\d|2[0-3]):[0-5]\d(?![\w:])"] if language == "el" else []
+        if keys:
+            alternatives.append(r"(?<!\w)(?:" + "|".join(map(re.escape, keys)) + r")(?!\w)")
+        self.pattern = re.compile("|".join(alternatives), re.I) if alternatives else None
+        self.lookahead = max(max(map(len, keys), default=0), 5 if language == "el" else 0) + 1
+
+    def replacement(self, match):
+        value = match.group()
+        if re.fullmatch(r"(?:[01]?\d|2[0-3]):[0-5]\d", value):
+            return spoken_greek_time(value)
+        return self.aliases.get(value.casefold(), value)
 
     def apply(self, text: str) -> str:
         if self.pattern is None:
             return text
-        return self.pattern.sub(lambda match: self.aliases.get(match.group().casefold(), match.group()), text)
+        return self.pattern.sub(self.replacement, text)
 
     async def stream(self, chunks: AsyncIterable[str]) -> AsyncIterable[str]:
         if self.pattern is None:
@@ -108,7 +132,7 @@ class Pronunciation:
             for match in self.pattern.finditer(source, offset):
                 if match.start() >= cutoff + offset:
                     break
-                pieces.extend((source[start:match.start()], self.aliases.get(match.group().casefold(), match.group())))
+                pieces.extend((source[start:match.start()], self.replacement(match)))
                 start = match.end()
             end = max(cutoff + offset, start)
             pieces.append(source[start:end])
@@ -118,7 +142,7 @@ class Pronunciation:
         if pending:
             source = previous + pending
             result = self.pattern.sub(
-                lambda match: (self.aliases.get(match.group().casefold(), match.group())
+                lambda match: (self.replacement(match)
                                if match.start() >= len(previous) else match.group()), source,
             )
             yield result[len(previous):]
