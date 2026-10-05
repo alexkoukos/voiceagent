@@ -786,21 +786,26 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
                     prewarm_part()
                 except Exception:
                     logger.warning("could not prewarm %s", type(part).__name__)
+        # Scribe already emits END_OF_SPEECH after its configured silence window.
+        # Greek does not need a second semantic detector or another
+        # endpointing pause after that committed turn. Keep Scribe's 0.7s pause.
+        greek_scribe = engine == "pipeline" and language == "el"
+        semantic_turns = engine == "pipeline" and not greek_scribe
         return AgentSession(
             stt=stt,
             llm=text_llm(),
             tts=tts,
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             turn_handling=TurnHandlingOptions(
-                # ElevenLabs uses the turn detector. Deepgram's final transcript ends
-                # a fallback turn, so the text model responds to that exact transcript.
+                # English Scribe uses semantic turn detection. Greek Scribe and
+                # Deepgram fallback calls use their STT end-of-speech events.
                 # Avoid loading a local turn model in the fallback worker: it previously
                 # exhausted Railway's memory.
                 turn_detection=(inference.TurnDetector(local_fallback=False)
-                                if engine == "pipeline" else "stt"),
+                                if semantic_turns else "stt"),
                 endpointing=({"mode": "dynamic", "min_delay": ENDPOINT_MIN_DELAY,
                               "max_delay": TURN_MAX_DELAY_MS / 1000}
-                             if engine == "pipeline" else {"mode": "fixed", "min_delay": ENDPOINT_MIN_DELAY}),
+                             if semantic_turns else {"mode": "fixed", "min_delay": 0 if greek_scribe else ENDPOINT_MIN_DELAY}),
                 # A cough or a one-word "ναι" mid-reply shouldn't cut the agent off; if it was
                 # a false alarm, carry on where it stopped.
                 interruption={"min_duration": 0.6, "min_words": 2, "resume_false_interruption": True,
@@ -1302,7 +1307,7 @@ class ReceptionistCall:
         return ReceptionistAgent(
             call=self, instructions=prompts.get(language) or self.metadata["prompt"], call_id=self.call_id,
             language=language, language_name="Greek" if language == "el" else "English",
-            fillers=self.engine == "pipeline", **(parts or {}),
+            fillers=False, **(parts or {}),
         )
 
     async def switch_language(self, language: str) -> None:
@@ -1672,7 +1677,6 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
     rc.agent = agent
     track_transcript(
         session, call_id, rc.engine,
-        room=ctx.room if metadata.get("direction") == "web" else None,
         caller_identity=rc.caller_identity,
         language=lambda: rc.language,
     )

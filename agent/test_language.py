@@ -100,3 +100,21 @@ def test_mentioning_a_language_is_not_a_request():
     assert worker.wants_language("Μπορούμε να μιλήσουμε στα αγγλικά;") == "en"
     assert worker.wants_language("Ελληνικά παρακαλώ") == "el"
     assert worker.wants_language("Greek mode") == "el"
+
+
+@pytest.mark.parametrize("language,semantic", [("el", False), ("en", True)])
+def test_scribe_uses_one_greek_end_of_turn_decision(monkeypatch, language, semantic):
+    from unittest.mock import Mock
+    detector = Mock(return_value="semantic-detector")
+    monkeypatch.setattr(worker.inference, "TurnDetector", detector)
+    monkeypatch.setattr(worker, "scribe_stt", lambda *args: object())
+    monkeypatch.setattr(worker, "build_tts", lambda *args: object())
+    monkeypatch.setattr(worker, "text_llm", lambda: object())
+    monkeypatch.setattr(worker, "AgentSession", lambda **kwargs: kwargs)
+    ctx = SimpleNamespace(proc=SimpleNamespace(userdata={"vad": object()}))
+    session = worker.build_session(ctx, "pipeline", "default", language)
+    options = session["turn_handling"]
+    assert options["turn_detection"] == ("semantic-detector" if semantic else "stt")
+    assert options["endpointing"]["min_delay"] == (worker.ENDPOINT_MIN_DELAY if semantic else 0)
+    assert detector.call_count == int(semantic)
+    assert options["interruption"]["resume_false_interruption"] is True
