@@ -7,7 +7,6 @@ import json
 import os
 import secrets
 from pathlib import Path
-from urllib.parse import urlparse
 
 import httpx
 
@@ -17,18 +16,16 @@ def main():
     parser.add_argument('--backend', default='http://localhost:8000')
     parser.add_argument('--permanent', action='store_true', help='Keep the link active until explicitly revoked')
     args = parser.parse_args()
-    # The admin credential may only be sent to a configured origin, never an
-    # arbitrary command-line URL (or a URL with embedded credentials/query).
-    allowed = ['http://localhost:8000', 'http://127.0.0.1:8000']
-    configured = os.environ.get('DEMO_BACKEND_URL', '').rstrip('/')
-    if configured:
-        url = urlparse(configured)
-        if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment or url.path:
-            parser.error('DEMO_BACKEND_URL must be an HTTPS origin without a path or credentials.')
-        allowed.append(configured)
-    base = next((origin for origin in allowed if origin == args.backend.rstrip('/')), None)
+    # Explicit destinations keep founder credentials away from arbitrary URLs.
+    # Add a reviewed origin here when moving this repository to another host.
+    origins = {
+        'http://localhost:8000': 'http://localhost:8000',
+        'http://127.0.0.1:8000': 'http://127.0.0.1:8000',
+        'https://backend-production-c085.up.railway.app': 'https://backend-production-c085.up.railway.app',
+    }
+    base = origins.get(args.backend.rstrip('/'))
     if base is None:
-        parser.error('Set DEMO_BACKEND_URL to the trusted HTTPS origin before selecting it with --backend.')
+        parser.error('Use a configured local or production backend origin.')
     token = os.environ.get('ADMIN_API_TOKEN')
     if not token:
         parser.error('Set ADMIN_API_TOKEN in the environment.')
