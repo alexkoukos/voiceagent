@@ -15,7 +15,7 @@ uv run --python 3.12 --env-file ../.env --with-requirements requirements.txt \
   python scripts/setup_dental_demo.py --backend http://localhost:8000
 ```
 
-Use the deployed HTTPS backend URL to create a hosted demo. `ADMIN_API_TOKEN` is read from the environment and never included in the shareable link. The script creates a **new** practice with a random slug each time; it never modifies an existing clinic or calendar. Share the printed demo link. Existing dental demo links receive the simplified UI when the backend is deployed and display their own stored prices and hours.
+For a hosted demo, first set `DEMO_BACKEND_URL` to the trusted deployed HTTPS origin, then pass that same origin with `--backend`. The script only sends the founder credential to an explicitly configured origin. `ADMIN_API_TOKEN` is read from the environment and never included in the shareable link. The script creates a **new** practice with a random slug each time; it never modifies an existing clinic or calendar. Share the printed demo link. Existing dental demo links receive the simplified UI when the backend is deployed and display their own stored prices and hours.
 
 ## Reply timing and wording
 

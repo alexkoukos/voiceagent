@@ -68,7 +68,7 @@ def test_polling_handles_empty_hidden_expired_and_failed_requests(mode):
     if mode == 'permanent':
         data['expires_at'] = None
     result = subprocess.run(['node', '-e', NODE, mode], input=json.dumps({
-        'script': re.findall(r'<script>(.*?)</script>', page, re.S)[0], 'data': data}),
+        'script': re.findall(r'<script>(.*?)</script>', page, re.S | re.I)[0], 'data': data}),
         text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert 'PASS' in result.stdout
