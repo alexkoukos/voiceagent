@@ -41,7 +41,13 @@ def _overrides(variable: str = "ELEVENLABS_VOICE_MAP") -> dict[str, str]:
         return {}
 
 
+DEMO_VOICES = {"eleven_sarah": ELEVENLABS_VOICES["default"], "eleven_jessica": ELEVENLABS_VOICES["Aoede"],
+               "eleven_george": ELEVENLABS_VOICES["Charon"], "eleven_brian": ELEVENLABS_VOICES["Algieba"]}
+
+
 def elevenlabs_voice(key: str, language: str | None = None) -> str:
+    if key in DEMO_VOICES:
+        return DEMO_VOICES[key]
     mapping = {**ELEVENLABS_VOICES, **_overrides()}
     localized = _overrides(f"ELEVENLABS_VOICE_MAP_{language.upper()}") if language in {"el", "en"} else {}
     return localized.get(key) or localized.get("default") or mapping.get(key) or mapping["default"]
@@ -65,4 +71,4 @@ def openai_voice(key: str) -> str:
 
 
 def gemini_voice(key: str) -> str:
-    return GEMINI_DEFAULT_VOICE if key == "default" else key
+    return GEMINI_DEFAULT_VOICE if key == "default" or key in DEMO_VOICES else key

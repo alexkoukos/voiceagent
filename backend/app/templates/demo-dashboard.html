@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>$name · Live demo dashboard</title>
+<style>
+:root{color-scheme:light;--bg:#f7f8f5;--paper:#fff;--ink:#20382e;--muted:#56675f;--line:#dce3dc;--green:#17634b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:400 15px/1.6 system-ui,-apple-system,sans-serif}main{max-width:1180px;margin:auto;padding:42px 28px 70px}header{margin-bottom:30px}.eyebrow{font-size:.7rem;text-transform:uppercase;letter-spacing:.14em;color:var(--green);margin:0 0 10px}h1{font-size:clamp(1.8rem,4vw,2.7rem);line-height:1.16;letter-spacing:-.04em;margin:0 0 14px}h2{font-size:1.15rem;margin:0 0 10px}h3{font-size:1rem;margin:0 0 8px}p{margin:0 0 14px}.muted,small{color:var(--muted)}small{font-size:.8rem}.lead{max-width:720px}.status-row{display:flex;gap:16px;align-items:center;flex-wrap:wrap;font-size:.8rem;margin-top:20px}#connection{color:var(--green)}button{font:inherit;color:var(--green);background:transparent;border:1px solid var(--line);border-radius:6px;padding:7px 12px;cursor:pointer}button:focus-visible,a:focus-visible,summary:focus-visible,.scroll:focus-visible{outline:3px solid #bc7c27;outline-offset:3px}.workspace{display:grid;grid-template-columns:350px minmax(0,1fr);gap:22px}.workspace>*,.detail-grid>*{min-width:0}.panel{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:24px;margin-bottom:22px;min-width:0}.call{padding:0;overflow:hidden}iframe{display:block;border:0;width:100%;height:510px;background:var(--paper)}.call-note{padding:0 20px 20px;font-size:.78rem;color:var(--muted)}.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px 16px;margin:24px 0}.tile span{display:block;font-size:.76rem;color:var(--muted)}.tile strong{display:block;font-size:1.8rem;line-height:1.35;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.035em}.tile small{font-size:.71rem}.legend{padding-top:16px;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}.steps{padding-left:18px;margin:10px 0}.steps li{margin-bottom:10px}.row{display:flex;justify-content:space-between;gap:20px;padding:10px 0;border-bottom:1px solid var(--line)}.row dd,.row dt{margin:0}.row dd{text-align:right;font-variant-numeric:tabular-nums}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}.detail-grid .panel{margin:0}dl{margin:12px 0}.scroll{overflow:auto;max-width:100%;max-height:360px}table{border-collapse:separate;border-spacing:0;width:100%;font-size:.8rem;white-space:nowrap}caption{text-align:left;color:var(--muted);padding-bottom:10px}th,td{text-align:left;padding:12px 10px;border-bottom:1px solid var(--line)}thead th{position:sticky;top:0;background:var(--paper);font-weight:600}tbody th{position:sticky;left:0;background:var(--paper);font-weight:500}td:last-child{text-align:right}#empty{padding:24px 0}.notes{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;margin-top:24px}.notes p{font-size:.87rem;color:var(--muted)}details{margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}summary{cursor:pointer;color:var(--green)}footer{margin-top:28px;font-size:.78rem;color:var(--muted)}[hidden]{display:none!important}#expired{padding:22px;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+@media(max-width:880px){.workspace{grid-template-columns:1fr}.call iframe{height:440px}.detail-grid{grid-template-columns:1fr}.notes{grid-template-columns:1fr;gap:14px}}@media(max-width:480px){main{padding:26px 18px 40px}.panel{padding:20px}.call{padding:0}.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.tile strong{font-size:1.6rem}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>Dental receptionist.<br>Live results.</h1>
+<p class="lead muted">Try $name in Greek. Watch response times and outcomes update, then see the estimated cost of the call. Only calls started through this demo link appear here.</p>
+<div class="status-row"><span id="connection" role="status">Connecting to demo telemetry…</span><span id="updated">No measurements loaded</span><button id="refresh" type="button">Refresh now</button></div>
+</header>
+<p id="expired" hidden>This demo link has expired or is no longer available. Ask the person who shared it for a new link.</p>
+<div id="dashboard">
+<div class="workspace">
+<aside>
+<section class="panel call">
+<iframe id="call-frame" src="$call_path" title="Call the dental receptionist demo" allow="microphone; autoplay" referrerpolicy="no-referrer"></iframe>
+<p class="call-note">Fictional practice. Use fictional personal details. Clinic prices are sample amounts in EUR; no payment is taken. Expand the information section inside the call panel to inspect services and hours.</p>
+</section>
+<section class="panel">
+<h2>What you can try</h2>
+<ol class="steps">
+<li>Ask: <span lang="el">«Πόσο κοστίζει ο καθαρισμός;»</span><br><small>Get a price from the clinic’s stored information.</small></li>
+<li>Ask: <span lang="el">«Θέλω ραντεβού την Τρίτη.»</span><br><small>Check available times, choose one, and confirm the details.</small></li>
+<li>Change or cancel that test booking.<br><small>The assistant verifies the appointment before changing it.</small></li>
+<li>Pause, correct yourself, or ask an unclear question.<br><small>See whether it asks for clarification and recovers.</small></li>
+</ol>
+</section>
+</aside>
+<div>
+<section class="panel">
+<h2>This demo’s performance</h2>
+<p class="muted">A live view of the same kinds of operating metrics used in the native app.</p>
+<div class="tiles">
+<div class="tile"><span>Demo calls</span><strong id="count">—</strong><small id="active">Waiting for data</small></div>
+<div class="tile"><span>Appointments booked</span><strong id="bookings">—</strong><small>Recorded booking outcomes</small></div>
+<div class="tile"><span>Resolved without a handoff</span><strong id="resolved">—</strong><small>Of finished demo calls</small></div>
+<div class="tile"><span>Typical answer delay</span><strong id="answer">—</strong><small>Median of measured answers</small></div>
+<div class="tile"><span>Slower answers</span><strong id="p95">—</strong><small>95th percentile</small></div>
+<div class="tile"><span>Known usage cost</span><strong id="cost">—</strong><small>USD · estimated, not an invoice</small></div>
+</div>
+<p class="legend" id="coverage">No demo calls yet. Start a call to collect measurements.</p>
+</section>
+<section class="panel">
+<h2>Call activity</h2>
+<p id="empty" class="muted">Your first demo call will appear here. No results are invented while we wait.</p>
+<div class="scroll" role="region" aria-label="Demo call activity" tabindex="0">
+<table id="call-table" hidden><caption>Latest calls through this link. Costs usually arrive after hangup.</caption><thead><tr><th scope="col">Call</th><th scope="col">Status / outcome</th><th scope="col">Duration</th><th scope="col">Answer delay</th><th scope="col">Known cost (USD)</th></tr></thead><tbody id="calls"></tbody></table>
+</div>
+</section>
+<div class="detail-grid">
+<section class="panel"><h2>Where the time goes</h2><dl id="stages"></dl><p class="legend">Median stage timings across observed turns. Stages can overlap and have different sample counts; do not add them together. Answer delay excludes filler sounds and is a server-side estimate, not a measurement at your speaker.</p></section>
+<section class="panel"><h2>How the cost adds up</h2><dl id="components"></dl><p id="cost-coverage" class="muted">Waiting for reported usage.</p><p class="legend">Usage × the stored provider rate: speech recognition by audio minutes, the language model by tokens, speech generation by characters, and the call connection by participant minutes. Missing rates remain unknown. Excludes hosting, storage, taxes and pre-rendered greetings.</p><small id="versions">Pricing version: waiting for usage.</small></section>
+</div>
+</div>
+</div>
+<footer><span id="expires">$expires</span>. Refreshes every 2 seconds during active calls and every 8 seconds otherwise. Names, phone numbers, recordings, and transcripts are not shown.</footer>
+</div>
+</main>
+<script>
+const el = id => document.getElementById(id);
+const money = value => value == null ? '—' : new Intl.NumberFormat('en-US', {style:'currency', currency:'USD', minimumFractionDigits:4, maximumFractionDigits:4}).format(value);
+const seconds = value => value == null ? '—' : (value / 1000).toFixed(2) + ' s';
+const labels = {pending:'Preparing',queued:'Queued',dialing:'Connecting',active:'In call',completed:'Completed',failed:'Failed',cancelled:'Cancelled',booked:'Appointment booked',rescheduled:'Rescheduled',confirmed:'Confirmed',info_given:'Information given',message_taken:'Message taken',transferred:'Handed off',abandoned:'Ended without outcome',unclassified:'Awaiting outcome'};
+const stageLabels = {transcription_delay_ms:'Speech recognition',end_of_turn_delay_ms:'End-of-turn detection',llm_node_ttft_ms:'First model response',tts_node_ttfb_ms:'First generated audio',e2e_latency_ms:'SDK end-to-end'};
+const componentLabels = {stt:'Speech recognition',llm:'Language model',tts:'Speech generation',livekit:'Call connection',eot:'Turn detection',interruption:'Interruption detection'};
+function pairs(target, rows) {
+  const nodes = rows.map(([name, value]) => { const row = document.createElement('div'); row.className = 'row'; const dt = document.createElement('dt'); dt.textContent = name; const dd = document.createElement('dd'); dd.textContent = value; row.append(dt, dd); return row; });
+  el(target).replaceChildren(...nodes);
+}
+function render(data) {
+  el('count').textContent = data.count;
+  el('active').textContent = data.active + ' active · ' + data.finished + ' finished';
+  el('bookings').textContent = data.bookings;
+  el('resolved').textContent = data.resolved_pct == null ? '—' : data.resolved_pct.toFixed(0) + '%';
+  el('answer').textContent = seconds(data.answer.p50_ms);
+  el('p95').textContent = seconds(data.answer.p95_ms);
+  el('cost').textContent = money(data.cost.known_usd);
+  el('coverage').textContent = data.answer.samples + ' measured answers. ' + (data.older_calls_omitted ? 'Showing the latest 100 calls. ' : '') + (data.timings_limited ? 'Timings are limited to the latest 10,000 events. ' : '') + 'A dash means no measurement yet. Outcomes may arrive after hangup.';
+  pairs('stages', [['First sound (including fillers)', seconds(data.first_sound_ms)], ['Booking / other tool round trip', seconds(data.tool_ms)], ...Object.entries(stageLabels).map(([key, name]) => [name, seconds(data.stages[key])])]);
+  pairs('components', Object.entries(componentLabels).map(([key, name]) => [name, data.cost.unpriced_components.includes(key) ? (data.cost.components[key] == null ? 'Unknown' : money(data.cost.components[key]) + ' + unknown') : money(data.cost.components[key])]));
+  el('cost-coverage').textContent = data.cost.reported_calls ? data.cost.reported_calls + ' of ' + data.count + ' calls have usage reports; ' + data.cost.complete_calls + ' fully priced. Known average per reported call: ' + money(data.cost.per_call_usd) + '. Per priced minute: ' + money(data.cost.per_minute_usd) + '. Totals are a lower bound while any usage or rates are missing.' : 'Usage normally arrives after the call ends. No reported cost yet.';
+  el('versions').textContent = 'Stored pricing version(s): ' + (data.cost.versions.join(', ') || 'waiting for usage') + '. These are configured rates, not a live provider quote.';
+  el('empty').hidden = data.calls.length > 0;
+  el('call-table').hidden = !data.calls.length;
+  el('calls').replaceChildren(...data.calls.map(call => {
+    const row = document.createElement('tr');
+    [call.label, labels[call.outcome === 'pending' ? call.status : call.outcome] || 'Awaiting outcome', call.duration_seconds == null ? 'In progress' : call.duration_seconds + ' s', seconds(call.answer_ms), money(call.known_usd) + (call.known_usd != null && !call.cost_complete ? ' + unknown' : '')].forEach((value, index) => { const cell = document.createElement(index ? 'td' : 'th'); if (!index) cell.scope = 'row'; cell.textContent = value; row.appendChild(cell); });
+    return row;
+  }));
+  el('updated').textContent = 'Updated ' + new Date(data.updated_at).toLocaleTimeString();
+  el('expires').textContent = data.expires_at ? 'Expires ' + new Date(data.expires_at).toLocaleString() : 'No automatic expiry';
+}
+let timer, controller, inFlight = false, stopped = false, interval = 8000;
+async function refresh() {
+  clearTimeout(timer);
+  if (inFlight || stopped || document.hidden) return;
+  inFlight = true; controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(location.pathname.replace(/\/$$/, '') + '/data', {cache:'no-store', signal:controller.signal});
+    if (response.status === 404 || response.status === 403) {
+      stopped = true; el('expired').hidden = false; el('dashboard').hidden = true; el('call-frame').remove(); el('connection').textContent = 'Link unavailable'; el('refresh').disabled = true; return;
+    }
+    if (!response.ok) throw new Error('Unavailable');
+    const data = await response.json();
+    render(data); interval = data.active ? 2000 : 8000;
+    el('connection').textContent = data.active ? 'Live · call in progress' : 'Connected · waiting for a call';
+  } catch (error) {
+    if (!document.hidden) el('connection').textContent = 'Updates interrupted · displayed measurements may be stale. Retrying…';
+  } finally {
+    clearTimeout(timeout); inFlight = false;
+    if (!stopped && !document.hidden) timer = setTimeout(refresh, interval);
+  }
+}
+el('refresh').addEventListener('click', refresh);
+document.addEventListener('visibilitychange', () => { clearTimeout(timer); if (document.hidden) { if (controller) controller.abort(); } else refresh(); });
+window.addEventListener('pageshow', () => { if (stopped && !el('refresh').disabled) { stopped = false; refresh(); } });
+window.addEventListener('pagehide', () => { stopped = true; clearTimeout(timer); if (controller) controller.abort(); });
+refresh();
+</script>
+</body>
+</html>

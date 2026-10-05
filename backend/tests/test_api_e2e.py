@@ -256,6 +256,27 @@ async def test_websocket_scope_is_checked_before_accept(http, sessions):
 
 
 @pytest.mark.asyncio
+async def test_billing_configuration_and_status(http):
+    practice = await create(http, "Billing")
+    path = f"/practices/{practice['id']}/billing"
+    unconfigured = await http.get(path, headers=MASTER)
+    assert unconfigured.status_code == 200
+    assert unconfigured.json()["paid_period_starts_on"] is None
+
+    configured = await http.put(path, headers=MASTER, json={
+        "pilot_started_on": "2030-01-25", "monthly_fee": "199.00",
+    })
+    assert configured.status_code == 200
+    assert configured.json()["paid_period_starts_on"] == "2030-02-08"
+    assert configured.json()["monthly_fee"] == "199.00"
+
+    key, _ = await key_for(http, practice["id"])
+    status = await http.get(path, headers=key)
+    assert status.status_code == 200
+    assert status.json() == configured.json()
+
+
+@pytest.mark.asyncio
 async def test_billing_guarantee_excludes_demo_other_tenant_and_duplicates(sessions):
     from decimal import Decimal
     from app import billing
