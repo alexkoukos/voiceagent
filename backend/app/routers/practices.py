@@ -22,8 +22,8 @@ from app.models import (
 )
 from app.schemas import (
     AppointmentCreate, AppointmentMove, AppointmentOut, AdminLinkIn, AdminLinkOut, CallReview, ClosureIn, ClosureOut, ConfigVersionOut, DeviceIn, HandoffJoin, HandoffOut,
-    MessageOut, MessageUpdate, PracticeIn, PracticeOut, ReceptionistCallDetail, ReceptionistCallOut, StaffIn,
-    StaffOut, WaitlistOut, ConfigVersionEdit, PublishFreezeIn,
+    VOICE_BY_GENDER, MessageOut, MessageUpdate, PracticeIn, PracticeOut, ReceptionistCallDetail, ReceptionistCallOut, StaffIn,
+    StaffOut, VoiceIn, WaitlistOut, ConfigVersionEdit, PublishFreezeIn,
 )
 
 router = APIRouter(prefix="/practices", tags=["practices"])
@@ -478,6 +478,16 @@ async def publish_freeze(practice_id: str, payload: PublishFreezeIn, db: AsyncSe
     await db.commit()
     events.publish(f"practice:{practice.id}")
     return {"frozen": practice.publish_frozen}
+
+
+@router.put("/{practice_id}/voice")
+async def set_voice(practice_id: str, payload: VoiceIn, db: AsyncSession = Depends(get_db)):
+    """The male/female toggle; takes effect from the next call."""
+    practice = await _get(db, practice_id)
+    practice.voice = VOICE_BY_GENDER[payload.gender]
+    await db.commit()
+    events.publish(f"practice:{practice.id}")
+    return {"gender": payload.gender, "voice": practice.voice}
 
 
 @router.get("/{practice_id}/imports")

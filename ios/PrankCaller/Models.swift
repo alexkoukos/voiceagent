@@ -90,7 +90,9 @@ struct Call: Codable, Identifiable {
 }
 
 struct NewCall: Encodable {
-    let friendId: String
+    /// A saved friend, or `phoneNumber` typed on the keypad (nothing is saved).
+    var friendId: String? = nil
+    var phoneNumber: String? = nil
     let persona: String
     let scenario: String
     let context: String

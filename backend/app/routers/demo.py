@@ -102,13 +102,14 @@ async def demo_page(slug: str, db: AsyncSession = Depends(get_db), embed: bool =
 
 
 class DemoSessionRequest(BaseModel):
-    voice: Literal["eleven_sarah", "eleven_jessica", "eleven_george", "eleven_brian"] | None = None
+    gender: Literal["female", "male"] | None = None
+    voice: Literal["eleven_sarah", "eleven_jessica", "eleven_george", "eleven_brian", "Kore", "Zubenelgenubi"] | None = None
 
 
 @router.post("/{slug}/session")
 async def demo_session(slug: str, payload: DemoSessionRequest | None = None, db: AsyncSession = Depends(get_db)):
     practice = await _practice(db, slug)
-    return await start_demo_session(practice, db, voice=payload.voice if payload else None)
+    return await start_demo_session(practice, db, voice=(payload.voice or ({"male":"Zubenelgenubi", "female":"Kore"}.get(payload.gender))) if payload else None)
 
 
 async def start_demo_session(practice: Practice, db: AsyncSession, *, dashboard_id: str | None = None, voice: str | None = None):
@@ -117,7 +118,7 @@ async def start_demo_session(practice: Practice, db: AsyncSession, *, dashboard_
     if await active_count(db) >= settings.max_concurrent_calls:
         raise HTTPException(status_code=429, detail="busy")
     try:
-        call, metadata = await receptionist.start_call(db, practice, direction="web", caller_number=None)
+        call, metadata = await receptionist.start_call(db, practice, direction="web", caller_number=None, voice=voice)
     except (receptionist.Busy, receptionist.OverCap):
         raise HTTPException(status_code=429, detail="busy")
     if voice is not None:

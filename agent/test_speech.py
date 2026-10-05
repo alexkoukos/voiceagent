@@ -233,3 +233,20 @@ def test_demo_voices_are_explicit_even_with_localized_default(monkeypatch):
     assert elevenlabs_voice("eleven_sarah", "el") == "EXAVITQu4vr4xnSDxMaL"
     assert elevenlabs_voice("eleven_brian", "el") == "nPczCjzI2devNBz1zQrb"
     assert gemini_voice("eleven_brian") == "Kore"
+
+@pytest.mark.asyncio
+async def test_greek_speech_has_no_exclamations():
+    assert Pronunciation("el").apply("Παρακαλώ πολύ! Καλό σας απόγευμα.") == "Παρακαλώ πολύ. Καλό σας απόγευμα."
+    assert Pronunciation("en").apply("Great!") == "Great!"
+    parts = [part async for part in Pronunciation("el").stream(chunks(["Ναι", "! Γεια"]))]
+    assert "".join(parts) == "Ναι. Γεια"
+
+
+def test_greek_calls_use_native_greek_voices(monkeypatch):
+    from voices import ELEVENLABS_VOICES_EL
+    monkeypatch.delenv("ELEVENLABS_VOICE_MAP", raising=False)
+    monkeypatch.delenv("ELEVENLABS_VOICE_MAP_EL", raising=False)
+    assert elevenlabs_voice("Zubenelgenubi", "el") == ELEVENLABS_VOICES_EL["Zubenelgenubi"]
+    assert elevenlabs_voice("Kore", "el") == ELEVENLABS_VOICES_EL["Kore"]
+    # English calls keep the English voices.
+    assert elevenlabs_voice("Zubenelgenubi", "en") != ELEVENLABS_VOICES_EL["Zubenelgenubi"]
