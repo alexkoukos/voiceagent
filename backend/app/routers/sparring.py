@@ -8,6 +8,7 @@ ever reach whoever opened the page. No recording; the transcript is kept like an
 import json
 import secrets
 from pathlib import Path
+from string import Template
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,7 +23,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.dispatcher import active_count
 from app.models import Call, CallStatus
-from app.routers.demo import PAGE
+PAGE = Template((Path(__file__).resolve().parents[1] / "templates" / "sparring.html").read_text(encoding="utf-8"))
 from app.schemas import VOICE_BY_GENDER
 
 router = APIRouter(prefix="/sparring", tags=["sparring"])

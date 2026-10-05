@@ -1,0 +1,105 @@
+{
+  "name": "Οδοντιατρείο Παπαδοπούλου",
+  "slug": null,
+  "timezone": "Europe/Athens",
+  "language": "el",
+  "voice": "Zubenelgenubi",
+  "greeting": "Πρόκειται για δοκιμή. Θέλετε πληροφορίες ή ένα δοκιμαστικό ραντεβού;",
+  "phone_numbers": [],
+  "hours": {
+    "mon": [
+      [
+        "09:00",
+        "14:00"
+      ],
+      [
+        "17:00",
+        "20:00"
+      ]
+    ],
+    "tue": [
+      [
+        "09:00",
+        "14:00"
+      ]
+    ],
+    "wed": [
+      [
+        "09:00",
+        "14:00"
+      ],
+      [
+        "17:00",
+        "20:00"
+      ]
+    ],
+    "thu": [
+      [
+        "09:00",
+        "14:00"
+      ]
+    ],
+    "fri": [
+      [
+        "09:00",
+        "14:00"
+      ],
+      [
+        "17:00",
+        "20:00"
+      ]
+    ]
+  },
+  "services": [
+    {
+      "id": "checkup",
+      "name": "Οδοντιατρικός έλεγχος",
+      "duration_minutes": 30,
+      "price": "40€ (ενδεικτική τιμή demo)"
+    },
+    {
+      "id": "cleaning",
+      "name": "Καθαρισμός δοντιών",
+      "duration_minutes": 45,
+      "price": "60€ (ενδεικτική τιμή demo)"
+    }
+  ],
+  "rules": {
+    "slot_step_minutes": 15,
+    "buffer_minutes": 0,
+    "max_days_ahead": 45,
+    "min_notice_minutes": 30
+  },
+  "knowledge_base": {
+    "Σχετικά με το demo": "Εικονικό οδοντιατρείο για επίδειξη. Οι τιμές και τα ραντεβού είναι δοκιμαστικά και δεν αφορούν πραγματικό ιατρείο.",
+    "Τιμές": "Οι ενδεικτικές τιμές του demo αναγράφονται στις υπηρεσίες. Δεν γίνεται χρέωση ή πληρωμή.",
+    "Διεύθυνση": "Δεν υπάρχει φυσική διεύθυνση για αυτό το demo.",
+    "Ακυρώσεις": "Μπορείτε να ζητήσετε αλλαγή ή ακύρωση ενός δοκιμαστικού ραντεβού."
+  },
+  "calendar_id": null,
+  "vertical": "dentist",
+  "routing_rules": {
+    "emergency": {
+      "enabled": true
+    },
+    "handoff": {
+      "enabled": false
+    },
+    "language_switch": false,
+    "demo_only": true
+  },
+  "notifications": {
+    "emails": [],
+    "urgent_sms": [],
+    "customer_sms": false,
+    "monthly_report": false,
+    "web_summaries": false
+  },
+  "reminders": {
+    "enabled": false,
+    "waitlist": false
+  },
+  "max_concurrent_calls": 1,
+  "monthly_cost_cap_eur": 5,
+  "avg_booking_value": 40
+}

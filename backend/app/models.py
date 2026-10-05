@@ -269,6 +269,18 @@ class Appointment(Base):
     updated_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
 
+class DemoDashboard(Base):
+    """A bearer link to anonymous metrics for calls explicitly started through it."""
+    __tablename__ = "demo_dashboards"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    practice_id: Mapped[str] = mapped_column(ForeignKey("practices.id", ondelete="CASCADE"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
 class Call(Base):
     __tablename__ = "calls"
 
@@ -277,6 +289,8 @@ class Call(Base):
     friend_id: Mapped[str | None] = mapped_column(ForeignKey("friends.id"), nullable=True)
     practice_id: Mapped[str | None] = mapped_column(ForeignKey("practices.id"), nullable=True)
     # outbound, inbound or web
+    demo_dashboard_id: Mapped[str | None] = mapped_column(
+        ForeignKey("demo_dashboards.id", ondelete="SET NULL"), nullable=True, index=True)
     direction: Mapped[str] = mapped_column(String, default="outbound")
     caller_number: Mapped[str | None] = mapped_column(SecretLookup, nullable=True)
     customer_id: Mapped[str | None] = mapped_column(ForeignKey("customers.id"), nullable=True)

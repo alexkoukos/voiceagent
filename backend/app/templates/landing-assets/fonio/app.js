@@ -32,9 +32,13 @@ motionButton.addEventListener('click', () => { paused = !paused; updateMotion();
 reducedMotion.addEventListener('change', event => { paused = event.matches; updateMotion(); });
 document.addEventListener('visibilitychange',updateMotion);
 updateMotion();
-const track = document.querySelector('.reviews-track');
-function moveReviews(direction) { const width = track.querySelector('article').getBoundingClientRect().width + 22; track.scrollBy({left:direction*width,behavior:reducedMotion.matches ? 'instant':'smooth'}); }
-document.querySelector('#previous-review').addEventListener('click',() => moveReviews(-1));
-document.querySelector('#next-review').addEventListener('click',() => moveReviews(1));
-const platformVideo = document.querySelector('#platform-video');
-platformVideo.addEventListener('error',() => { document.querySelector('.video-status').textContent = 'The platform tour could not load. Please try again later or book a demo.'; });
+const scenarios = {
+ services: {label:'WHEN YOUR HANDS ARE FULL',title:'On the job? Keep the next one in reach.',description:'Capture a new inquiry while you focus on the customer in front of you.',caller:'“My kitchen tap is leaking. Could someone come out tomorrow?”',assistant:'“I can take the details for the team. What’s your name, address, and the best number to reach you?”',result:'A service request with the details needed for a callback.'},
+ salons: {label:'WHEN EVERY CHAIR IS TAKEN',title:'Stay with your client. Welcome the next.',description:'Give appointment inquiries your attention without interrupting the appointment in progress.',caller:'“Do you have time for a cut and colour on Friday?”',assistant:'“I can pass an appointment request to the salon. What time would you prefer, and may I take your name and number?”',result:'An appointment request ready for your team to confirm.'},
+ property: {label:'WHEN YOU’RE OUT AT A VIEWING',title:'Open the door to the next inquiry.',description:'Collect the context behind a property inquiry so your next conversation starts a step ahead.',caller:'“I’m interested in the two-bedroom apartment. Can I arrange a viewing?”',assistant:'“I can collect your preferred times for the agent. Which property are you interested in, and how can they reach you?”',result:'A viewing inquiry with property details and preferred times.'}
+};
+document.querySelectorAll('[data-scenario]').forEach(button => button.addEventListener('click', () => {
+ document.querySelectorAll('[data-scenario]').forEach(other => other.setAttribute('aria-pressed',String(other === button)));
+ const scenario = scenarios[button.dataset.scenario];
+ Object.entries(scenario).forEach(([key,value]) => { document.querySelector('#scenario-'+key).textContent = value; });
+}));
