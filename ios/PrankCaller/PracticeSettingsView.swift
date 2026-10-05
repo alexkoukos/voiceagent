@@ -17,12 +17,34 @@ struct PracticeSettingsView: View {
     @State private var alerts: [OpsAlert] = []
     @State private var editing: ConfigVersion?
     @State private var frozen = false
+    @State private var femaleVoice: Bool?
 
     var body: some View {
         List {
             if let errorMessage { ErrorBanner(text: errorMessage).listRowSeparator(.hidden) }
             AlertsSection(alerts: $alerts) { await load() }
             approvalSection
+            Section {
+                Picker("Φωνή βοηθού", selection: Binding(
+                    get: { femaleVoice ?? (practice.voice != "Zubenelgenubi") },
+                    set: { value in
+                        let previous = femaleVoice
+                        femaleVoice = value
+                        Task {
+                            do { try await api.setVoice(practice.id, female: value) }
+                            catch { femaleVoice = previous; errorMessage = friendlyMessage(error) }
+                        }
+                    }
+                )) {
+                    Text("Γυναικεία").tag(true)
+                    Text("Ανδρική").tag(false)
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Φωνή βοηθού")
+            } footer: {
+                Text("Ισχύει από την επόμενη κλήση.")
+            }
             Section {
                 Toggle("Παύση δημοσίευσης αλλαγών", isOn: Binding(get: { frozen }, set: { value in
                     Task {

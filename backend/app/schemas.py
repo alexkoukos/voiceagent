@@ -22,6 +22,9 @@ def normalize_phone(value: str) -> str:
     cleaned = re.sub(r"[\s\-(). ]", "", value)
     if cleaned.startswith("00"):
         cleaned = "+" + cleaned[2:]
+    # A Greek number said on a call has no country code ("6907626384"): SMS needs it.
+    if re.fullmatch(r"69\d{8}|2\d{9}", cleaned):
+        cleaned = "+30" + cleaned
     return cleaned
 
 
@@ -55,7 +58,9 @@ class FriendOut(BaseModel):
 
 
 class CallCreate(BaseModel):
-    friend_id: str
+    # A saved friend, or a number typed on the keypad (speed dial, nothing saved).
+    friend_id: str | None = None
+    phone_number: str | None = Field(default=None, max_length=30)
     # The call's free-text description is `scenario`; persona is only sent by older app builds.
     persona: str = Field(default="", max_length=LONG_TEXT)
     scenario: str = Field(min_length=1, max_length=LONG_TEXT)
@@ -74,6 +79,22 @@ class CallCreate(BaseModel):
         if v is not None and v not in LANGUAGES:
             raise ValueError("unsupported language")
         return v
+
+    @field_validator("phone_number")
+    @classmethod
+    def _dialed(cls, v):
+        if v is None or not v.strip():
+            return None
+        v = normalize_phone(v)
+        if not re.fullmatch(r"\+\d{8,15}", v):
+            raise ValueError("phone number must be like +306912345678")
+        return v
+
+    @model_validator(mode="after")
+    def _one_target(self):
+        if bool(self.friend_id) == bool(self.phone_number):
+            raise ValueError("give either friend_id or phone_number")
+        return self
 
 
 class CallEvent(BaseModel):
@@ -275,7 +296,7 @@ class PracticeIn(BaseModel):
     slug: str | None = Field(default=None, pattern=r"^[a-z0-9\-]{6,64}$")
     timezone: str = "Europe/Athens"
     language: Literal["el", "en"] = "el"
-    voice: Voice = "Zubenelgenubi"
+    voice: Voice = "Kore"
     greeting: str = Field(default="", max_length=LONG_TEXT)
     phone_numbers: list[str] = []
     # "mon".."sun" -> [["09:00", "14:00"], ["17:00", "21:00"]]
@@ -343,6 +364,15 @@ class PracticeOut(PracticeIn):
     id: str
     services: list[Service]
     publish_frozen: bool = False
+
+
+# The receptionist's voice toggle: female (Kore) or male (Zubenelgenubi). Greek calls use
+# native Greek voices for both (agent/voices.py).
+VOICE_BY_GENDER = {"female": "Kore", "male": "Zubenelgenubi"}
+
+
+class VoiceIn(BaseModel):
+    gender: Literal["female", "male"]
 
 
 class PublishFreezeIn(BaseModel):
@@ -720,6 +750,12 @@ class PrepareAction(BaseModel):
     customer_name: str | None = Field(default=None, max_length=SHORT_TEXT)
     staff: str | None = Field(default=None, max_length=SHORT_TEXT)
     appointment_id: str | None = None
+    customer_phone: str | None = Field(default=None, max_length=30)
+
+    @field_validator("customer_phone")
+    @classmethod
+    def _phone(cls, v):
+        return normalize_phone(v) if v else v
 
 
 class MessageArgs(BaseModel):

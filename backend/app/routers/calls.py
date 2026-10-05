@@ -40,11 +40,28 @@ async def protect_practice_call(connection: HTTPConnection, db: AsyncSession = D
 router = APIRouter(prefix="/calls", tags=["calls"], dependencies=[Depends(protect_practice_call)])
 
 
+async def _dialed(db: AsyncSession, number: str) -> Friend:
+    """Speed dial: a saved friend with this number, else an unsaved entry named after the
+    number. It is stored as deleted, so it stays out of the friends list but history still
+    shows who was called."""
+    rows = (await db.execute(select(Friend).where(Friend.phone_number == number)
+                             .order_by(Friend.deleted_at.is_not(None), Friend.created_at))).scalars().all()
+    if rows:
+        return rows[0]
+    friend = Friend(name=number, phone_number=number, deleted_at=datetime.utcnow())
+    db.add(friend)
+    await db.flush()
+    return friend
+
+
 @router.post("", response_model=CallOut)
 async def create_call(payload: CallCreate, db: AsyncSession = Depends(get_db)):
-    friend = await db.get(Friend, payload.friend_id)
-    if friend is None or friend.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="Friend not found")
+    if payload.phone_number:
+        friend = await _dialed(db, payload.phone_number)
+    else:
+        friend = await db.get(Friend, payload.friend_id)
+        if friend is None or friend.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Friend not found")
 
     settings = get_settings()
     if payload.from_own_number and not settings.own_caller_number:

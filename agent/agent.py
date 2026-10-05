@@ -29,6 +29,7 @@ import difflib
 import json
 import logging
 import os
+import random
 import re
 import time
 import uuid
@@ -54,7 +55,7 @@ from livekit.agents import (
 from livekit.plugins import elevenlabs, google, noise_cancellation, silero
 from livekit.agents.voice.turn import TurnHandlingOptions
 
-from fillers import FillerPicker
+from fillers import FILLERS, FillerPicker
 from telemetry import observe_span, track_telemetry
 from opening import fixed_audio, prepare_opening, prerender, ready_opening
 from voices import elevenlabs_voice, gemini_voice, openai_voice
@@ -95,6 +96,10 @@ FILLER_GAP_SECONDS = 4
 # Pipeline engine: pause that ends a transcribed segment, and the least wait after the caller
 # stops before replying. Lower is snappier but splits normal-speed speech into fragments.
 SCRIBE_SILENCE_SECS = env_number("SCRIBE_SILENCE_SECS", 0.7, 0.3, 2.0)
+# The caller's answer to a readback gets more time before their turn ends: with a short
+# silence, «Ναι… ολόσωστα» could be cut after «Ναι…» (2026-10-01).
+CONFIRM_MIN_DELAY = env_number("CONFIRM_MIN_DELAY", 0.8, 0.2, 3.0)
+CONFIRM_MAX_DELAY = env_number("CONFIRM_MAX_DELAY", 1.6, 0.5, 5.0)
 ENDPOINT_MIN_DELAY = float(os.environ.get("ENDPOINT_MIN_DELAY", "0.5"))
 # If the callee stays silent after answering, open the conversation after this long.
 GREETING_WAIT_SECONDS = 4
@@ -343,18 +348,119 @@ class PrankCallerAgent(Agent):
             done, _ = await asyncio.wait({first}, timeout=FILLER_DELAY_SECONDS)
             # One filler per turn: a reply started early and then restarted must not add a second.
             now = asyncio.get_event_loop().time()
-            if not done and now - self._last_filler_at > FILLER_GAP_SECONDS:
+            # No filler before the goodbye: «Ευχαριστώ, γεια.» got «Μάλιστα…» and then the
+            # closing line, which sounded broken (2026-10-01).
+            if not done and now - self._last_filler_at > FILLER_GAP_SECONDS and not _closing(_last_user_text(chat_ctx)):
                 self._last_filler_at = now
+                said_filler = True
                 yield self._fillers.pick(self.language) + " "
+            else:
+                said_filler = False
             try:
-                yield observe(await first)
+                head = await first
             except StopAsyncIteration:
                 return
-            async for chunk in it:
+            rest = _chain(head, it)
+            if said_filler:
+                # The model sometimes opens with its own «Ένα λεπτό…» too, which came out as
+                # «Ένα λεπτό… Ένα λεπτό…» (2026-10-01).
+                rest = _drop_leading_fillers(rest)
+            async for chunk in rest:
                 yield observe(chunk)
         finally:
             if not first.done():
                 first.cancel()
+
+
+CLOSING_WORDS = re.compile(
+    r"\b(ευχαριστ\w*|γει[αά]\w*|αντίο|αντιο|καληνύχτα|καλή συνέχεια|τίποτα άλλο|"
+    r"thanks?|thank you|bye|goodbye|nothing else)\b", re.I)
+
+
+def _closing(text: str) -> bool:
+    return bool(text and CLOSING_WORDS.search(text))
+
+
+def _last_user_text(chat_ctx) -> str:
+    for item in reversed(getattr(chat_ctx, "items", [])):
+        if getattr(item, "role", None) == "user":
+            return getattr(item, "text_content", None) or ""
+    return ""
+
+
+LEADING_FILLER = re.compile(
+    r"^(?:\s*(?:" + "|".join(sorted({re.escape(f.rstrip("…")) for lang in ("el", "en") for f in FILLERS[lang]}
+                                    | {"Μια στιγμή να δω", "Μια στιγμή", "Ένα λεπτό να δω", "Let me check"},
+                                    key=len, reverse=True))
+    + r")\s*[.,…!]*)+\s*", re.I)
+
+
+async def _chain(head, rest):
+    yield head
+    async for chunk in rest:
+        yield chunk
+
+
+async def _drop_leading_fillers(chunks):
+    """Strip filler phrases from the start of the model's text. Text is held back until
+    there's enough of it to tell (40 characters, a tool call, or the end)."""
+    buffered = ""
+    stream = chunks.__aiter__()
+    async for chunk in stream:
+        text = _chunk_text(chunk)
+        if isinstance(chunk, str) or (text and not getattr(getattr(chunk, "delta", None), "tool_calls", None)):
+            buffered += text
+            if len(buffered) < 40:
+                continue
+            chunk = None
+        cleaned = LEADING_FILLER.sub("", buffered)
+        if cleaned:
+            yield cleaned
+        if chunk is not None:
+            yield chunk
+        async for later in stream:
+            yield later
+        return
+    cleaned = LEADING_FILLER.sub("", buffered)
+    if cleaned:
+        yield cleaned
+
+
+# Sparring page only (backend/app/routers/sparring.py): the agent plays a bully who
+# doesn't let you finish. Never used on phone calls.
+HECKLES = ("Σκάσε ρε!", "Τι βλακείες λες;", "Άσε τις μπούρδες!", "Έλα, τελείωνε!", "Πάλι τα ίδια;",
+           "Ρε άκου τι λες!", "Άντε ρε, σοβαρά τώρα;", "Μπλα μπλα μπλα!")
+HECKLE_AFTER_SECONDS = 2.5
+HECKLE_GAP_SECONDS = 5.0
+
+
+def heckle_while_talking(session: AgentSession, call_id: str) -> None:
+    """Cut in with a short heckle when the caller talks for too long, and answer sooner.
+    The heckle doesn't end their turn; the real reply still follows it."""
+    state = {"turn": None, "last": 0.0}
+    try:
+        session.update_options(endpointing_opts={"min_delay": 0.2, "max_delay": 0.5})
+    except Exception:
+        logger.exception("call %s: sparring endpointing not set", call_id)
+
+    async def cut_in(turn: object) -> None:
+        await asyncio.sleep(HECKLE_AFTER_SECONDS)
+        now = time.monotonic()
+        if state["turn"] is not turn or now - state["last"] < HECKLE_GAP_SECONDS:
+            return
+        state["last"] = now
+        try:
+            session.say(random.choice(HECKLES), allow_interruptions=False, add_to_chat_ctx=True)
+        except Exception:
+            logger.exception("call %s: heckle failed", call_id)
+
+    @session.on("user_state_changed")
+    def _on_user_state(ev) -> None:
+        if ev.new_state == "speaking":
+            turn = state["turn"] = object()
+            asyncio.create_task(cut_in(turn))
+        else:
+            state["turn"] = None
 
 
 def _chunk_text(chunk) -> str:
@@ -454,7 +560,7 @@ class ReceptionistAgent(PrankCallerAgent):
     @function_tool
     async def prepare_action(
         self, action: str, date: str = "", time: str = "", service_id: str = "",
-        customer_name: str = "", staff: str = "", appointment_id: str = "",
+        customer_name: str = "", staff: str = "", appointment_id: str = "", customer_phone: str = "",
     ) -> str | None:
         """Reads back trusted details and asks for a clear yes before booking, moving or cancelling.
 
@@ -466,6 +572,7 @@ class ReceptionistAgent(PrankCallerAgent):
             customer_name: The full name, for a new booking.
             staff: Same staff wording used in check_availability.
             appointment_id: From find_appointments, for reschedule or cancel.
+            customer_phone: For book, a contact number the caller gave other than the one they're calling from.
         """
         # Realtime speech models can invent a surname even when the separate STT got it
         # right. A short, clearly spoken name in the latest caller turn wins over the
@@ -476,9 +583,11 @@ class ReceptionistAgent(PrankCallerAgent):
             "action": action, "date": date or None, "time": time or None,
             "service_id": service_id or None, "customer_name": prepared_name or None,
             "staff": staff or None, "appointment_id": appointment_id or None,
+            "customer_phone": (customer_phone or None) if action == "book" else None,
         })
         if result.get("confirmation_id"):
-            self._rc.read_back(result, customer_name=prepared_name if action == "book" else None)
+            self._rc.read_back(result, customer_name=prepared_name if action == "book" else None,
+                               customer_phone=customer_phone if action == "book" else None)
             return self._spoken_already(json.dumps(
                 {"next": "Wait for the caller to answer the spoken readback. Only a clear yes permits the action."}))
         return json.dumps(result, ensure_ascii=False)
@@ -502,7 +611,8 @@ class ReceptionistAgent(PrankCallerAgent):
         return await self._tool("book_appointment", {
             "date": date, "time": time, "service_id": service_id,
             "customer_name": self._rc._prepared_name or customer_name,
-            "customer_phone": customer_phone or None, "staff": staff or None, "name_uncertain": name_uncertain,
+            "customer_phone": self._rc._prepared_phone or customer_phone or None,
+            "staff": staff or None, "name_uncertain": name_uncertain,
         })
 
     @function_tool
@@ -726,6 +836,8 @@ GREEK_VOCABULARY = [
     "ρε", "μωρέ", "κομπλέ", "γαμώτο", "άσ' το", "θα 'ρθω", "κάνα", "τίποτα", "εντάξει", "μπορείς",
     "απογευματάκι", "πρωινό", "ραντεβουδάκι", "ρε φίλε", "έλα", "λέγε", "άντε", "οκ", "ναι ρε",
     "English", "ίνγκλις", "ένγκλις", "αγγλικά",
+    # Scribe heard "Τετάρτη" as "Δευτέρα" twice on a real call (2026-10-01).
+    "Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο", "Κυριακή",
 ]
 
 
@@ -1057,11 +1169,13 @@ class ReceptionistCall:
         self._switching_language = False
         self._tasks: set[asyncio.Task] = set()
         self._user_turn = 0
+        self._patient = False
         self._last_user_text = ""
         self._confirmation_id: str | None = None
         self._confirmation_floor = 0
         self._confirmation_armed = False
         self._prepared_name: str | None = None
+        self._prepared_phone: str | None = None
         self._availability_checked = False
         self._handoff_pending = False
         self._tool_lock = asyncio.Lock()
@@ -1119,13 +1233,26 @@ class ReceptionistCall:
     def heard_user(self, text: str) -> None:
         self._user_turn += 1
         self._last_user_text = text
+        if self._patient:
+            self._patient = False
+            self._set_endpointing(ENDPOINT_MIN_DELAY, TURN_MAX_DELAY_MS / 1000)
 
-    def read_back(self, result: dict, *, customer_name: str | None = None) -> None:
+    def _set_endpointing(self, min_delay: float, max_delay: float) -> None:
+        if self.engine != "pipeline":
+            return
+        try:
+            self.session.update_options(endpointing_opts={"min_delay": min_delay, "max_delay": max_delay})
+        except Exception:
+            logger.exception("call %s: endpointing update failed", self.call_id)
+
+    def read_back(self, result: dict, *, customer_name: str | None = None,
+                  customer_phone: str | None = None) -> None:
         if self.telemetry:
             self.telemetry.answer_started(None)
         self._confirmation_id = result["confirmation_id"]
         self._confirmation_armed = False
         self._prepared_name = customer_name
+        self._prepared_phone = customer_phone or None
         if self.engine in ("pipeline", "text_pipeline"):
             handle = self.session.say(result["say"], allow_interruptions=False)
         else:
@@ -1137,6 +1264,8 @@ class ReceptionistCall:
                 await asyncio.wait_for(handle.wait_for_playout(), timeout=20)
                 self._confirmation_floor = self._user_turn
                 self._confirmation_armed = True
+                self._patient = True
+                self._set_endpointing(CONFIRM_MIN_DELAY, CONFIRM_MAX_DELAY)
             except Exception:
                 logger.exception("call %s: confirmation readback failed", self.call_id)
 
@@ -1151,6 +1280,7 @@ class ReceptionistCall:
         self._confirmation_id = None
         self._confirmation_armed = False
         self._prepared_name = None
+        self._prepared_phone = None
 
     async def tool(self, name: str, args: dict) -> dict:
         # One backend call at a time, in the order they were made. Gemini emits parallel
@@ -1707,6 +1837,8 @@ async def entrypoint(ctx: JobContext) -> None:
     track_telemetry(session, ctx, call_id, engine)
     log_latency(session, call_id)
     guard_repetition(session, ctx, call_id)
+    if metadata.get("sparring") and engine == "pipeline":
+        heckle_while_talking(session, call_id)
 
     @session.on("close")
     def _on_close(_ev) -> None:
