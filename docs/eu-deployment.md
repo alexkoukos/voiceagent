@@ -13,7 +13,7 @@ Goal: every hop of a call (phone network, LiveKit, agent, backend, database, rec
 | LiveKit SIP inbound URI | no inbound trunk, no dispatch rule | `<id>.eu.sip.livekit.cloud` once wired | not set up: the new project has neither (the old one never had them either); wire inbound SIP when needed |
 | LiveKit outbound trunk | one trunk, `destination_country=de`, ID in `SIP_TRUNK_ID` | same | done 2026-10-30; copied from the previous active trunk (same Telnyx address, numbers, credentials) |
 | LiveKit Inference (Deepgram fallback) | not restricted | inference region restriction on | pending (owner): dashboard → Data and privacy |
-| Gemini (agent model, summaries, onboarding) | AI Studio, global, no residency | Vertex AI `europe-west3` | code ready behind `GEMINI_VERTEX_LOCATION`; needs Vertex AI enabled (below) and a measurement |
+| Gemini (agent model, summaries, onboarding) | AI Studio, global, no residency | Vertex AI multi-region `eu` | **live since 2026-10-30** (`GEMINI_VERTEX_LOCATION=eu`). `europe-west3/4/1/9` and `europe-north1` don't serve `gemini-3.5-flash-lite` (404) |
 | ElevenLabs Scribe + TTS | global | EU residency is Enterprise-only | stays global for now (DPA) |
 | Telephony provider | Telnyx, US test number | Twilio Greek 21x number later | Phase T |
 
@@ -37,7 +37,7 @@ Remaining:
      --role="roles/aiplatform.user" --condition=None
    ```
 2. Measure from the agent (EU) with `agent/scripts/compare_gemini_endpoints.py`. Switch only if Vertex is not slower.
-3. To switch: set `GEMINI_VERTEX_LOCATION=europe-west3` and `GEMINI_VERTEX_PROJECT=gen-lang-client-0414182517` on backend and agent; the agent also needs `GOOGLE_SERVICE_ACCOUNT_JSON`. Rollback: unset `GEMINI_VERTEX_LOCATION`.
+3. To switch: set `GEMINI_VERTEX_LOCATION=eu` and `GEMINI_VERTEX_PROJECT=gen-lang-client-0414182517` on backend and agent; the agent also needs `GOOGLE_SERVICE_ACCOUNT_JSON`. Rollback: unset `GEMINI_VERTEX_LOCATION`.
 
 ### Recordings (only if a bucket ever has to move)
 A bucket's region is fixed at creation. `backend/scripts/copy_bucket.py` copies everything to a new bucket (dry run by default); then point `AWS_*` on backend and agent at it.
@@ -45,9 +45,13 @@ A bucket's region is fixed at creation. `backend/scripts/copy_bucket.py` copies 
 ## How we check it worked
 - Gemini first token from the agent on both endpoints (comparison script), then 30 scripted calls with the faster one.
 - 30 scripted calls before and after: answer delay p50/p95 and first-sound p50/p95 (the latency gate in MIGRATION_PLAN.md).
-- No data in US regions: LiveKit data region EU, Gemini requests to `europe-west3-aiplatform.googleapis.com`.
+- No data in US regions: LiveKit data region EU, Gemini requests to `eu-aiplatform.googleapis.com`.
+
+## Measured (2026-10-30, from the Railway agent, 20 requests each, alternating)
+Time to first token of `gemini-3.5-flash-lite`: AI Studio p50 517 ms / p95 610 ms; Vertex `eu` p50 400 ms / p95 504 ms. Vertex EU is ~110 ms faster, so both backend and agent were switched.
 
 ## Still outside the EU after this
+- Gemini Live (realtime engine, the last fallback) and Gemini TTS (the `text_pipeline` fallback voice) still use the AI Studio key.
 - ElevenLabs (STT and TTS): global processing unless you move to their Enterprise EU residency.
 - Meta Muse, if it is ever adopted: no EU region documented.
 

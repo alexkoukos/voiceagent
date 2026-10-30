@@ -2,7 +2,7 @@
 
 Run it where the agent runs (Railway EU), so the network path is the real one:
 
-    railway run --service agent python scripts/compare_gemini_endpoints.py --location europe-west3 \\
+    railway run --service agent python scripts/compare_gemini_endpoints.py --location eu \\
         --project gen-lang-client-0414182517 [--prompt-file prompt.md] [-n 20]
 
 Needs GEMINI_API_KEY and GOOGLE_SERVICE_ACCOUNT_JSON (with Vertex AI access on the project).
@@ -47,7 +47,7 @@ def spread(values: list[float]) -> str:
 
 async def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--location", default="europe-west3")
+    parser.add_argument("--location", default="eu")
     parser.add_argument("--project", required=True)
     parser.add_argument("--model", default=os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite"))
     parser.add_argument("--prompt-file")
