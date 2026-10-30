@@ -7,15 +7,13 @@ by the dialed number), a web demo (dispatched by the backend with mode "receptio
 an outbound reminder / waitlist call (metadata has dial_number). The agent greets first and
 books through backend tools (check_availability, book_appointment).
 
-Four engines (RECEPTIONIST_ENGINE):
+Three engines (RECEPTIONIST_ENGINE):
 - "pipeline" (default): ElevenLabs Scribe realtime -> Gemini Flash-Lite ->
   ElevenLabs voice, with multilingual turn detection and preemptive generation.
 - "realtime": Gemini Live speech-to-speech (the original engine; fallback).
 - "text_pipeline": Deepgram transcription -> Gemini text model -> Gemini speech.
   Receptionist fallback when ElevenLabs is unavailable, so the model receives
   the same words the caller sees in the web transcript.
-- "openai": OpenAI Realtime speech-to-speech (gpt-realtime-2.1). Needs OPENAI_API_KEY;
-  without it the call uses "realtime".
 """
 
 import asyncio
@@ -49,7 +47,7 @@ from livekit.agents.voice.turn import TurnHandlingOptions
 
 from telemetry import observe_span, track_telemetry
 from fixed_lines import fixed_audio, prerender
-from voices import elevenlabs_voice, gemini_voice, openai_voice
+from voices import elevenlabs_voice, gemini_voice
 from speech import (
     ELEVENLABS_TTS_MODEL, Pronunciation, elevenlabs_voice_settings, env_number,
     noise_cancellation_enabled, speech_instructions,
@@ -61,20 +59,13 @@ BACKEND_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://localhost:8000")
 AGENT_TOKEN = os.environ.get("INTERNAL_API_TOKEN", "")
 # How long a reminder call rings before we give up (the library default is 30s).
 RINGING_TIMEOUT_SECONDS = int(os.environ.get("RINGING_TIMEOUT_SECONDS", "45"))
-if os.environ.get("RECEPTIONIST_ENGINE") == "openai":
-    # Plugins must register at import time on the main process; import it only when used,
-    # since every worker process pays for what's imported and memory is tight on Railway.
-    from livekit.plugins import openai
-    from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
 # Realtime engine model.
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
-# OpenAI engine model; "gpt-realtime-2.1-mini" costs about a third.
-OPENAI_REALTIME_MODEL = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1")
 # Pipeline engine: the "brain". Flash-Lite starts answering in ~0.45 s.
 LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
 GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-3.8-flash-lite-tts")
 GEMINI_TTS_FALLBACK_MODEL = os.environ.get("GEMINI_TTS_FALLBACK_MODEL", "gemini-3.8-flash-tts")
-# Realtime and OpenAI engines: how long a pause means the friend has finished talking.
+# Realtime engine: how long a pause means the caller has finished talking.
 REALTIME_SILENCE_MS = int(env_number("REALTIME_SILENCE_MS", 700, 200, 3000))
 # Turn detector (pipeline engine): the longest we wait after the caller stops before
 # treating the turn as finished. Lower is snappier at the risk of cutting slow speech.
@@ -268,7 +259,7 @@ class ReceptionistAgent(Agent):
         LLM run again with nothing to say. Gemini then returns empty completions (retried, then
         an error) or improvises "Συγγνώμη, δεν σας άκουσα" before the read-back (EVAL-001,
         2026-09-30). None asks for no reply; realtime models get the note."""
-        return None if self._rc.engine not in ("realtime", "openai") else note
+        return None if self._rc.engine != "realtime" else note
 
     async def _tool(self, name: str, args: dict | None = None) -> str:
         payload = dict(args or {})
@@ -679,17 +670,6 @@ def language_parts(engine: str, voice: str, language: str, vocabulary: list[str]
         return {"stt": scribe_stt(language, words), "tts": build_tts(engine, voice, language)}
     if engine == "text_pipeline":
         return {"stt": caller_stt(language, vocabulary), "tts": build_tts(engine, voice, language)}
-    if engine == "openai":
-        return {"llm": openai.realtime.RealtimeModel(
-            model=OPENAI_REALTIME_MODEL,
-            voice=openai_voice(voice),
-            # The language hint only steers the transcript; the model hears the audio itself.
-            input_audio_transcription=InputAudioTranscription(model="gpt-4o-transcribe", language=language),
-            turn_detection=TurnDetection(
-                type="server_vad", silence_duration_ms=REALTIME_SILENCE_MS, prefix_padding_ms=300,
-            ),
-            api_key=os.environ.get("OPENAI_API_KEY"),
-        )}
     return {"llm": google.beta.realtime.RealtimeModel(
         model=GEMINI_MODEL,
         voice=gemini_voice(voice),
@@ -864,9 +844,6 @@ async def pick_engine(call_id: str) -> str:
     if engine == "pipeline" and not await elevenlabs_usable():
         logger.warning("call %s: ElevenLabs unusable, using %s", call_id, fallback)
         engine = fallback
-    if engine == "openai" and not os.environ.get("OPENAI_API_KEY"):
-        logger.warning("call %s: OPENAI_API_KEY missing, using the realtime engine", call_id)
-        engine = "realtime"
     return engine
 
 
