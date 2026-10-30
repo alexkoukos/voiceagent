@@ -4,10 +4,9 @@ import asyncio
 import logging
 from datetime import datetime
 
-import httpx
 from sqlalchemy import select
 
-from app import booking, costs, events, notifications, texts
+from app import booking, costs, events, gemini, notifications, texts
 from app.config import get_settings
 from app.database import async_session
 from app.models import Appointment, Call, CallStatus, Message, Practice, RoutingEvent, TranscriptEntry, TranscriptRole
@@ -33,18 +32,16 @@ def schedule(call_id: str) -> None:
 
 async def summarize(transcript: str, language: str) -> str | None:
     s = get_settings()
-    if not s.gemini_api_key or not transcript.strip():
+    if not gemini.configured() or not transcript.strip():
         return None
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{s.summary_model}:generateContent"
     prompt = SUMMARY_PROMPT["el" if language == "el" else "en"].format(transcript=transcript[:12000])
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.post(url, params={"key": s.gemini_api_key},
-                                  json={"contents": [{"parts": [{"text": prompt}]}],
-                                        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 300}})
-            r.raise_for_status()
-            parts = r.json()["candidates"][0]["content"]["parts"]
-            return "".join(p.get("text", "") for p in parts).strip() or None
+        r = await gemini.generate(s.summary_model, {"contents": [{"parts": [{"text": prompt}]}],
+                                                    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 300}},
+                                  timeout=20)
+        r.raise_for_status()
+        parts = r.json()["candidates"][0]["content"]["parts"]
+        return "".join(p.get("text", "") for p in parts).strip() or None
     except Exception:
         logger.exception("summary failed")
         return None

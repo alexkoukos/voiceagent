@@ -16,7 +16,7 @@ from datetime import date, datetime, time, timedelta
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import config_changes, public_fetch
+from app import config_changes, gemini, public_fetch
 from app.booking import WEEKDAY_KEYS
 from app.config import get_settings
 from app.models import ConfigVersion, ImportRecord, Practice
@@ -196,14 +196,15 @@ def _slug(name: str, used: set[str]) -> str:
 
 async def _gemini_json(parts: list[dict]) -> dict:
     s = get_settings()
-    if not s.gemini_api_key:
+    if not gemini.configured():
         raise ImportError_("gemini_api_key_missing")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{s.extraction_model}:generateContent"
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(url, params={"key": s.gemini_api_key}, json={
+    try:
+        r = await gemini.generate(s.extraction_model, {
             "contents": [{"parts": parts}],
             "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
-        })
+        }, timeout=60)
+    except (gemini.NotConfigured, httpx.HTTPError):
+        raise ImportError_("extraction_failed")
     if r.status_code != 200:
         logger.warning("price list extraction %s: %s", r.status_code, r.text[:300])
         raise ImportError_("extraction_failed")
