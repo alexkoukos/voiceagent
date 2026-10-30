@@ -337,6 +337,22 @@
         "weekday": "fri",
         "no_reconfirm": true
       }
+    },
+    {
+      "id": "EVAL-016",
+      "title": "A yes with a correction at the readback does not book",
+      "mode": "text",
+      "lines": [
+        "Θέλω ένα ραντεβού για έλεγχο την άλλη Τρίτη το πρωί.",
+        "Την πρώτη ώρα που είπατε.",
+        "Πέτρος Νικολάου.",
+        "Ναι ναι, αλλάξτε την ώρα, πιο αργά καλύτερα.",
+        "Ευχαριστώ, θα ξαναπάρω. Γεια σας."
+      ],
+      "expect": {
+        "new_appointments": 0
+      },
+      "critical_all": true
     }
   ]
 }
