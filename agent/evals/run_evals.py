@@ -271,7 +271,7 @@ class Harness:
 
         ctx = FakeCtx()
         worker.get_job_context = lambda: ctx
-        # The production receptionist engine's code paths (read-backs via say(), fillers),
+        # The production receptionist engine's code paths (read-backs via say()),
         # with text in place of STT/TTS; telemetry is tagged text_eval.
         worker.language_parts = lambda *_args, **_kwargs: {}
         rc = worker.ReceptionistCall(ctx, metadata, "pipeline")

@@ -117,34 +117,11 @@ struct APIClient {
     }
 
     func options() async throws -> ServerOptions { try await get("/options") }
-    func friends() async throws -> [Friend] { try await get("/friends") }
-    func addFriend(_ f: NewFriend) async throws -> Friend { try await send("POST", "/friends", body: f) }
-    func updateFriend(_ id: String, _ f: NewFriend) async throws -> Friend { try await send("PUT", "/friends/\(id)", body: f) }
-    func deleteFriend(_ id: String) async throws { _ = try await request("DELETE", "/friends/\(id)") }
-    /// Includes deleted friends, so past calls keep their names.
-    func allFriends() async throws -> [Friend] { try await get("/friends?include_deleted=true") }
-    func templates() async throws -> [PromptTemplate] { try await get("/templates") }
-    func addTemplate(_ t: NewTemplate) async throws -> PromptTemplate { try await send("POST", "/templates", body: t) }
-    func deleteTemplate(_ id: String) async throws { _ = try await request("DELETE", "/templates/\(id)") }
-    func calls() async throws -> [Call] { try await get("/calls") }
-    func call(_ id: String) async throws -> Call { try await get("/calls/\(id)") }
-    func startCall(_ c: NewCall) async throws -> Call { try await send("POST", "/calls", body: c) }
-    func updates(_ id: String) throws -> URLSessionWebSocketTask {
-        var wsBase = Settings.baseURL
-        if wsBase.hasPrefix("https://") { wsBase = "wss://" + wsBase.dropFirst(8) }
-        else if wsBase.hasPrefix("http://") { wsBase = "ws://" + wsBase.dropFirst(7) }
-        guard let url = URL(string: wsBase + "/calls/\(id)/ws") else { throw URLError(.badURL) }
-        var req = URLRequest(url: url)
-        req.setValue(Settings.adminKey.isEmpty ? Settings.apiKey : Settings.adminKey, forHTTPHeaderField: "x-api-key")
-        return URLSession.shared.webSocketTask(with: req)
-    }
-    func hangUp(_ id: String) async throws -> Call { try await send("POST", "/calls/\(id)/hangup") }
     func recordingURL(_ id: String) async throws -> URL {
         let link: RecordingLink = try await get("/calls/\(id)/recording")
         guard let url = URL(string: link.url) else { throw URLError(.badURL) }
         return url
     }
-    func deleteRecording(_ id: String) async throws { _ = try await request("DELETE", "/calls/\(id)/recording") }
 
     // MARK: Receptionist (2.0)
 

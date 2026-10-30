@@ -19,7 +19,7 @@ async def test_booking_requires_trusted_offer_and_explicit_yes(sessions):
                             rules={"min_notice_minutes": 0})
         db.add(practice)
         await db.flush()
-        call = Call(practice_id=practice.id, persona="", scenario="", language="en")
+        call = Call(practice_id=practice.id, language="en")
         db.add(call)
         await db.commit()
 
@@ -76,7 +76,7 @@ async def test_yes_must_be_the_callers_latest_line(sessions):
                             rules={"min_notice_minutes": 0})
         db.add(practice)
         await db.flush()
-        call = Call(practice_id=practice.id, persona="", scenario="", language="en", caller_number="+306900000001")
+        call = Call(practice_id=practice.id, language="en", caller_number="+306900000001")
         db.add(call)
         await db.commit()
         day = datetime.now(ZoneInfo("Europe/Athens")).date() + timedelta(days=1)

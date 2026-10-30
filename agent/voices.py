@@ -1,8 +1,8 @@
 """The app's voice keys, mapped to a voice for each engine.
 
 The app and backend only know stable keys ("default", "Puck", ...). The realtime
-engine uses them as Gemini voice names; the pipeline and openai engines map them to
-ElevenLabs and OpenAI voices. ELEVENLABS_VOICE_MAP (JSON: {"key": "voice_id"}) overrides the
+engine uses them as Gemini voice names; the pipeline engine maps them to
+ElevenLabs voices. ELEVENLABS_VOICE_MAP (JSON: {"key": "voice_id"}) overrides the
 mapping, e.g. to use your own ElevenLabs voices.
 """
 
@@ -62,23 +62,6 @@ def elevenlabs_voice(key: str, language: str | None = None) -> str:
     native = ELEVENLABS_VOICES_EL.get(key) if language == "el" else None
     return (localized.get(key) or localized.get("default") or native
             or mapping.get(key) or mapping["default"])
-
-
-# OpenAI Realtime voices, matched to each key's label in the app.
-OPENAI_VOICES: dict[str, str] = {
-    "default": "marin",  # female, calm
-    "Aoede": "coral",  # female, light
-    "Puck": "ash",  # male, upbeat
-    "Charon": "cedar",  # male, calm
-    "Fenrir": "verse",  # male, energetic
-    "Algenib": "echo",  # male, rougher
-    "Algieba": "ballad",  # male, soft
-    "Zubenelgenubi": "ballad",  # male, casual
-}
-
-
-def openai_voice(key: str) -> str:
-    return OPENAI_VOICES.get(key, OPENAI_VOICES["default"])
 
 
 def gemini_voice(key: str) -> str:
