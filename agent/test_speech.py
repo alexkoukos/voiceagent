@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 import agent as worker
-import opening
+import fixed_lines
 from speech import Pronunciation, env_number, noise_cancellation_enabled
 from voices import elevenlabs_voice
 
@@ -57,8 +57,8 @@ def test_bad_pronunciation_config_does_not_break_calls_or_log_content(monkeypatc
 async def test_only_tts_receives_spoken_aliases(monkeypatch):
     monkeypatch.setenv("TTS_PRONUNCIATION_ALIASES", '{"el":{"OpenAI":"Όπεν έι άι"}}')
     monkeypatch.setattr(worker.Agent.default, "tts_node", lambda self, text, settings: text)
-    agent = worker.PrankCallerAgent(
-        instructions="Call OpenAI.", call_id="test", language="el", language_name="Greek",
+    agent = worker.ReceptionistAgent(
+        call=SimpleNamespace(), instructions="Call OpenAI.", call_id="test", language="el",
     )
     original = "Call OpenAI."
     spoken = "".join([part async for part in agent.tts_node(chunks([original]), None)])
@@ -140,7 +140,7 @@ def test_realtime_uses_less_sensitive_speech_detection(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_prepared_opening_uses_same_pronunciation_and_delivery_as_replies(monkeypatch):
+async def test_fixed_lines_use_same_pronunciation_and_delivery_as_replies(monkeypatch):
     sent = []
 
     class Client:
@@ -159,8 +159,8 @@ async def test_prepared_opening_uses_same_pronunciation_and_delivery_as_replies(
 
     monkeypatch.setenv("ELEVEN_API_KEY", "test-key")
     monkeypatch.setenv("TTS_PRONUNCIATION_ALIASES", '{"el":{"OpenAI":"Όπεν έι άι"}}')
-    monkeypatch.setattr(opening.httpx, "AsyncClient", Client)
-    frames = await opening._voice_line("OpenAI", "greek-voice", "el")
+    monkeypatch.setattr(fixed_lines.httpx, "AsyncClient", Client)
+    frames = await fixed_lines._voice_line("OpenAI", "greek-voice", "el")
     assert len(frames) == 1
     assert sent[0]["params"]["output_format"] == "pcm_24000"
     body = sent[0]["json"]
@@ -171,7 +171,7 @@ async def test_prepared_opening_uses_same_pronunciation_and_delivery_as_replies(
 
 
 def test_fixed_lines_split_greek_and_english():
-    from opening import language_segments
+    from fixed_lines import language_segments
     greeting = "Οδοντιατρείο Παπαδοπούλου. Είμαι ο ψηφιακός βοηθός. Πώς μπορώ να σας βοηθήσω; For English, say English mode."
     assert language_segments(greeting, "el") == [
         ("Οδοντιατρείο Παπαδοπούλου. Είμαι ο ψηφιακός βοηθός. Πώς μπορώ να σας βοηθήσω;", "el"),
@@ -182,37 +182,37 @@ def test_fixed_lines_split_greek_and_english():
 
 @pytest.mark.asyncio
 async def test_fixed_lines_are_voiced_once_and_reused_from_disk(monkeypatch, tmp_path):
-    import opening
+    import fixed_lines
     from livekit import rtc
     calls = []
 
     async def voice(text, voice_id, language, model):
         calls.append((text, language, model))
-        return [rtc.AudioFrame(b"\x01\x00" * 480, opening.SAMPLE_RATE, 1, 480)]
+        return [rtc.AudioFrame(b"\x01\x00" * 480, fixed_lines.SAMPLE_RATE, 1, 480)]
 
-    monkeypatch.setattr(opening, "_voice_line", voice)
-    monkeypatch.setattr(opening, "FIXED_CACHE_DIR", tmp_path)
-    monkeypatch.setattr(opening, "_fixed", {})
+    monkeypatch.setattr(fixed_lines, "_voice_line", voice)
+    monkeypatch.setattr(fixed_lines, "FIXED_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(fixed_lines, "_fixed", {})
     text = "Γεια σας. For English, say English mode."
-    audio = await opening.fixed_audio(text, "voice", "el")
+    audio = await fixed_lines.fixed_audio(text, "voice", "el")
     assert len([f async for f in audio]) == 2
     assert [(t, lang) for t, lang, _ in calls] == [("Γεια σας.", "el"), ("For English, say English mode.", "en")]
-    monkeypatch.setattr(opening, "_fixed", {})  # a new call process: only the disk cache is left
-    again = await opening.fixed_audio(text, "voice", "el")
+    monkeypatch.setattr(fixed_lines, "_fixed", {})  # a new call process: only the disk cache is left
+    again = await fixed_lines.fixed_audio(text, "voice", "el")
     assert len([f async for f in again]) == 2 and len(calls) == 2
 
 
 @pytest.mark.asyncio
 async def test_fixed_line_falls_back_to_streaming(monkeypatch, tmp_path):
-    import opening
+    import fixed_lines
 
     async def broken(*_args):
         raise RuntimeError("no credits")
 
-    monkeypatch.setattr(opening, "_voice_line", broken)
-    monkeypatch.setattr(opening, "FIXED_CACHE_DIR", tmp_path)
-    monkeypatch.setattr(opening, "_fixed", {})
-    assert await opening.fixed_audio("Γεια σας.", "voice", "el") is None
+    monkeypatch.setattr(fixed_lines, "_voice_line", broken)
+    monkeypatch.setattr(fixed_lines, "FIXED_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(fixed_lines, "_fixed", {})
+    assert await fixed_lines.fixed_audio("Γεια σας.", "voice", "el") is None
 
 @pytest.mark.asyncio
 async def test_greek_clock_times_in_every_stream_boundary(monkeypatch):

@@ -306,7 +306,7 @@ def test_realtime_engine_does_not_add_a_recovery_line():
 
 
 @pytest.mark.asyncio
-async def test_llm_node_reports_the_first_real_words_not_the_filler(monkeypatch):
+async def test_llm_node_reports_the_first_words_once(monkeypatch):
     seen = []
 
     async def model(*_args):
@@ -316,39 +316,11 @@ async def test_llm_node_reports_the_first_real_words_not_the_filler(monkeypatch)
         yield SimpleNamespace(delta=SimpleNamespace(content=" Σας βολεύει;"))
 
     monkeypatch.setattr(worker.Agent.default, "llm_node", model)
-    monkeypatch.setattr(worker, "FILLER_DELAY_SECONDS", 0.001)
-    receiver = SimpleNamespace(_fillers=SimpleNamespace(pick=lambda language: "Λοιπόν…"), _opened=True,
-                               _last_filler_at=-100, language="el",
-                               _rc=SimpleNamespace(telemetry=SimpleNamespace(answer_started=seen.append)))
-    chunks = [c async for c in worker.PrankCallerAgent.llm_node(receiver, None, None, None)]
-    assert chunks[0] == "Λοιπόν… "
-    assert len(seen) == 1 and seen[0] >= 15  # model time to the answer text, filler excluded
-
-
-def test_no_filler_before_a_goodbye():
-    import agent
-    for text in ("Ευχαριστώ, γεια.", "Γεια σας", "Όχι, τίποτα άλλο", "Thanks, bye", "ευχαριστούμε"):
-        assert agent._closing(text), text
-    for text in ("Δευτέρα", "Θέλω ραντεβού", "Ναι, σωστά", ""):
-        assert not agent._closing(text), text
-
-
-@pytest.mark.asyncio
-async def test_model_filler_after_ours_is_dropped():
-    import agent
-
-    async def stream(parts):
-        for p in parts:
-            yield p
-
-    async def run(parts):
-        return "".join([c async for c in agent._drop_leading_fillers(stream(parts))])
-
-    assert await run(["Ένα λε", "πτό… Υπάρχει ελεύθερη ώρα την Παρασκευή στις πέντε."]) == \
-        "Υπάρχει ελεύθερη ώρα την Παρασκευή στις πέντε."
-    assert await run(["Μια στιγμή να δω… Ένα λεπτό… Ναι, έχουμε."]) == "Ναι, έχουμε."
-    assert await run(["Η πρώτη επίσκεψη κοστίζει πενήντα ευρώ."]) == "Η πρώτη επίσκεψη κοστίζει πενήντα ευρώ."
-    assert await run(["Ένα λεπτό…"]) == ""
+    receiver = SimpleNamespace(_rc=SimpleNamespace(awaiting_pin=False,
+                                                   telemetry=SimpleNamespace(answer_started=seen.append)))
+    chunks = [c async for c in worker.ReceptionistAgent.llm_node(receiver, None, None, None)]
+    assert len(chunks) == 3
+    assert len(seen) == 1 and seen[0] >= 15  # model time to the answer text, the tool call excluded
 
 
 @pytest.mark.asyncio
@@ -386,7 +358,7 @@ def test_spoken_digits(said, digits):
 @pytest.mark.asyncio
 async def test_pin_is_taken_in_code_and_never_reaches_the_model():
     rc = SimpleNamespace(awaiting_pin=True, tool=AsyncMock(return_value={"ok": True}), engine="pipeline")
-    agent = worker.ReceptionistAgent(call=rc, instructions="x", call_id="c", language="el", language_name="Greek")
+    agent = worker.ReceptionistAgent(call=rc, instructions="x", call_id="c", language="el")
     waiting = worker.llm.ChatMessage(role="user", content=["Ένα λεπτό να τον βρω"])
     await agent.on_user_turn_completed(None, waiting)
     assert rc.awaiting_pin and waiting.text_content == "Ένα λεπτό να τον βρω"

@@ -71,5 +71,5 @@ async def options(db: AsyncSession = Depends(get_db), x_api_key: str = Header(de
     tenant = bool(db.info.get("tenant_id"))
     return {
         "account_scope": "practice" if tenant else "founder" if is_master(x_api_key) else "dialer",
-        "languages": [{"code": c, "name": n} for c, (n, _) in LANGUAGES.items()],
+        "languages": [{"code": c, "name": n} for c, n in LANGUAGES.items()],
     }
