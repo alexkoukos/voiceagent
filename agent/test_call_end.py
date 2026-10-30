@@ -20,8 +20,8 @@ async def test_hang_up_waits_for_spoken_goodbye(monkeypatch):
     calls = []
 
     class Session:
-        def say(self, text, *, allow_interruptions):
-            calls.append((text, allow_interruptions))
+        def generate_reply(self, *, instructions, allow_interruptions):
+            calls.append((instructions, allow_interruptions))
             return played
 
     class Context:
@@ -36,11 +36,11 @@ async def test_hang_up_waits_for_spoken_goodbye(monkeypatch):
             calls.append("disconnected")
 
     monkeypatch.setattr(worker, "get_job_context", lambda: SimpleNamespace(room=Room()))
-    receiver = SimpleNamespace(session=Session(), _fillers=object(), language="en", _call_id="call",
+    receiver = SimpleNamespace(session=Session(), language="en", _call_id="call",
                                _spoken_already=lambda note: note)
-    result = await worker.PrankCallerAgent.hang_up.__wrapped__(receiver, Context())
+    result = await worker.ReceptionistAgent.hang_up.__wrapped__(receiver, Context())
     assert result.startswith("The call is ending")
-    assert calls == ["previous speech finished", ("Thank you for calling. Goodbye.", False)]
+    assert calls == ["previous speech finished", ("Say only this phrase: Thank you for calling. Goodbye.", False)]
     played.done.set()
     await asyncio.sleep(0)
     await asyncio.sleep(0)
