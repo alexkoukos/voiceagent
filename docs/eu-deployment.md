@@ -9,10 +9,10 @@ Goal: every hop of a call (phone network, LiveKit, agent, backend, database, rec
 | Agent, backend, Postgres (Railway) | EU West, Amsterdam (`europe-west4`) | same | done (older notes saying "US West" are out of date) |
 | Recordings bucket (Railway, Tigris) | `ams` | same | done |
 | Telnyx credential connections | media anchor Frankfurt (was "Latency") | same | done 2026-10-30; undo by setting it back to "Latency" |
-| LiveKit Cloud project `test-yw591kbj` | data region not visible from the API | "European Union (Frankfurt)" | check in the dashboard (Project settings); it can't be changed on an existing project |
-| LiveKit SIP inbound URI | global `<id>.sip.livekit.cloud` | `<id>.eu.sip.livekit.cloud` | Telnyx portal: the connection's SIP URI |
-| LiveKit outbound trunk | no `destination_country` | `de` | dashboard or `lk` |
-| LiveKit Inference (Deepgram fallback) | not restricted | inference region restriction on | dashboard → Data and privacy |
+| LiveKit Cloud project | new project, keys rotated, Railway `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` updated | "European Union (Frankfurt)" | new project created 2026-10-30 (region can't change on an existing project); backend + agent redeployed. Old project still exists — delete once verified. Confirm the new project's data region in Project settings |
+| LiveKit SIP inbound URI | no inbound trunk, no dispatch rule | `<id>.eu.sip.livekit.cloud` once wired | not set up: the new project has neither (the old one never had them either); wire inbound SIP when needed |
+| LiveKit outbound trunk | one trunk, `destination_country=de`, ID in `SIP_TRUNK_ID` | same | done 2026-10-30; copied from the previous active trunk (same Telnyx address, numbers, credentials) |
+| LiveKit Inference (Deepgram fallback) | not restricted | inference region restriction on | pending (owner): dashboard → Data and privacy |
 | Gemini (agent model, summaries, onboarding) | AI Studio, global, no residency | Vertex AI `europe-west3` | code ready behind `GEMINI_VERTEX_LOCATION`; needs Vertex AI enabled (below) and a measurement |
 | ElevenLabs Scribe + TTS | global | EU residency is Enterprise-only | stays global for now (DPA) |
 | Telephony provider | Telnyx, US test number | Twilio Greek 21x number later | Phase T |
@@ -20,8 +20,13 @@ Goal: every hop of a call (phone network, LiveKit, agent, backend, database, rec
 ## Remaining steps
 
 ### LiveKit
-1. Check the project's data region. If it isn't the EU, create a new project in "European Union (Frankfurt)", update `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` on backend and agent, rotate the secret exposed in September, and recreate the inbound trunk (`setup_inbound.py`, phase0 branch) and the outbound trunk.
-2. Point Telnyx (later Twilio) at `<sip-subdomain>.eu.sip.livekit.cloud`; set the outbound trunk's `destination_country` to `de`; turn on the inference region restriction.
+Done 2026-10-30: created a new LiveKit project (an existing project's data region can't be changed) and rotated its API keys, then updated `LIVEKIT_URL`/`LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` on backend and agent; both redeployed successfully. Recreated the single outbound trunk by copying the previous active one (same Telnyx address, numbers and credentials) and set its `destination_country=de`; its ID is in Railway's `SIP_TRUNK_ID`. The new project has no inbound trunk and no dispatch rule — the old project never had them either.
+
+Remaining:
+1. Confirm the new project's data region is "European Union (Frankfurt)" in Project settings.
+2. Turn on the inference region restriction (dashboard → Data and privacy).
+3. Delete the old LiveKit project once everything is verified.
+4. If inbound SIP is ever needed, create an inbound trunk + dispatch rule (`setup_inbound.py`, phase0 branch) and point Telnyx (later Twilio) at `<sip-subdomain>.eu.sip.livekit.cloud`.
 
 ### Gemini on Vertex AI (Frankfurt)
 1. Enable Vertex AI on the project that already holds the Gemini key and billing, and give the existing service account access:
