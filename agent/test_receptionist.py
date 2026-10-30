@@ -400,3 +400,15 @@ async def test_emergency_line_is_spoken_word_for_word(monkeypatch):
     rc.tool.assert_awaited_once_with("emergency", {})
     assert "take_message" in session.generate_reply.call_args.kwargs["instructions"]
     assert script not in session.generate_reply.call_args.kwargs["instructions"]
+
+
+@pytest.mark.parametrize("said,digits", [
+    ("τέσσερα, πέντε, έξι, ένα, δύο, μηδέν", "456120"),
+    ("Ο κωδικός είναι 4 5 6 1 2 0", "456120"),
+    ("Εννιά οχτώ εφτά τρία τρεις μία", "987331"),
+    ("four five six one two zero", "456120"),
+    ("Oh, it's 4 5 6", "456"),
+    ("Δεν τον έχω ακόμα", ""),
+])
+def test_spoken_digits(said, digits):
+    assert worker.spoken_digits(said) == digits

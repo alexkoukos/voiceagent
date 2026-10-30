@@ -885,6 +885,95 @@ async def _found_ids(db: AsyncSession, call: Call) -> set[str]:
     return {v for (v,) in rows} | ({call.appointment_id} if call.appointment_id else set())
 
 
+NOT_FOUND = {"appointments": [],
+             "hint": "Say you couldn't find an appointment with these details. Offer to take a message."}
+VERIFY_MINUTES = 10
+VERIFY_TRIES = 3
+
+
+def _same_person(stored: str, said: str) -> bool:
+    """Every word the caller said matches a word of the stored name (accents, case and Greek
+    endings ignored), and they said at least a first and last name."""
+    said_words = re.findall(r"\w+", booking._plain(said or ""))
+    stored_words = re.findall(r"\w+", booking._plain(stored or ""))
+    if len(said_words) < 2:
+        return False
+
+    def close(a: str, b: str) -> bool:
+        stem = min(len(a), len(b)) - 1
+        return a == b or (stem >= 3 and a[:stem] == b[:stem] and abs(len(a) - len(b)) <= 2)
+    return all(any(close(w, s) for s in stored_words) for w in said_words)
+
+
+def _code_hash(call_id: str, code: str) -> str:
+    import hashlib
+    return hashlib.sha256(f"{call_id}:{code}".encode()).hexdigest()
+
+
+async def _lookup_other_number(db: AsyncSession, practice: Practice, call: Call, phone: str, name: str | None) -> dict:
+    """A number other than the caller ID: anyone can say one. Nothing is confirmed until the
+    full name matches, no detail is read back, and a change needs the SMS code sent to that
+    number (audit P0-2)."""
+    if len(re.findall(r"\w+", name or "")) < 2:
+        return {"error": "name_required",
+                "next": "Ask for the first and last name the appointment is under. Don't say whether one exists."}
+    appts = [a for a in await booking.upcoming_for(db, practice, phone, utcnow()) if _same_person(a.customer_name, name)]
+    await routing.log(db, call, "lookup_other_number", "match" if appts else "no_match", "P0-2 spoken number")
+    if not appts:
+        await db.commit()
+        return NOT_FOUND
+    if not (get_settings().telnyx_api_key and get_settings().sms_from):
+        await db.commit()
+        return {"error": "verification_unavailable",
+                "next": "Say you can't change it by phone right now and take a message (take_message). No details."}
+    import secrets
+    code = f"{secrets.randbelow(10**6):06d}"
+    event = RoutingEvent(practice_id=practice.id, call_id=call.id, kind="verify", path="pending", rule="P0-2 SMS code",
+                         value=json.dumps({"h": _code_hash(call.id, code), "ids": [a.id for a in appts], "tries": 0}))
+    db.add(event)
+    await db.flush()
+    body = (f"{practice.name}: ο κωδικός επιβεβαίωσης είναι {code}." if _lang(call, practice) == "el"
+            else f"{practice.name}: your verification code is {code}.")
+    await notifications.queue(db, practice_id=practice.id, kind="verify_code", channel="sms", recipient=phone,
+                              body=body, call_id=call.id, dedupe_key=f"verify:{event.id}")
+    await db.commit()
+    notifications.kick()
+    return {"verification": "sms_sent",
+            "next": "Say we sent a six-digit code by SMS to that number and ask them to read it digit by digit, "
+                    "then call verify_code. Say no appointment details before that."}
+
+
+async def tool_verify_code(db: AsyncSession, call: Call, args) -> dict:
+    """The caller read the SMS code: their appointments on that number become usable."""
+    event = (await db.execute(select(RoutingEvent).where(
+        RoutingEvent.call_id == call.id, RoutingEvent.kind == "verify",
+    ).order_by(RoutingEvent.created_at.desc()).limit(1).with_for_update())).scalar_one_or_none()
+    if event is None or event.path != "pending":
+        return {"error": "nothing_to_verify"}
+    data = json.loads(event.value)
+    if event.created_at < datetime.utcnow() - timedelta(minutes=VERIFY_MINUTES) or data["tries"] >= VERIFY_TRIES:
+        event.path = "expired"
+        await db.commit()
+        return {"error": "locked", "next": "Take a message (take_message) instead."}
+    import hmac
+    if not hmac.compare_digest(data["h"], _code_hash(call.id, args.code)):
+        data["tries"] += 1
+        event.value = json.dumps(data)
+        await db.commit()
+        left = VERIFY_TRIES - data["tries"]
+        return ({"error": "wrong_code", "tries_left": left} if left
+                else {"error": "locked", "next": "Take a message (take_message) instead."})
+    event.path = "verified"
+    practice = await _practice(db, call)
+    appts = [a for a in [await db.get(Appointment, i) for i in data["ids"]]
+             if a and a.practice_id == practice.id and a.status == "booked"]
+    for a in appts:
+        await routing.log(db, call, "found", a.id, "B5 lookup verified by SMS code")
+    await db.commit()
+    staff = await booking.staff_of(db, practice.id)
+    return {"appointments": [booking.describe(practice, a, staff, _lang(call, practice)) for a in appts]}
+
+
 async def tool_find_appointments(db: AsyncSession, call: Call, args) -> dict:
     """Upcoming appointments for the caller's number (or the number they gave)."""
     practice = await _practice(db, call)
@@ -892,6 +981,8 @@ async def tool_find_appointments(db: AsyncSession, call: Call, args) -> dict:
     phone = normalize_phone(args.phone) if args.phone else call.caller_number
     if phone and not phone.startswith("+") and phone.startswith(("69", "2")) and len(phone) == 10:
         phone = "+30" + phone
+    if phone and phone != call.caller_number:
+        return await _lookup_other_number(db, practice, call, phone, args.customer_name)
     appts = await booking.upcoming_for(db, practice, phone, utcnow())
     staff = await booking.staff_of(db, practice.id)
     for a in appts:
