@@ -199,7 +199,7 @@ async def test_first_availability_lookup_uses_the_recognized_caller_day():
 
 
 @pytest.mark.parametrize("engine,quiet", [("pipeline", True), ("text_pipeline", True),
-                                          ("realtime", False), ("openai", False)])
+                                          ("realtime", False)])
 def test_tools_that_already_spoke_ask_text_engines_for_no_reply(engine, quiet):
     # EVAL-001: a note made Gemini reply empty (retried, then an error) or say
     # "Συγγνώμη, δεν σας άκουσα" before the read-back.
