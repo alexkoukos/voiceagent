@@ -105,9 +105,10 @@ def check(expect: dict, obs: dict, critical_all: bool = False) -> list[dict]:
             add(name, not missing, missing)
         elif name == "handoff_status_in":
             statuses = [h["status"] for h in obs.get("handoffs", [])]
-            closed = any(tool == "route_call" and isinstance(result, dict) and result.get("hours_state") == "closed"
+            closed = any(tool == "route_call" and isinstance(result, dict)
+                         and result.get("hours_state") in ("closed", "break")
                          for tool, _args, result in obs.get("tools", []))
-            if closed:  # after hours the correct path is a message, never a transfer
+            if closed:  # after hours or on a break the correct path is a message, never a transfer
                 add(name, not statuses and "transfer_to_human" not in names, f"closed now; handoffs {statuses}")
             else:
                 add(name, bool(statuses) and statuses[-1] in want, statuses)
