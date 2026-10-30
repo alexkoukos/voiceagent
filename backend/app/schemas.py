@@ -290,6 +290,21 @@ class InboundStart(BaseModel):
     forwarding_reason: Literal["no_answer", "busy", "after_hours", "unconditional"] | None = None
 
 
+class EvalSessionStart(BaseModel):
+    """A founder-run eval call: a phone call into one practice, on a fixed clock."""
+    practice_id: str
+    caller_number: str | None = None
+    # The moment the call happens, in UTC (e.g. 2026-11-02T09:00:00). None: real time.
+    now: datetime | None = None
+
+    @field_validator("now")
+    @classmethod
+    def _utc(cls, v: datetime | None):
+        if v is not None and v.tzinfo is not None:
+            v = v.astimezone(dt.timezone.utc).replace(tzinfo=None)
+        return v
+
+
 class CheckAvailability(BaseModel):
     when: str = Field(min_length=1, max_length=SHORT_TEXT)
     service_id: str | None = Field(default=None, max_length=SHORT_TEXT)

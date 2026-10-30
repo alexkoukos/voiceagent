@@ -211,8 +211,18 @@ class FakeCtx:
         pass
 
 
+def eval_clock(tz: str) -> datetime:
+    """Every eval call happens at the same weekday and hour: the next Monday at 10:00, local
+    time, at least two days ahead. Real time made results depend on when the suite ran
+    (a handoff during the lunch break, 2026-10-30)."""
+    day = datetime.now(ZoneInfo(tz)).date() + timedelta(days=2)
+    while day.weekday() != 0:
+        day += timedelta(days=1)
+    return datetime.combine(day, datetime.min.time().replace(hour=10), ZoneInfo(tz))
+
+
 def seed_date(weekday: str, tz: str) -> date:
-    today = datetime.now(ZoneInfo(tz)).date()
+    today = eval_clock(tz).date()
     target = WEEKDAYS.index(weekday)
     day = today + timedelta(days=2)
     while day.weekday() != target:
@@ -263,8 +273,8 @@ class Harness:
             seeded_id = r.json()["id"]
         before = {a["id"] for a in await self.appointments()}
 
-        r = await self.http.post("/internal/inbound", headers={"x-agent-token": worker.AGENT_TOKEN}, json={
-            "dialed_number": self.practice["phone_numbers"][0], "caller_number": caller, "forwarding_reason": None})
+        r = await self.http.post("/internal/evals/sessions", headers=self.founder, json={
+            "practice_id": pid, "caller_number": caller, "now": eval_clock(tz).isoformat()})
         r.raise_for_status()
         metadata = r.json()
         call_id = metadata["call_id"]
