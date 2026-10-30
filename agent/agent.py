@@ -30,7 +30,7 @@ import httpx
 from google.genai import types as genai_types
 from google.protobuf.duration_pb2 import Duration
 from livekit import api, rtc
-from livekit.agents import inference, llm, room_io, tts as livekit_tts
+from livekit.agents import inference, llm, room_io
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -42,14 +42,16 @@ from livekit.agents import (
     function_tool,
     get_job_context,
 )
-from livekit.plugins import elevenlabs, google, noise_cancellation, silero
+from livekit.plugins import google, noise_cancellation, silero
 from livekit.agents.voice.turn import TurnHandlingOptions
 
+import providers
+from providers import stt as provider_stt
 from telemetry import observe_span, track_telemetry
 from fixed_lines import fixed_audio, prerender
 from voices import elevenlabs_voice, gemini_voice
 from speech import (
-    ELEVENLABS_TTS_MODEL, Pronunciation, elevenlabs_voice_settings, env_number,
+    ELEVENLABS_TTS_MODEL, Pronunciation, env_number,
     noise_cancellation_enabled, speech_instructions,
 )
 
@@ -61,18 +63,11 @@ AGENT_TOKEN = os.environ.get("INTERNAL_API_TOKEN", "")
 RINGING_TIMEOUT_SECONDS = int(os.environ.get("RINGING_TIMEOUT_SECONDS", "45"))
 # Realtime engine model.
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-live")
-# Pipeline engine: the "brain". Flash-Lite starts answering in ~0.45 s.
-LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-3.5-flash-lite")
-GEMINI_TTS_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-3.8-flash-lite-tts")
-GEMINI_TTS_FALLBACK_MODEL = os.environ.get("GEMINI_TTS_FALLBACK_MODEL", "gemini-3.8-flash-tts")
 # Realtime engine: how long a pause means the caller has finished talking.
 REALTIME_SILENCE_MS = int(env_number("REALTIME_SILENCE_MS", 700, 200, 3000))
 # Turn detector (pipeline engine): the longest we wait after the caller stops before
 # treating the turn as finished. Lower is snappier at the risk of cutting slow speech.
 TURN_MAX_DELAY_MS = int(os.environ.get("TURN_MAX_DELAY_MS", "1000"))
-# Pipeline engine: pause that ends a transcribed segment, and the least wait after the caller
-# stops before replying. Lower is snappier but splits normal-speed speech into fragments.
-SCRIBE_SILENCE_SECS = env_number("SCRIBE_SILENCE_SECS", 0.7, 0.3, 2.0)
 # The caller's answer to a readback gets more time before their turn ends: with a short
 # silence, «Ναι… ολόσωστα» could be cut after «Ναι…» (2026-10-01).
 CONFIRM_MIN_DELAY = env_number("CONFIRM_MIN_DELAY", 0.8, 0.2, 3.0)
@@ -563,55 +558,18 @@ def prewarm(proc: JobProcess) -> None:
         proc.userdata["vad"] = silero.VAD.load()
 
 
-def build_tts(engine: str, voice: str, language: str):
-    if engine == "pipeline":
-        return elevenlabs.TTS(
-            voice_id=elevenlabs_voice(voice, language), model=ELEVENLABS_TTS_MODEL,
-            language=language, encoding="pcm_24000",
-            voice_settings=elevenlabs.VoiceSettings(**elevenlabs_voice_settings()),
-            apply_text_normalization="auto",
-        )
-    models = list(dict.fromkeys((GEMINI_TTS_MODEL, GEMINI_TTS_FALLBACK_MODEL)))
-    return livekit_tts.FallbackAdapter([
-        google.beta.GeminiTTS(
-            model=model, voice_name=gemini_voice(voice),
-            instructions=speech_instructions(language), api_key=os.environ.get("GEMINI_API_KEY"),
-        ) for model in models
-    ], max_retry_per_tts=1)
-
-
-def gemini_auth() -> dict:
-    """AI Studio with the key, or Vertex AI in one region (GEMINI_VERTEX_LOCATION, e.g.
-    europe-west3) with the service account in GOOGLE_SERVICE_ACCOUNT_JSON: EU processing."""
-    location = os.environ.get("GEMINI_VERTEX_LOCATION")
-    if not location:
-        return {"api_key": os.environ.get("GEMINI_API_KEY")}
-    from google.oauth2 import service_account
-
-    credentials = service_account.Credentials.from_service_account_info(
-        json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]),
-        scopes=["https://www.googleapis.com/auth/cloud-platform"])
-    return {"vertexai": True, "project": os.environ["GEMINI_VERTEX_PROJECT"], "location": location,
-            "credentials": credentials}
-
-
-def text_llm() -> google.LLM:
-    """The pipeline engines' model; the text-mode evals use exactly this too."""
-    return google.LLM(
-        model=LLM_MODEL,
-        **gemini_auth(),
-        temperature=0.9,
-        thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
-    )
+def text_llm():
+    """The text engines' model; the text-mode evals use exactly this too."""
+    return providers.for_engine("pipeline")[1].build()
 
 
 def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> AgentSession:
     if engine in ("pipeline", "text_pipeline"):
-        stt = (scribe_stt(language, vocab_terms(language, vocabulary)) if engine == "pipeline"
-               else caller_stt(language, vocabulary))
-        tts = build_tts(engine, voice, language)
+        stt_provider, llm_provider, tts_provider = providers.for_engine(engine)
+        stt = stt_provider.build(language, vocabulary)
+        tts = tts_provider.build(voice, language)
         # Open the connections now, while the phone rings, not on the first reply.
-        for part in ((stt, tts) if engine == "pipeline" else (stt,)):
+        for part in ((stt, tts) if tts_provider.prewarm else (stt,)):
             if prewarm_part := getattr(part, "prewarm", None):
                 try:
                     prewarm_part()
@@ -620,11 +578,10 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
         # Scribe already emits END_OF_SPEECH after its configured silence window.
         # Greek does not need a second semantic detector or another
         # endpointing pause after that committed turn. Keep Scribe's 0.7s pause.
-        greek_scribe = engine == "pipeline" and language == "el"
-        semantic_turns = engine == "pipeline" and not greek_scribe
+        turns = stt_provider.turns(language)
         return AgentSession(
             stt=stt,
-            llm=text_llm(),
+            llm=llm_provider.build(),
             tts=tts,
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             turn_handling=TurnHandlingOptions(
@@ -633,10 +590,11 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
                 # Avoid loading a local turn model in the fallback worker: it previously
                 # exhausted Railway's memory.
                 turn_detection=(inference.TurnDetector(local_fallback=False)
-                                if semantic_turns else "stt"),
+                                if turns == "semantic" else "stt"),
                 endpointing=({"mode": "dynamic", "min_delay": ENDPOINT_MIN_DELAY,
                               "max_delay": TURN_MAX_DELAY_MS / 1000}
-                             if semantic_turns else {"mode": "fixed", "min_delay": 0 if greek_scribe else ENDPOINT_MIN_DELAY}),
+                             if turns == "semantic" else
+                             {"mode": "fixed", "min_delay": 0 if turns == "own" else ENDPOINT_MIN_DELAY}),
                 # A cough or a one-word "ναι" mid-reply shouldn't cut the agent off; if it was
                 # a false alarm, carry on where it stopped.
                 interruption={"min_duration": 0.6, "min_words": 2, "resume_false_interruption": True,
@@ -648,57 +606,22 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
     return AgentSession(**language_parts(engine, voice, language, vocabulary))
 
 
-def scribe_stt(language: str, keyterms: list[str] | None = None):
-    return elevenlabs.STT(
-        keyterms=keyterms or None,
-        model="scribe_v2_realtime",
-        # Without a language hint Scribe hears Greek phone audio as Ukrainian (Cyrillic text).
-        language_code=language,
-        # ElevenLabs decides when a sentence is finished. The plugin's default ("manual")
-        # waits for a commit the session never sends, so no final transcript ever arrived
-        # and the agent stayed silent for the whole call.
-        # 0.3 s cut normal-speed sentences into fragments at every short pause.
-        server_vad={"vad_silence_threshold_secs": SCRIBE_SILENCE_SECS},
-    )
-
-
-# Everyday Greek the transcriber should expect; the business adds its own names and services.
-GREEK_VOCABULARY = [
-    "ρε", "μωρέ", "κομπλέ", "γαμώτο", "άσ' το", "θα 'ρθω", "κάνα", "τίποτα", "εντάξει", "μπορείς",
-    "απογευματάκι", "πρωινό", "ραντεβουδάκι", "ρε φίλε", "έλα", "λέγε", "άντε", "οκ", "ναι ρε",
-    "English", "ίνγκλις", "ένγκλις", "αγγλικά",
-    # Scribe heard "Τετάρτη" as "Δευτέρα" twice on a real call (2026-10-01).
-    "Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο", "Κυριακή",
-]
-
-
-def vocab_terms(language: str, vocabulary: list[str] | None) -> list[str]:
-    """Everyday Greek plus the business's names, split into words: Scribe realtime rejects
-    the whole session if any keyterm is over 20 characters."""
-    terms = list(GREEK_VOCABULARY if language == "el" else [])
-    for phrase in vocabulary or []:
-        terms += [phrase] if len(phrase) <= 20 else phrase.split()
-    return [t for t in dict.fromkeys(terms) if 2 <= len(t) <= 20][:100]
-
-
 def language_parts(engine: str, voice: str, language: str, vocabulary: list[str] | None = None) -> dict:
     """The parts of a session that are pinned to one language. A receptionist call that
     switches language (R7) hands over to a new agent built with these."""
-    words = vocab_terms(language, vocabulary)
-    if engine == "pipeline":
-        return {"stt": scribe_stt(language, words), "tts": build_tts(engine, voice, language)}
-    if engine == "text_pipeline":
-        return {"stt": caller_stt(language, vocabulary), "tts": build_tts(engine, voice, language)}
+    if engine in ("pipeline", "text_pipeline"):
+        stt_provider, _, tts_provider = providers.for_engine(engine)
+        return {"stt": stt_provider.build(language, vocabulary), "tts": tts_provider.build(voice, language)}
     return {"llm": google.beta.realtime.RealtimeModel(
         model=GEMINI_MODEL,
         voice=gemini_voice(voice),
         language=REALTIME_LANGUAGE.get(language),
         # Gemini Live understands Greek well but its own transcript of it doesn't: even pinned
         # to el-GR it wrote Portuguese/Spanish/German fragments ("diepes", "né"). The caller's
-        # words come from the STT below instead (see CallerTurns).
+        # words come from Deepgram instead (see CallerTurns).
         input_audio_transcription=None,
         api_key=os.environ.get("GEMINI_API_KEY"),
-        # Decide the friend has finished after a short pause, not Gemini's slower default.
+        # Decide the caller has finished after a short pause, not Gemini's slower default.
         realtime_input_config=genai_types.RealtimeInputConfig(
             automatic_activity_detection=genai_types.AutomaticActivityDetection(
                 start_of_speech_sensitivity=genai_types.StartSensitivity.START_SENSITIVITY_LOW,
@@ -706,40 +629,7 @@ def language_parts(engine: str, voice: str, language: str, vocabulary: list[str]
                 silence_duration_ms=REALTIME_SILENCE_MS,
             ),
         ),
-    ), "stt": caller_stt(language, vocabulary)}
-
-
-def deepgram_terms(vocabulary: list[str] | None) -> list[str]:
-    """Favor distinctive business names without over-biasing ordinary speech.
-
-    Deepgram recommends a focused glossary and rejects requests over 500 tokens.
-    Keep this well below that limit even when a practice has many services.
-    """
-    terms: list[str] = []
-    seen: set[str] = set()
-    words_left = 120
-    for value in vocabulary or []:
-        term = " ".join(value.split())
-        word_count = len(term.split())
-        if (not term or len(term) > 80 or word_count > 8 or word_count > words_left
-                or term.casefold() in seen):
-            continue
-        terms.append(term)
-        seen.add(term.casefold())
-        words_left -= word_count
-        if len(terms) == 40:
-            break
-    return terms
-
-
-def caller_stt(language: str, vocabulary: list[str] | None = None):
-    """Deepgram STT for the text pipeline and realtime call transcript.
-    Deepgram nova-3 via LiveKit Inference was the best streaming option on a real Greek
-    phone recording (2026-09-25); Speechmatics, Cartesia and Gemini Transcribe Live garbled
-    more, AssemblyAI has no Greek."""
-    terms = deepgram_terms(vocabulary)
-    options = {"extra_kwargs": {"keyterm": terms}} if terms else {}
-    return inference.STT("deepgram/nova-3", language=language, **options)
+    ), "stt": provider_stt.deepgram(language, vocabulary)}
 
 
 class CallerTurns:

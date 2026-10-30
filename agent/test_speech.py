@@ -5,7 +5,7 @@ import pytest
 
 import agent as worker
 import fixed_lines
-from speech import Pronunciation, env_number, noise_cancellation_enabled
+from speech import Pronunciation, elevenlabs_voice_settings, env_number, noise_cancellation_enabled
 from voices import elevenlabs_voice
 
 
@@ -82,18 +82,19 @@ def test_language_voice_overrides_preserve_existing_mapping(monkeypatch):
 
 @pytest.mark.parametrize("engine", ["pipeline", "text_pipeline"])
 def test_language_switch_updates_both_recognition_and_speech(monkeypatch, engine):
-    monkeypatch.setattr(worker, "scribe_stt", lambda language, words: ("stt", language))
-    monkeypatch.setattr(worker, "caller_stt", lambda language, vocabulary: ("stt", language))
-    monkeypatch.setattr(worker, "build_tts", lambda engine, voice, language: ("tts", language, voice))
+    from dataclasses import replace
+    for registry, part in ((worker.providers.stt.PROVIDERS, "stt"), (worker.providers.tts.PROVIDERS, "tts")):
+        for name, provider in list(registry.items()):
+            monkeypatch.setitem(registry, name, replace(provider, build=lambda a, b, part=part: (part, a, b)))
     for language in ("en", "el"):
         parts = worker.language_parts(engine, "Kore", language)
-        assert parts == {"stt": ("stt", language), "tts": ("tts", language, "Kore")}
+        assert parts == {"stt": ("stt", language, None), "tts": ("tts", "Kore", language)}
 
 
 def test_elevenlabs_uses_clear_audio_and_the_selected_language(monkeypatch):
     monkeypatch.setenv("ELEVENLABS_VOICE_MAP_EL", '{"default":"greek-voice"}')
-    monkeypatch.setattr(worker.elevenlabs, "TTS", lambda **kwargs: kwargs)
-    tts = worker.build_tts("pipeline", "Kore", "el")
+    monkeypatch.setattr(worker.providers.tts.elevenlabs, "TTS", lambda **kwargs: kwargs)
+    tts = worker.providers.tts.eleven_labs("Kore", "el")
     assert tts["voice_id"] == "greek-voice"
     assert tts["language"] == "el"
     assert tts["encoding"] == "pcm_24000"
@@ -131,7 +132,7 @@ def test_invalid_timing_settings_fall_back_to_working_values(monkeypatch, value)
 
 def test_realtime_uses_less_sensitive_speech_detection(monkeypatch):
     monkeypatch.setattr(worker.google.beta.realtime, "RealtimeModel", lambda **kwargs: kwargs)
-    monkeypatch.setattr(worker, "caller_stt", lambda *args: object())
+    monkeypatch.setattr(worker.provider_stt, "deepgram", lambda *args: object())
     settings = worker.language_parts("realtime", "Kore", "el")["llm"]
     vad = settings["realtime_input_config"].automatic_activity_detection
     assert vad.start_of_speech_sensitivity == worker.genai_types.StartSensitivity.START_SENSITIVITY_LOW
@@ -167,7 +168,7 @@ async def test_fixed_lines_use_same_pronunciation_and_delivery_as_replies(monkey
     assert body["text"] == "Όπεν έι άι"
     assert body["model_id"] == worker.ELEVENLABS_TTS_MODEL
     assert body["language_code"] == "el"
-    assert body["voice_settings"] == worker.elevenlabs_voice_settings()
+    assert body["voice_settings"] == elevenlabs_voice_settings()
 
 
 def test_fixed_lines_split_greek_and_english():
