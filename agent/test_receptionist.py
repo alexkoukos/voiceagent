@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -379,3 +380,23 @@ async def test_sparring_heckles_a_long_turn_once(monkeypatch):
     state(type("E", (), {"new_state": "speaking"}))
     await asyncio.sleep(0.1)
     assert len(session.said) == 1
+
+
+@pytest.mark.asyncio
+async def test_emergency_line_is_spoken_word_for_word(monkeypatch):
+    """The 166/112 line is said verbatim, not paraphrased by the model (audit P1-4)."""
+    script = "Αυτό ακούγεται επείγον. Καλέστε αμέσως το 166 ή το 112."
+    spoken = SimpleNamespace(wait_for_playout=AsyncMock())
+    session = SimpleNamespace(interrupt=Mock(), say=Mock(return_value=spoken), generate_reply=Mock())
+    ctx = SimpleNamespace(room=SimpleNamespace(name="room"))
+    rc = worker.ReceptionistCall(ctx, {"call_id": "c", "language": "el", "emergency": {
+        "enabled": True, "phrases": ["δεν αναπνέει"], "script": {"el": script, "en": "Call 112."}}}, "text_pipeline")
+    rc.session = session
+    rc.tool = AsyncMock(return_value={})
+    rc.check_emergency("Βοήθεια, ο πατέρας μου δεν αναπνέει!")
+    await asyncio.gather(*rc._tasks)
+    session.say.assert_called_once()
+    assert session.say.call_args.args[0] == script
+    rc.tool.assert_awaited_once_with("emergency", {})
+    assert "take_message" in session.generate_reply.call_args.kwargs["instructions"]
+    assert script not in session.generate_reply.call_args.kwargs["instructions"]

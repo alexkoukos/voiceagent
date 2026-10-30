@@ -1199,8 +1199,10 @@ class ReceptionistCall:
         voice = self.fixed_voice()
         if voice is None:
             return
-        texts = {self.metadata.get("greeting"), self.metadata.get("greeting_without_recording"),
-                 CLOSING_LINE["el" if self.language == "el" else "en"]}
+        key = "el" if self.language == "el" else "en"
+        texts = {self.metadata.get("greeting"), self.metadata.get("greeting_without_recording"), CLOSING_LINE[key],
+                 ((self.metadata.get("emergency") or {}).get("script") or {}).get(key),
+                 ((self.metadata.get("profanity") or {}).get("script") or {}).get(key)}
         for text in filter(None, texts):
             prerender(text, voice, self.language)
 
@@ -1399,10 +1401,24 @@ class ReceptionistCall:
             logger.warning("call %s: emergency phrase heard", self.call_id)
             self.spawn(self.tool("emergency", {}))
             self.session.interrupt()
-            quote = "Πες αμέσως ακριβώς αυτό" if self.language == "el" else "Say exactly this right now"
-            then = ("Μετά κράτα επείγον μήνυμα (take_message με urgent true)." if self.language == "el"
-                    else "Then take an urgent message (take_message with urgent true).")
-            self.session.generate_reply(instructions=f"{quote}: {script} {then}")
+            then = ("Μόλις είπες τη φράση έκτακτης ανάγκης. Τώρα κράτα επείγον μήνυμα (take_message με urgent true)."
+                    if self.language == "el" else
+                    "You just said the emergency line. Now take an urgent message (take_message with urgent true).")
+            self.spawn(self._say_then(script, then))
+
+    async def _say_then(self, line: str, then: str | None = None) -> None:
+        """Speak a fixed line word for word (text engines), then let the model continue."""
+        try:
+            if self.engine in ("pipeline", "text_pipeline"):
+                handle = await self.say_fixed(line, allow_interruptions=False, add_to_chat_ctx=True)
+                await asyncio.wait_for(handle.wait_for_playout(), timeout=20)
+                if then:
+                    self.session.generate_reply(instructions=then)
+            else:
+                quote = "Πες αμέσως ακριβώς αυτό" if self.language == "el" else "Say exactly this right now"
+                self.session.generate_reply(instructions=f"{quote}: {line} {then or ''}".strip())
+        except Exception:
+            logger.exception("call %s: fixed line failed", self.call_id)
 
     # --- profanity: one calm, polite reminder when the caller swears at the agent ---
 
@@ -1421,8 +1437,7 @@ class ReceptionistCall:
             self._profanity_said = True
             logger.info("call %s: profanity heard, one polite reminder", self.call_id)
             self.session.interrupt()
-            quote = "Πες αμέσως ακριβώς αυτό" if self.language == "el" else "Say exactly this right now"
-            self.session.generate_reply(instructions=f"{quote}: {script}")
+            self.spawn(self._say_then(script))
 
     # --- recording (G7) ---
 
@@ -1610,8 +1625,11 @@ async def say_busy_and_leave(ctx: JobContext, engine: str, busy: dict) -> None:
     """All lines busy (G8): one line, then hang up."""
     session = build_session(ctx, engine, busy.get("voice", "default"), busy.get("language", "el"))
     await session.start(agent=Agent(instructions="Say only the line you are given, then stop."), room=ctx.room)
-    quote = "Πες ακριβώς αυτό" if busy.get("language") == "el" else "Say exactly this"
-    handle = session.generate_reply(instructions=f"{quote}: {busy['busy_line']}", allow_interruptions=False)
+    if engine in ("pipeline", "text_pipeline"):
+        handle = session.say(busy["busy_line"], allow_interruptions=False)
+    else:
+        quote = "Πες ακριβώς αυτό" if busy.get("language") == "el" else "Say exactly this"
+        handle = session.generate_reply(instructions=f"{quote}: {busy['busy_line']}", allow_interruptions=False)
     await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
     await ctx.room.disconnect()
     ctx.shutdown(reason="lines busy")
