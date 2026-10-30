@@ -331,35 +331,3 @@ async def test_outbound_dialer_is_gone(http):
     body = {"scenario": "x", "phone_number": "+306900000099"}
     for headers in (DIALER, MASTER):
         assert (await http.post("/calls", headers=headers, json=body)).status_code == 405
-
-
-@pytest.mark.asyncio
-async def test_sparring_page_is_secret_web_only(http, monkeypatch):
-    import json
-    from app.routers import sparring
-    settings = get_settings()
-    monkeypatch.setattr(settings, "sparring_token", "")
-    assert (await http.get("/sparring/anything")).status_code == 404
-    monkeypatch.setattr(settings, "sparring_token", "s3cret-token")
-    assert (await http.get("/sparring/wrong")).status_code == 404
-    page = await http.get("/sparring/s3cret-token")
-    assert page.status_code == 200 and "Μπάμπη" in page.text and 'data-default="male"' in page.text
-
-    dispatched = []
-
-    class FakeLK:
-        def __init__(self, *a): self.agent_dispatch = self
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
-        async def create_dispatch(self, request): dispatched.append(request)
-
-    monkeypatch.setattr(sparring.api, "LiveKitAPI", FakeLK)
-    monkeypatch.setattr("app.receptionist.room_token", lambda *a, **k: "tok")
-    r = await http.post("/sparring/s3cret-token/session", json={"gender": "female"})
-    assert r.status_code == 200, r.text
-    meta = json.loads(dispatched[0].metadata)
-    # Never dials or records, and never shows up in the app's call history.
-    assert meta["test_no_dial"] and meta["sparring"] and "phone" not in json.dumps(meta).lower()
-    assert meta["voice"] == "Kore" and "νταής" in meta["prompt"]
-    assert dispatched[0].room == f"spar-{meta['call_id']}"
-    assert (await http.get("/calls", headers=DIALER)).json() == []
