@@ -470,7 +470,7 @@ async def main() -> int:
     out.parent.mkdir(exist_ok=True)
     stats["harness_settle_timeouts"] = Harness.settle_timeouts
     print(f"harness settle timeouts: {Harness.settle_timeouts}")
-    out.write_text(json.dumps({"agent_version": os.environ["AGENT_VERSION"], "llm": worker.LLM_MODEL,
+    out.write_text(json.dumps({"agent_version": os.environ["AGENT_VERSION"], "llm": worker.providers.for_engine("pipeline")[1].model,
                                "stats": stats, "runs": runs}, ensure_ascii=False, indent=1, default=str))
     print(f"results: {out}")
     failed = stats["critical_failures"] > 0
