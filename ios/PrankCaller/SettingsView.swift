@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Connection details and saved pranks. Opened from the gear on the main screen.
+/// Connection details. Opened from the gear on the main screen.
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var baseURL = Settings.baseURL
@@ -39,9 +39,6 @@ struct SettingsView: View {
                     }
                     .disabled(testing)
                 }
-                Section {
-                    NavigationLink("Τα σενάριά μου") { TemplatesView() }
-                }
             }
             .navigationTitle("Ρυθμίσεις")
             .navigationBarTitleDisplayMode(.inline)
@@ -75,40 +72,5 @@ struct SettingsView: View {
             UserDefaults.standard.set(options.accountScope ?? "dialer", forKey: "accountScope")
             result = (true, "Συνδέθηκε")
         } catch { result = (false, friendlyMessage(error)) }
-    }
-}
-
-struct TemplatesView: View {
-    @State private var templates: [PromptTemplate] = []
-    @State private var errorMessage: String?
-
-    var body: some View {
-        List {
-            ForEach(templates) { t in
-                VStack(alignment: .leading, spacing: Space.xs) {
-                    Text(t.displayTitle).font(.body.weight(.semibold))
-                    Text(t.scenario).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                }
-                .padding(.vertical, Space.xs)
-            }
-            .onDelete { offsets in
-                let doomed = offsets.map { templates[$0] }
-                templates.remove(atOffsets: offsets)
-                Task {
-                    for t in doomed {
-                        do { try await APIClient().deleteTemplate(t.id) } catch { errorMessage = friendlyMessage(error) }
-                    }
-                }
-            }
-            if let errorMessage { ErrorBanner(text: errorMessage) }
-        }
-        .overlay {
-            if templates.isEmpty { ContentUnavailableView("Κανένα σενάριο", systemImage: "text.bubble") }
-        }
-        .navigationTitle("Τα σενάριά μου")
-        .toolbar { EditButton() }
-        .task {
-            do { templates = try await APIClient().templates() } catch { errorMessage = friendlyMessage(error) }
-        }
     }
 }
