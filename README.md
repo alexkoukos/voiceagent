@@ -4,7 +4,7 @@ A Greek-first (and English) AI phone receptionist for small practices: dentists,
 
 > **Status:** active pilot. The features are built and covered by automated tests and evals, but provider setup and live acceptance (real phone calls, handoffs, recording disclosure) still have to be done for each deployment. See [PRD_STATUS.md](PRD_STATUS.md).
 
-The repository started as an outbound "AI caller" (the Level 1 PRD). That flow still exists, but the receptionist is the product now. Some identifiers still use the old names on purpose: the LiveKit agent name `prank-caller`, the iOS target `PrankCaller`, the bundle ID `com.alekos.prankcaller`.
+The repository started as an outbound "AI caller" (the Level 1 PRD, archived in [docs/archive/](docs/archive/)). That flow has been removed; the receptionist is the product. Some identifiers still use the old names on purpose: the LiveKit agent name `prank-caller`, the iOS target `PrankCaller`, the bundle ID `com.alekos.prankcaller`.
 
 ---
 
@@ -106,9 +106,8 @@ voiceagent/
 ├── agent/                      LiveKit voice worker
 │   ├── agent.py                Engines, agents, tools, call orchestration (the core)
 │   ├── speech.py               Delivery settings, Greek time-to-words, pronunciation aliases
-│   ├── opening.py              Opening line written and voiced during the ring; cached fixed lines
-│   ├── voices.py               App voice keys -> ElevenLabs / Gemini / OpenAI voices
-│   ├── fillers.py              "Μάλιστα…", "One moment…" fillers (outbound pipeline only)
+│   ├── fixed_lines.py          Greeting, goodbye and other fixed lines, voiced in advance and cached
+│   ├── voices.py               App voice keys -> ElevenLabs / Gemini voices
 │   ├── telemetry.py            Content-free timing/usage events, batched to the backend
 │   ├── evals/                  Eval Suite (evals.json, run_evals.py, practice.json)
 │   ├── scripts/                Scripted audio calls, live call monitor
@@ -128,10 +127,10 @@ voiceagent/
 │   │   ├── storage.py          Recording bucket: seal, presign, delete queue
 │   │   ├── gcal.py, ical_feed.py, google_oauth.py   Calendars
 │   │   ├── prompts.py          Builds the receptionist prompt from practice data
-│   │   ├── livekit_dispatch.py, dispatcher.py       Legacy outbound flow
-│   │   └── routers/            calls, practices, demo, demo_dashboard, sparring, monitor,
+│   │   ├── dispatcher.py       Line count and the queue of reminder / waitlist calls
+│   │   └── routers/            calls (recordings), practices, demo, demo_dashboard, monitor,
 │   │                           internal (agent-only), ops, manage, oauth, webhooks, landing…
-│   ├── alembic/versions/       Migrations 0001–0030
+│   ├── alembic/versions/       Migrations 0001–0031
 │   ├── config/                 Prompts (el/en), vertical templates, pricing.json, demo practices
 │   ├── scripts/                setup_inbound.py, setup_failover.py, setup_dental_demo.py
 │   └── tests/                  Pytest (unit + Postgres integration)
@@ -147,15 +146,13 @@ voiceagent/
 
 ## How a call enters the system
 
-Every conversation happens in a **LiveKit room** with one agent job. The worker registers as `prank-caller` (or `AGENT_NAME`) and handles six kinds of job:
+Every conversation happens in a **LiveKit room** with one agent job. The worker registers as `prank-caller` (or `AGENT_NAME`) and handles four kinds of job:
 
 | Entry | How the job is created | Metadata the agent gets |
 |---|---|---|
 | **Inbound phone call** | Caller dials the practice's DID → Telnyx → LiveKit SIP dispatch rule creates a room and job | None. The agent waits for the SIP participant, reads `sip.trunkPhoneNumber`, `sip.phoneNumber`, `sip.forwardingReason`, and asks the backend `POST /internal/inbound` |
 | **Web demo** | Browser opens `/demo/<slug>` (or the shareable demo dashboard) → `POST /demo/<slug>/session` → backend creates the call, dispatches the agent, returns a room token | Full receptionist metadata, `direction: "web"` |
 | **Outbound reminder / waitlist / daily test call** | Scheduler queues it → `receptionist.dispatch_outbound` | Receptionist metadata plus `dial_number`; the agent dials out through the SIP trunk |
-| **Legacy outbound call** | iOS "new call" → `routers/calls.py` → `livekit_dispatch.dispatch_call` | Merged prompt, number, voice, language, duration cap |
-| **Sparring page** | Internal page; the agent plays an aggressive caller for practice | `sparring: true`: shorter endpointing plus heckles |
 | **Health check** | Backend's synthetic probe (OP1) | `health_check` token. The agent acknowledges it and exits without joining |
 
 ```mermaid
@@ -202,14 +199,13 @@ sequenceDiagram
 
 ### Engines
 
-The worker has four engines. Receptionist calls use `RECEPTIONIST_ENGINE` and legacy outbound calls use `AGENT_ENGINE`.
+The worker has three engines; `RECEPTIONIST_ENGINE` picks one.
 
 | Engine | Ear (STT) | Brain | Voice (TTS) | Turn ends on | Use |
 |---|---|---|---|---|---|
 | **`pipeline`** (default) | ElevenLabs **Scribe v2 realtime**, pinned to the call language, server VAD 0.7 s, business keyterms | **Gemini 3.5 Flash-Lite** (`thinking_level=minimal`, temp 0.9) with tools | ElevenLabs **Flash v2.5**, PCM 24 kHz, speed 0.93 | Greek: Scribe's end-of-speech event. English: LiveKit's semantic turn detector | Main receptionist engine |
 | **`text_pipeline`** | **Deepgram nova-3** via LiveKit Inference, with a keyterm glossary | Same Gemini Flash-Lite | **Gemini TTS** (flash-lite-tts, falls back to flash-tts) | Deepgram's final transcript, 0.5 s fixed delay | Fallback when ElevenLabs is missing, out of credits or down |
 | **`realtime`** | Gemini Live hears the audio directly. Deepgram runs alongside it only for the transcript | **Gemini 3.8 Live** (speech to speech, language pinned) | Gemini Live | Gemini's VAD, 700 ms silence, low sensitivity | Legacy engine and last fallback |
-| **`openai`** | gpt-4o-transcribe (transcript only) | **gpt-realtime-2.1** | OpenAI Realtime | Server VAD | Experiment. Off: its Greek was no better than Gemini's |
 
 **Engine selection at call start** (`pick_engine`):
 
@@ -290,9 +286,9 @@ Gemini Live understands Greek audio well, but its own transcript of Greek came o
 | Greek pipeline endpointing | `stt` mode, min delay **0** | `build_session` | Scribe's end-of-speech *is* the turn end. The local turn model has no Greek, so it used to wait for `max_delay` every turn |
 | English pipeline endpointing | dynamic 0.5–1.0 s | `ENDPOINT_MIN_DELAY`, `TURN_MAX_DELAY_MS` | LiveKit Inference semantic turn detector (`local_fallback=False`) |
 | After a readback | 0.8–1.6 s | `CONFIRM_MIN_DELAY`, `CONFIRM_MAX_DELAY` | Gives "Ναι… ολόσωστα" time to finish instead of being cut after "Ναι…". Restored after the next turn |
-| `REALTIME_SILENCE_MS` | 700 | Gemini Live / OpenAI VAD | Silence that ends a turn on the realtime engines |
+| `REALTIME_SILENCE_MS` | 700 | Gemini Live VAD | Silence that ends a turn on the realtime engine |
 | Web demo opening | mic muted during greeting | `run_receptionist` | An early browser-mic sound made Gemini restart its greeting |
-| Outbound opening | wait up to 4 s for "Εμπρός;" | `GREETING_WAIT_SECONDS` | Lets the callee speak first and gives voicemail detection a chance |
+| Reminder call opening | wait up to 4 s for "Εμπρός;" | `GREETING_WAIT_SECONDS` | Lets the customer speak first and gives voicemail detection a chance |
 
 Measured end of speech → first audio: about 1.5–1.8 s on the Greek pipeline before the Scribe end-of-speech change, and about 2 s on realtime. Current numbers live in `/monitor`.
 
@@ -393,15 +389,13 @@ Rules (the owner's, 2026-09-25):
 - `TTS_PRONUNCIATION_ALIASES` replaces whole words, e.g. `{"el":{"OpenAI":"Όπεν έι άι"}}`. Matching survives words split across streamed chunks.
 - The prompt also asks for slower, clearly articulated speech, dates and amounts in words, and phone numbers digit by digit.
 
-**Pre-rendered fixed lines** (`opening.py`). The greeting, the greeting without the recording notice, and the goodbye are known before the call starts. Streamed through Flash v2.5 they sounded rushed, and an English hint in a Greek greeting was read in a Greek accent. So:
+**Pre-rendered fixed lines** (`fixed_lines.py`). The greeting, the greeting without the recording notice, and the goodbye are known before the call starts. Streamed through Flash v2.5 they sounded rushed, and an English hint in a Greek greeting was read in a Greek accent. So:
 
 - they are voiced whole with `eleven_multilingual_v2`, split into Greek and English segments, each voiced in its own language;
 - the audio is cached on disk in the worker's temp dir and keyed by text, voice, model and settings, so later calls reuse it;
 - a call plays the cached audio if it is ready within 2 s. Otherwise it streams the line normally.
 
-**Legacy outbound opening.** On the outbound flow the agent writes and voices its first line *while the phone rings*. It plays that line the moment the callee says "Εμπρός;", or after 4 s of silence.
-
-**Fillers** (`fillers.py`). On the outbound pipeline, if the reply hasn't started 0.5 s after the caller stops, the agent prefixes it with "Μάλιστα…" or "One moment…". There is at most one filler every 4 s and none before a goodbye. If the model then starts with its own filler, that one is stripped. Fillers are **off for receptionist calls**, where the prompt asks for direct answers instead.
+There are no filler words ("Μάλιστα…"): the prompt asks for direct answers instead.
 
 ---
 
@@ -440,7 +434,7 @@ If the backend's routing returns a `handoff` path, the agent starts the transfer
 - **Encryption.** With `DATA_ENCRYPTION_KEY` set, sensitive columns are encrypted: AES-GCM for random fields and AES-SIV for searchable ones such as phone numbers. Recordings are sealed (`.enc`). Without the key the backend logs a warning at startup.
 - **Retention.** A daily job deletes transcripts and telemetry according to each practice's settings. Offboarded practices are purged after 30 days. Data export and erasure requests are handled in `data_requests.py`.
 - **Auth.** Every route except `/health` and the public demo and landing pages needs a key:
-  - `x-api-key` with `APP_API_TOKEN` (legacy dialer), `ADMIN_API_TOKEN` (founder) or a per-practice tenant key;
+  - `x-api-key` with `APP_API_TOKEN` (app connection check), `ADMIN_API_TOKEN` (founder) or a per-practice tenant key;
   - `x-agent-token` for the worker (`INTERNAL_API_TOKEN`).
   
   Tenant keys see only their own practice; anything else returns 404. Demo dashboard links are random tokens stored as SHA-256 hashes.
@@ -450,15 +444,15 @@ If the backend's routing returns a `handoff` path, the agent starts the transfer
 
 ## Backend architecture
 
-FastAPI, async SQLAlchemy and asyncpg on Postgres, with Alembic migrations 0001–0030. Migrations run on container start.
+FastAPI, async SQLAlchemy and asyncpg on Postgres, with Alembic migrations 0001–0031. Migrations run on container start.
 
 ```mermaid
 flowchart TB
     subgraph Routers
         r1[internal<br/>agent only] 
         r2[practices / ops / oauth<br/>founder or tenant]
-        r3[calls / friends / templates<br/>legacy app]
-        r4[demo / demo_dashboard / sparring<br/>public or link-token]
+        r3[calls<br/>recording playback]
+        r4[demo / demo_dashboard<br/>public or link-token]
         r5[monitor<br/>founder]
         r6[manage / recordings / webhooks / landing]
     end
@@ -562,7 +556,7 @@ A finished call can't be reopened, so a late "failed" from a dying worker is ign
   - agent state changes;
   - SDK message metrics: transcription delay, end-of-turn delay, LLM time to first token, TTS time to first byte, end-to-end latency;
   - tool-request spans and transfer spans;
-  - "answer started", which is separate from first sound because first sound can be a filler.
+  - "answer started": when the model's first words are ready, separate from first sound.
   
   Events go out in batches of up to 50 from a 1,000-event queue, with 3 retries and a 5 s drain at shutdown.
 - **Usage → cost.** At the end of a session one `usage_reported` event carries per-provider totals: LLM tokens, STT seconds, TTS characters, turn-detector requests. The backend prices it with the dated versions in `config/pricing.json`, adds telephony and LiveKit minutes, and stores `calls.cost_breakdown`. An unknown rate yields `complete: false`, never a made-up number.
@@ -680,7 +674,6 @@ The main settings are below. See `.env.example` for all of them.
 | Variable | Default | Purpose |
 |---|---|---|
 | `RECEPTIONIST_ENGINE` | `pipeline` | Engine for receptionist calls |
-| `AGENT_ENGINE` | `pipeline` | Engine for legacy outbound calls |
 | `LLM_MODEL` | `gemini-3.5-flash-lite` | Text-pipeline brain |
 | `GEMINI_MODEL` | `gemini-3.8-live` | Realtime engine |
 | `GEMINI_TTS_MODEL` / `_FALLBACK_MODEL` | flash-lite-tts / flash-tts | `text_pipeline` voice |
@@ -711,8 +704,7 @@ The main settings are below. See `.env.example` for all of them.
   - the **backend** (Dockerfile, health `/health`, runs migrations on start);
   - the **agent** (Dockerfile; `agent.py download-files` bakes the VAD and turn models into the image);
   - **Postgres**.
-  
-  `fly.toml` files are kept as an alternative.
+
 - **One backend replica** until live updates and the scheduler stop living in memory.
 - **Agent memory.** An idle worker uses about 530 MB and each extra process about 400 MB. Railway OOM-killed jobs (exit −9), so `NUM_IDLE_PROCESSES=0` was used at one point (it adds about 2 s before dialing). The real fixes are more memory or hosting the agent on LiveKit Cloud. Don't use the local `livekit-plugins-turn-detector` on Railway.
 - **Regions.** The agent runs in EU West next to LiveKit "Germany 2". The backend and Postgres should move to EU West before the Greek go-live; this is tracked in PRD_STATUS.
