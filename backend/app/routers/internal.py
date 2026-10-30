@@ -13,10 +13,10 @@ from app.config import get_settings
 from app.database import get_db
 from app.dispatcher import start_next_queued
 from app import receptionist
-from app.models import Call, CallStatus, CallTelemetryEvent, TranscriptEntry, TranscriptRole
+from app.models import Call, CallStatus, CallTelemetryEvent, Practice, TranscriptEntry, TranscriptRole
 from app.telemetry import TelemetryBatch, telemetry_expired
 from app.schemas import (
-    AdminChangeArgs, AdminConfirmArgs, AdminLoginArgs, AppointmentRef, BookAppointment, LanguageArgs, CallEvent, CheckAvailability, FindArgs, FlagArgs, HandoffResult, InboundStart,
+    AdminChangeArgs, AdminConfirmArgs, AdminLoginArgs, AppointmentRef, BookAppointment, LanguageArgs, CallEvent, CheckAvailability, EvalSessionStart, FindArgs, FlagArgs, HandoffResult, InboundStart,
     MessageArgs, PrepareAction, RescheduleArgs, RouteArgs, TransferArgs, VerifyCodeArgs, WaitlistArgs, normalize_phone,
 )
 from app.storage import queue_recording_deletion
@@ -153,6 +153,22 @@ async def inbound_call(payload: InboundStart, db: AsyncSession = Depends(get_db)
         language = receptionist.call_language(practice, caller)
         line = (receptionist.cap_line if isinstance(e, receptionist.OverCap) else receptionist.busy_line)(practice, language)
         return JSONResponse(status_code=429, content={"busy_line": line, "language": language, "voice": practice.voice})
+    return metadata
+
+
+@router.post("/evals/sessions", dependencies=[Depends(require_master_token)])
+async def eval_session(payload: EvalSessionStart, db: AsyncSession = Depends(get_db)):
+    """Founder only: start an eval call like an inbound one, optionally at a fixed moment, so
+    "next Tuesday" means the same day on every run. Returns the agent's metadata."""
+    practice = await db.get(Practice, payload.practice_id)
+    if practice is None:
+        raise HTTPException(status_code=404, detail="Practice not found")
+    caller = normalize_phone(payload.caller_number) if payload.caller_number else None
+    try:
+        _, metadata = await receptionist.start_call(db, practice, direction="inbound", caller_number=caller,
+                                                   clock_start=payload.now)
+    except (receptionist.Blocked, receptionist.Busy, receptionist.OverCap) as e:
+        raise HTTPException(status_code=409, detail=type(e).__name__.lower())
     return metadata
 
 

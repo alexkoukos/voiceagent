@@ -50,6 +50,15 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def call_now(call: Call) -> datetime:
+    """The call's clock for dates, hours and free times: real time, or for an eval call a
+    clock that started at clock_start and runs at real speed (reproducible "next Tuesday")."""
+    now = utcnow()
+    if call.clock_start is None or call.created_at is None:
+        return now
+    return (call.clock_start + (now.replace(tzinfo=None) - call.created_at)).replace(tzinfo=timezone.utc)
+
+
 def set_outcome(call: Call, outcome: str) -> None:
     if OUTCOME_PRIORITY.get(outcome, 0) >= OUTCOME_PRIORITY.get(call.outcome or "", 0):
         call.outcome = outcome
@@ -154,7 +163,7 @@ def busy_line(practice: Practice, language: str) -> str:
 
 async def start_call(
     db: AsyncSession, practice: Practice, *, direction: str, caller_number: str | None,
-    forwarding_reason: str | None = None, voice: str | None = None,
+    forwarding_reason: str | None = None, voice: str | None = None, clock_start: datetime | None = None,
 ) -> tuple[Call, dict]:
     """Creates the call record for an inbound or web call and returns the agent's metadata.
     Raises Busy when the practice is at its concurrent-call cap (G8), Blocked for a blocked
@@ -167,7 +176,7 @@ async def start_call(
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"admission:{practice.id}"})
     if await active_calls(db, practice.id) >= practice.max_concurrent_calls:
         raise Busy()
-    now = utcnow()
+    now = clock_start.replace(tzinfo=timezone.utc) if clock_start else utcnow()
     language = call_language(practice, caller_number)
     state, _ = booking.hours_state(practice, now)
     customer = None
@@ -188,6 +197,7 @@ async def start_call(
         started_at=datetime.utcnow() if direction == "inbound" else None,
         hours_state=state,
         flags=[],
+        clock_start=clock_start,
     )
     db.add(call)
     await db.flush()
@@ -216,7 +226,7 @@ async def build_metadata(
     customer: Customer | None = None,
     upcoming: list[Appointment] | None = None,
 ) -> dict:
-    now = utcnow()
+    now = call_now(call)
     language = call.language or practice.language
     state, next_open = booking.hours_state(practice, now)
     staff = await booking.staff_of(db, practice.id)
@@ -510,7 +520,7 @@ async def tool_route(db: AsyncSession, call: Call, args) -> dict:
         return {"path": "clarify", "next": "You may have misheard. Briefly ask them to repeat what they need."}
     result = await routing.route(
         db, practice, call, intent=args.intent, staff_name=args.staff or "", department=args.department or "",
-        language=args.language or "", now=utcnow(),
+        language=args.language or "", now=call_now(call),
     )
     if result.get("path") == "emergency":
         await _emergency(db, practice, call)
@@ -615,7 +625,7 @@ async def tool_check_availability(db: AsyncSession, call: Call, args) -> dict:
         owner = await db.get(Staff, moving.staff_id) if moving and moving.staff_id else None
         staff_name = owner.name if owner else None
     result = await booking.check_availability(
-        db, practice, args.when, args.service_id, utcnow(), staff_name=staff_name,
+        db, practice, args.when, args.service_id, call_now(call), staff_name=staff_name,
         staff_ids=await _department_staff(db, practice, call), language=_lang(call, practice), exclude_id=exclude,
         after=booking._hhmm(args.after) if args.after else None,
         before=booking._hhmm(args.before) if args.before else None,
@@ -852,7 +862,7 @@ async def tool_book(db: AsyncSession, call: Call, args) -> dict:
         appt = await booking.book(
             db, practice, day=args.date, start_time=args.time, service_id=args.service_id,
             customer_name=args.customer_name, customer_phone=args.customer_phone or call.caller_number,
-            call_id=call.id, now=utcnow(), staff_name=args.staff,
+            call_id=call.id, now=call_now(call), staff_name=args.staff,
             staff_ids=await _department_staff(db, practice, call), source=source,
         )
     except booking.BookingError as e:
@@ -919,7 +929,7 @@ async def _lookup_other_number(db: AsyncSession, practice: Practice, call: Call,
     if len(re.findall(r"\w+", name or "")) < 2:
         return {"error": "name_required",
                 "next": "Ask for the first and last name the appointment is under. Don't say whether one exists."}
-    appts = [a for a in await booking.upcoming_for(db, practice, phone, utcnow()) if _same_person(a.customer_name, name)]
+    appts = [a for a in await booking.upcoming_for(db, practice, phone, call_now(call)) if _same_person(a.customer_name, name)]
     await routing.log(db, call, "lookup_other_number", "match" if appts else "no_match", "P0-2 spoken number")
     if not appts:
         await db.commit()
@@ -985,7 +995,7 @@ async def tool_find_appointments(db: AsyncSession, call: Call, args) -> dict:
         phone = "+30" + phone
     if phone and phone != call.caller_number:
         return await _lookup_other_number(db, practice, call, phone, args.customer_name)
-    appts = await booking.upcoming_for(db, practice, phone, utcnow())
+    appts = await booking.upcoming_for(db, practice, phone, call_now(call))
     staff = await booking.staff_of(db, practice.id)
     for a in appts:
         await routing.log(db, call, "found", a.id, "B5 lookup by phone")
@@ -1004,7 +1014,7 @@ async def tool_reschedule(db: AsyncSession, call: Call, args) -> dict:
         return {"rescheduled": False, "error": "confirmation_required"}
     try:
         appt, old = await booking.reschedule(
-            db, practice, appointment_id=args.appointment_id, day=args.date, start_time=args.time, now=utcnow()
+            db, practice, appointment_id=args.appointment_id, day=args.date, start_time=args.time, now=call_now(call)
         )
     except booking.BookingError as e:
         if e.code == "calendar_error":
@@ -1182,7 +1192,7 @@ async def tool_add_to_waitlist(db: AsyncSession, call: Call, args) -> dict:
     service = booking.find_service(practice, args.service_id)
     if service is None:
         return {"error": "unknown_service"}
-    today = utcnow().astimezone(ZoneInfo(practice.timezone)).date()
+    today = call_now(call).astimezone(ZoneInfo(practice.timezone)).date()
     resolved = booking.resolve_date(args.when, today)
     start = resolved.day or today
     phone = call.caller_number
@@ -1277,7 +1287,7 @@ async def tool_admin_change(db: AsyncSession, call: Call, args) -> dict:
         return {"error": "login_first"}
     try:
         req = await admin_changes.request(db, practice, staff, args.request, channel="phone",
-                                          now=utcnow(), call_id=call.id)
+                                          now=call_now(call), call_id=call.id)
     except admin_changes.Rejected as e:
         return {"error": "not_understood", "say": e.reply}
     await db.commit()
