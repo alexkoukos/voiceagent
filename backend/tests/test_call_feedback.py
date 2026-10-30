@@ -79,7 +79,7 @@ async def test_two_word_off_topic_is_not_a_strike(sessions, monkeypatch):
 
 def test_greek_number_said_without_country_code():
     from app.schemas import normalize_phone
-    assert normalize_phone("690 762 6384") == "+306907626384"
+    assert normalize_phone("690 000 0123") == "+306900000123"
     assert normalize_phone("2101234567") == "+302101234567"
     assert normalize_phone("+12025550100") == "+12025550100"
 

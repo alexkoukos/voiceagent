@@ -87,7 +87,7 @@ struct DialPadView: View {
         number = String(kept.prefix(16))
     }
 
-    /// A Greek number as people write it: "+30 690 762 6384" / "690 762 6384".
+    /// A Greek number as people write it: "+30 690 000 0123" / "690 000 0123".
     static func display(_ raw: String) -> String {
         var digits = raw
         var prefix = ""

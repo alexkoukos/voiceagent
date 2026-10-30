@@ -18,11 +18,11 @@ Voice = Literal["default", "Puck", "Charon", "Fenrir", "Algenib", "Algieba", "Zu
 
 
 def normalize_phone(value: str) -> str:
-    """'+30 690 762-6384' / '0030 (690) 7626384' -> '+306907626384'."""
+    """'+30 690 000-0123' / '0030 (690) 0000123' -> '+306900000123'."""
     cleaned = re.sub(r"[\s\-(). ]", "", value)
     if cleaned.startswith("00"):
         cleaned = "+" + cleaned[2:]
-    # A Greek number said on a call has no country code ("6907626384"): SMS needs it.
+    # A Greek number said on a call has no country code ("6900000123"): SMS needs it.
     if re.fullmatch(r"69\d{8}|2\d{9}", cleaned):
         cleaned = "+30" + cleaned
     return cleaned

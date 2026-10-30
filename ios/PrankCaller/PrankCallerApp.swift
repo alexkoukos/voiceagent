@@ -12,7 +12,7 @@ struct PrankCallerApp: App {
             if let path = UserDefaults.standard.string(forKey: "previewPlayerFile") {
                 PlayerPreview(url: URL(fileURLWithPath: path))
             } else if let number = UserDefaults.standard.string(forKey: "previewDialPad") {
-                // `-previewDialPad 6907626384` (or "" for empty): the speed-dial keypad.
+                // `-previewDialPad 6900000123` (or "" for empty): the speed-dial keypad.
                 DialPadPreview(number: number)
             } else {
                 tabs
