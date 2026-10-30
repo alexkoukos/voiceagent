@@ -8,16 +8,14 @@ from fastapi.concurrency import run_in_threadpool
 
 from starlette.requests import HTTPConnection
 
-from app.auth import require_admin_token, require_app_token, is_master
+from app.auth import require_admin_token, require_app_token
 from app import events
 from app.routers import recordings
 from app.database import get_db
-from app.config import get_settings
-from app.languages import language_for_phone
-from app.dispatcher import active_count, start_call, start_next_queued
+from app.dispatcher import start_next_queued
 from app.livekit_dispatch import end_call
-from app.models import Call, CallStatus, CallTelemetryEvent, Friend, TranscriptEntry
-from app.schemas import CallCreate, CallDetailOut, CallOut
+from app.models import Call, CallStatus, CallTelemetryEvent, TranscriptEntry
+from app.schemas import CallDetailOut, CallOut
 from app.storage import SEALED, presigned_recording_url, queue_recording_deletion, recording_exists
 
 async def protect_practice_call(connection: HTTPConnection, db: AsyncSession = Depends(get_db)):
@@ -38,54 +36,6 @@ async def protect_practice_call(connection: HTTPConnection, db: AsyncSession = D
 
 
 router = APIRouter(prefix="/calls", tags=["calls"], dependencies=[Depends(protect_practice_call)])
-
-
-async def _dialed(db: AsyncSession, number: str) -> Friend:
-    """Speed dial: a saved friend with this number, else an unsaved entry named after the
-    number. It is stored as deleted, so it stays out of the friends list but history still
-    shows who was called."""
-    rows = (await db.execute(select(Friend).where(Friend.phone_number == number)
-                             .order_by(Friend.deleted_at.is_not(None), Friend.created_at))).scalars().all()
-    if rows:
-        return rows[0]
-    friend = Friend(name=number, phone_number=number, deleted_at=datetime.utcnow())
-    db.add(friend)
-    await db.flush()
-    return friend
-
-
-@router.post("", response_model=CallOut)
-async def create_call(payload: CallCreate, db: AsyncSession = Depends(get_db)):
-    if payload.phone_number:
-        friend = await _dialed(db, payload.phone_number)
-    else:
-        friend = await db.get(Friend, payload.friend_id)
-        if friend is None or friend.deleted_at is not None:
-            raise HTTPException(status_code=404, detail="Friend not found")
-
-    settings = get_settings()
-    if payload.from_own_number and not settings.own_caller_number:
-        raise HTTPException(status_code=400, detail="No own caller number is configured")
-    call = Call(
-        friend_id=friend.id,
-        persona=payload.persona,
-        scenario=payload.scenario,
-        context=payload.context,
-        reveal=payload.reveal,
-        voice=payload.voice,
-        max_duration_seconds=min(payload.max_duration_seconds, settings.max_call_duration_seconds),
-        from_own_number=payload.from_own_number,
-        language=payload.language or language_for_phone(friend.phone_number),
-        status=CallStatus.queued,
-    )
-    db.add(call)
-    await db.commit()
-    await db.refresh(call)
-
-    if await active_count(db) < settings.max_concurrent_calls:
-        await start_call(db, call, friend)
-        await db.refresh(call)
-    return call
 
 
 @router.websocket("/{call_id}/ws")

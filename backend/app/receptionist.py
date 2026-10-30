@@ -237,13 +237,13 @@ async def build_metadata(
         )
         if admin:
             prompt += ("\n## Αλλαγές ρυθμίσεων\nΚαλεί από το κινητό του/της " + admin.name + ". Αν ζητήσει αλλαγή "
-                       "(κλειστά, άδεια, ωράριο, τιμή, πληροφορία), κάλεσε πρώτα stop_recording, μετά ζήτα τον κωδικό PIN και κάλεσε admin_login. Μετά "
-                       "admin_change με τα λόγια του, διάβασε το say_and_ask και περίμενε καθαρό «ναι» ή «όχι» πριν το "
-                       "admin_confirm. Ποτέ μην επαναλάβεις τον κωδικό.\n" if lang == "el" else
+                       "(κλειστά, άδεια, ωράριο, τιμή, πληροφορία), κάλεσε πρώτα stop_recording, μετά admin_login (χωρίς στοιχεία) και ζήτα τον κωδικό PIN· "
+                       "το σύστημα ελέγχει μόνο του τα ψηφία. Μετά admin_change με τα λόγια του, διάβασε το say_and_ask "
+                       "και, όταν απαντήσει, κάλεσε admin_confirm. Ποτέ μην επαναλάβεις τον κωδικό.\n" if lang == "el" else
                        "\n## Settings changes\nThis is " + admin.name + "'s registered mobile. If they ask for a change "
-                       "(closure, leave, hours, a price, information), first call stop_recording, then ask for the PIN and call admin_login. Then "
-                       "admin_change with their words, read say_and_ask, and wait for a clear yes or no before "
-                       "admin_confirm. Never repeat the PIN.\n")
+                       "(closure, leave, hours, a price, information), first call stop_recording, then admin_login (no arguments) and ask for the PIN; "
+                       "the system checks the digits itself. Then admin_change with their words, read say_and_ask, "
+                       "and when they answer call admin_confirm. Never repeat the PIN.\n")
         return prompt
 
     record = call.direction != "web"
@@ -650,16 +650,42 @@ YES_PHRASES = ("κλεισ το", "κλειστε το", "κλεισε το", "�
                "go ahead", "book it", "that s right", "sounds good")
 
 
+# Words that may stand next to a yes without changing it («Ναι, τώρα σωστά», «Ναι, ακυρώστε το»).
+# Anything else (a day, a time, a name, «όμως», «περιμένετε») means the reply is not a plain
+# yes: «Ναι ναι, αλλάξτε την ώρα» and «Σωστά, όμως θέλω Τρίτη» were accepted before (audit P0-1).
+YES_COMPANIONS = {
+    "πολυ", "ολο", "τωρα", "το", "αυτο", "ετσι", "ειναι", "μια", "χαρα", "κλεισ", "κλειστε", "κλεισε",
+    "ακυρωστε", "ακυρωσε", "προχωρηστε", "προχωρα", "παρακαλω", "ευχαριστω", "κυρια", "κυριε",
+    "go", "ahead", "book", "it", "that", "s", "is", "right", "sounds", "good", "please", "thanks",
+    "thank", "you", "all", "fine", "do", "cancel", "great",
+}
+NOT_YES = {"οχι", "μη", "μην", "δεν", "no", "not", "wait", "αλλα", "but", "λαθοσ", "wrong"}
+MAX_YES_WORDS = 6
+
+
+def _negative(text: str | None) -> bool:
+    """A clear no («Όχι», «Άκυρο», «no»), for dropping a settings change."""
+    words = set(re.findall(r"\w+", booking._plain(text or "")))
+    return bool(words & {"οχι", "μη", "μην", "ακυρο", "ακυρωσ", "no", "nope", "cancel"})
+
+
+def _yes_word(word: str) -> bool:
+    return word in YES_WORDS or word.startswith(YES_STEMS) or "σωστ" in word
+
+
 def _affirmative(text: str | None) -> bool:
-    """Require an unambiguous yes in the caller's transcribed reply."""
-    plain = booking._plain(text or "")
-    words = set(re.findall(r"[\w]+", plain))
-    if words & {"οχι", "μη", "μην", "δεν", "no", "not", "wait", "αλλα", "but", "λαθοσ", "wrong"}:
+    """A plain yes to the readback, nothing more. Questions, corrections, hesitations and
+    long replies are not a yes: the agent asks again instead of guessing."""
+    raw = (text or "").strip()
+    if not raw or re.search(r"[?;;]", raw):
         return False
-    spaced = " ".join(re.findall(r"[\w]+", plain))
-    return (bool(words & YES_WORDS)
-            or any(w.startswith(YES_STEMS) or "σωστ" in w for w in words)
-            or any(phrase in spaced for phrase in YES_PHRASES))
+    words = re.findall(r"\w+", booking._plain(raw))
+    if not words or len(words) > MAX_YES_WORDS or set(words) & NOT_YES:
+        return False
+    spaced = " ".join(words)
+    phrase_words = {w for phrase in YES_PHRASES if phrase in spaced for w in phrase.split()}
+    has_yes = any(_yes_word(w) for w in words) or bool(phrase_words)
+    return has_yes and all(_yes_word(w) or w in YES_COMPANIONS or w in phrase_words for w in words)
 
 
 async def _offered(db: AsyncSession, call: Call, *, day: str, time: str, service_id: str,
@@ -759,12 +785,28 @@ async def tool_prepare_action(db: AsyncSession, call: Call, args) -> dict:
     return {"confirmation_id": event.id, "say": line}
 
 
+async def _is_latest_caller_turn(db: AsyncSession, call: Call, text: str | None, *, since: datetime) -> bool:
+    """The yes must be what the caller actually said after the readback: their latest stored
+    transcript line, recorded after `since`. After a deletion request no transcript is kept,
+    so the worker's copy of the caller's turn is used."""
+    if call.delete_requested:
+        return True
+    last = (await db.execute(select(TranscriptEntry).where(
+        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.friend,
+    ).order_by(TranscriptEntry.created_at.desc()).limit(1))).scalar_one_or_none()
+    return (last is not None and last.created_at >= since
+            and " ".join(last.text.split()) == " ".join((text or "").split()))
+
+
 async def _confirmed(db: AsyncSession, call: Call, args, action: str) -> bool:
     if not args.confirmation_id or not _affirmative(args.confirmation_text):
         return False
-    event = await db.get(RoutingEvent, args.confirmation_id)
+    # Row lock: two write tools for one confirmation run one after the other.
+    event = await db.get(RoutingEvent, args.confirmation_id, with_for_update=True)
     if (event is None or event.call_id != call.id or event.kind != "confirmation"
             or event.created_at < datetime.utcnow() - timedelta(minutes=4)):
+        return False
+    if not await _is_latest_caller_turn(db, call, args.confirmation_text, since=event.created_at):
         return False
     data = json.loads(event.value)
     if data["action"] != action:
@@ -849,6 +891,95 @@ async def _found_ids(db: AsyncSession, call: Call) -> set[str]:
     return {v for (v,) in rows} | ({call.appointment_id} if call.appointment_id else set())
 
 
+NOT_FOUND = {"appointments": [],
+             "hint": "Say you couldn't find an appointment with these details. Offer to take a message."}
+VERIFY_MINUTES = 10
+VERIFY_TRIES = 3
+
+
+def _same_person(stored: str, said: str) -> bool:
+    """Every word the caller said matches a word of the stored name (accents, case and Greek
+    endings ignored), and they said at least a first and last name."""
+    said_words = re.findall(r"\w+", booking._plain(said or ""))
+    stored_words = re.findall(r"\w+", booking._plain(stored or ""))
+    if len(said_words) < 2:
+        return False
+
+    def close(a: str, b: str) -> bool:
+        stem = min(len(a), len(b)) - 1
+        return a == b or (stem >= 3 and a[:stem] == b[:stem] and abs(len(a) - len(b)) <= 2)
+    return all(any(close(w, s) for s in stored_words) for w in said_words)
+
+
+def _code_hash(call_id: str, code: str) -> str:
+    import hashlib
+    return hashlib.sha256(f"{call_id}:{code}".encode()).hexdigest()
+
+
+async def _lookup_other_number(db: AsyncSession, practice: Practice, call: Call, phone: str, name: str | None) -> dict:
+    """A number other than the caller ID: anyone can say one. Nothing is confirmed until the
+    full name matches, no detail is read back, and a change needs the SMS code sent to that
+    number (audit P0-2)."""
+    if len(re.findall(r"\w+", name or "")) < 2:
+        return {"error": "name_required",
+                "next": "Ask for the first and last name the appointment is under. Don't say whether one exists."}
+    appts = [a for a in await booking.upcoming_for(db, practice, phone, utcnow()) if _same_person(a.customer_name, name)]
+    await routing.log(db, call, "lookup_other_number", "match" if appts else "no_match", "P0-2 spoken number")
+    if not appts:
+        await db.commit()
+        return NOT_FOUND
+    if not (get_settings().telnyx_api_key and get_settings().sms_from):
+        await db.commit()
+        return {"error": "verification_unavailable",
+                "next": "Say you can't change it by phone right now and take a message (take_message). No details."}
+    import secrets
+    code = f"{secrets.randbelow(10**6):06d}"
+    event = RoutingEvent(practice_id=practice.id, call_id=call.id, kind="verify", path="pending", rule="P0-2 SMS code",
+                         value=json.dumps({"h": _code_hash(call.id, code), "ids": [a.id for a in appts], "tries": 0}))
+    db.add(event)
+    await db.flush()
+    body = (f"{practice.name}: ο κωδικός επιβεβαίωσης είναι {code}." if _lang(call, practice) == "el"
+            else f"{practice.name}: your verification code is {code}.")
+    await notifications.queue(db, practice_id=practice.id, kind="verify_code", channel="sms", recipient=phone,
+                              body=body, call_id=call.id, dedupe_key=f"verify:{event.id}")
+    await db.commit()
+    notifications.kick()
+    return {"verification": "sms_sent",
+            "next": "Say we sent a six-digit code by SMS to that number and ask them to read it digit by digit, "
+                    "then call verify_code. Say no appointment details before that."}
+
+
+async def tool_verify_code(db: AsyncSession, call: Call, args) -> dict:
+    """The caller read the SMS code: their appointments on that number become usable."""
+    event = (await db.execute(select(RoutingEvent).where(
+        RoutingEvent.call_id == call.id, RoutingEvent.kind == "verify",
+    ).order_by(RoutingEvent.created_at.desc()).limit(1).with_for_update())).scalar_one_or_none()
+    if event is None or event.path != "pending":
+        return {"error": "nothing_to_verify"}
+    data = json.loads(event.value)
+    if event.created_at < datetime.utcnow() - timedelta(minutes=VERIFY_MINUTES) or data["tries"] >= VERIFY_TRIES:
+        event.path = "expired"
+        await db.commit()
+        return {"error": "locked", "next": "Take a message (take_message) instead."}
+    import hmac
+    if not hmac.compare_digest(data["h"], _code_hash(call.id, args.code)):
+        data["tries"] += 1
+        event.value = json.dumps(data)
+        await db.commit()
+        left = VERIFY_TRIES - data["tries"]
+        return ({"error": "wrong_code", "tries_left": left} if left
+                else {"error": "locked", "next": "Take a message (take_message) instead."})
+    event.path = "verified"
+    practice = await _practice(db, call)
+    appts = [a for a in [await db.get(Appointment, i) for i in data["ids"]]
+             if a and a.practice_id == practice.id and a.status == "booked"]
+    for a in appts:
+        await routing.log(db, call, "found", a.id, "B5 lookup verified by SMS code")
+    await db.commit()
+    staff = await booking.staff_of(db, practice.id)
+    return {"appointments": [booking.describe(practice, a, staff, _lang(call, practice)) for a in appts]}
+
+
 async def tool_find_appointments(db: AsyncSession, call: Call, args) -> dict:
     """Upcoming appointments for the caller's number (or the number they gave)."""
     practice = await _practice(db, call)
@@ -856,6 +987,8 @@ async def tool_find_appointments(db: AsyncSession, call: Call, args) -> dict:
     phone = normalize_phone(args.phone) if args.phone else call.caller_number
     if phone and not phone.startswith("+") and phone.startswith(("69", "2")) and len(phone) == 10:
         phone = "+30" + phone
+    if phone and phone != call.caller_number:
+        return await _lookup_other_number(db, practice, call, phone, args.customer_name)
     appts = await booking.upcoming_for(db, practice, phone, utcnow())
     staff = await booking.staff_of(db, practice.id)
     for a in appts:
@@ -1084,17 +1217,40 @@ async def _admin(db: AsyncSession, call: Call) -> tuple[Practice, Staff | None]:
     return practice, await admin_changes.sender_staff(db, practice, call.caller_number)
 
 
+async def _admin_locked(db: AsyncSession, call: Call) -> bool:
+    """Three wrong PINs in this call, or too many for the practice across calls lately:
+    redialling must not give unlimited tries (audit P0-5)."""
+    if await routing._count(db, call, "admin_login", "fail") >= admin_changes.PIN_TRIES:
+        return True
+    since = datetime.utcnow() - timedelta(hours=admin_changes.PIN_LOCK_HOURS)
+    fails = (await db.execute(select(func.count()).select_from(RoutingEvent).where(
+        RoutingEvent.practice_id == call.practice_id, RoutingEvent.kind == "admin_login",
+        RoutingEvent.value == "fail", RoutingEvent.created_at >= since))).scalar_one()
+    return fails >= admin_changes.PIN_PRACTICE_FAILS
+
+
+async def tool_admin_start(db: AsyncSession, call: Call) -> dict:
+    """Whether this caller may give the PIN now. The worker then takes the PIN digits from the
+    caller's next turn in code; they never reach the model."""
+    _, staff = await _admin(db, call)
+    if staff is None:
+        return {"error": "not_available"}
+    if await _admin_locked(db, call):
+        return {"error": "locked"}
+    return {"ok": True}
+
+
 async def tool_admin_login(db: AsyncSession, call: Call, args) -> dict:
     practice, staff = await _admin(db, call)
     if staff is None:
         return {"error": "not_available"}
-    if await routing._count(db, call, "admin_login", "fail") >= admin_changes.PIN_TRIES:
+    if await _admin_locked(db, call):
         return {"error": "locked"}
     await scrub_pins(db, call)
     if not admin_changes.pin_ok(practice, re.sub(r"\D", "", args.pin)):
         await routing.log(db, call, "admin_login", "fail", "OP2")
         failures = await routing._count(db, call, "admin_login", "fail") + 1
-        if failures >= admin_changes.PIN_TRIES:
+        if failures >= admin_changes.PIN_TRIES or await _admin_locked(db, call):
             await alerts.raise_alert(db, practice, "admin_pin", f"{practice.name}: {failures} wrong PINs",
                                      f"From {call.caller_number}.", call_id=call.id, dedupe_key=f"pin:{call.id}")
         await db.commit()
@@ -1129,7 +1285,7 @@ async def tool_admin_change(db: AsyncSession, call: Call, args) -> dict:
     except admin_changes.Rejected as e:
         return {"error": "not_understood", "say": e.reply}
     await db.commit()
-    return {"say_and_ask": admin_changes.confirm_prompt(practice, req.readback, "phone")}
+    return {"say_and_ask": admin_changes.confirm_prompt(practice, req.readback)}
 
 
 async def tool_admin_confirm(db: AsyncSession, call: Call, args) -> dict:
@@ -1140,7 +1296,17 @@ async def tool_admin_confirm(db: AsyncSession, call: Call, args) -> dict:
     if req is None or req.call_id != call.id:
         await db.commit()
         return {"error": "nothing_pending"}
-    reply = await admin_changes.decide(db, practice, req, args.yes)
+    # Decided on what the caller said after the readback, like bookings (invariant 1).
+    text = args.confirmation_text
+    if not await _is_latest_caller_turn(db, call, text, since=req.created_at):
+        return {"error": "confirmation_required", "next": "Ask again for a clear yes or no."}
+    if _affirmative(text):
+        yes = True
+    elif _negative(text):
+        yes = False
+    else:
+        return {"error": "confirmation_required", "next": "Ask again for a clear yes or no."}
+    reply = await admin_changes.decide(db, practice, req, yes)
     await routing.log(db, call, "admin_change", req.status, "OP2")
     await db.commit()
     notifications.kick()
