@@ -53,55 +53,28 @@ extension View {
 
 // MARK: - Presentational components (render input, emit events; no networking)
 
-/// Status with icon + Greek text; monochrome, so the icon and words carry the meaning.
-struct StatusBadge: View {
-    let call: Call
-
+struct SectionTitle: View {
+    let text: String
+    init(_ text: String) { self.text = text }
     var body: some View {
-        Label(call.statusText, systemImage: call.statusIcon)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(call.isInProgress ? Color.primary : Color.secondary)
+        Text(text).font(.title3.bold()).accessibilityAddTraits(.isHeader)
     }
 }
 
-/// A selectable prank card (radio-button behavior, rendered as a glass card).
-struct PrankCard: View {
-    let title: String
-    let subtitle: String
-    let selected: Bool
-    let action: () -> Void
-
+struct ErrorBanner: View {
+    let text: String
     var body: some View {
-        Button(action: action) {
-            HStack(alignment: .top, spacing: Space.m) {
-                VStack(alignment: .leading, spacing: Space.xs) {
-                    Text(title).font(.body.weight(.semibold)).foregroundStyle(.primary)
-                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(selected ? Palette.ink : Color(.tertiaryLabel))
-            }
-            .padding(Space.l)
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .font(.subheadline)
+            .foregroundStyle(Palette.danger)
+            .padding(Space.m)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(selected ? Palette.inkSoft : .clear,
-                        in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-            .glass()
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(Palette.ink.opacity(selected ? 1 : 0), lineWidth: 1.5)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
+            .background(Palette.danger.opacity(0.1), in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
     }
 }
 
-/// A friend "chip" in the horizontal picker: solid ink when selected, glass otherwise.
-struct FriendChip: View {
+/// A filter chip in a horizontal picker: solid ink when selected, glass otherwise.
+struct Chip: View {
     let name: String
     let selected: Bool
     let action: () -> Void
@@ -126,7 +99,7 @@ struct FriendChip: View {
     }
 }
 
-/// One line of the call transcript as a chat bubble: the friend in ink, the AI on glass.
+/// One line of the call transcript as a chat bubble: the caller in ink, the AI on glass.
 struct TranscriptBubble: View {
     let entry: TranscriptEntry
     let friendName: String
