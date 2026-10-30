@@ -52,7 +52,7 @@ async def test_concurrent_booking_never_double_books(sessions):
 async def test_booking_retry_and_cancel_retry(sessions):
     p = await seed(sessions)
     async with sessions() as db:
-        call = Call(practice_id=p.id, persona="", scenario="")
+        call = Call(practice_id=p.id)
         db.add(call)
         await db.commit()
         first = await book(db, p, call_id=call.id)
@@ -225,9 +225,9 @@ async def test_notification_workers_send_each_row_once_with_bounded_concurrency(
 async def test_finalization_serialized_and_scheduler_recovers(sessions, monkeypatch):
     p = await seed(sessions, notifications={"emails": ["test@example.invalid"]})
     async with sessions() as db:
-        done = Call(practice_id=p.id, persona="", scenario="", direction="inbound",
+        done = Call(practice_id=p.id, direction="inbound",
                     status=CallStatus.completed, outcome="booked", ended_at=datetime.utcnow())
-        active = Call(practice_id=p.id, persona="", scenario="", status=CallStatus.active)
+        active = Call(practice_id=p.id, status=CallStatus.active)
         db.add_all([done, active])
         await db.commit()
     summarize = AsyncMock(return_value="Summary")
@@ -238,7 +238,7 @@ async def test_finalization_serialized_and_scheduler_recovers(sessions, monkeypa
         assert (await db.get(Call, done.id)).finalized
         assert not (await db.get(Call, active.id)).finalized
         assert (await db.execute(select(func.count()).select_from(Notification))).scalar_one() == 2
-        failed = Call(practice_id=p.id, persona="", scenario="", status=CallStatus.failed)
+        failed = Call(practice_id=p.id, status=CallStatus.failed)
         db.add(failed)
         await db.commit()
         scheduled = []
@@ -253,7 +253,7 @@ async def test_calendar_rollback_returns_tool_error(sessions, monkeypatch, opera
     p = await seed(sessions)
     async with sessions() as db:
         appt = await book(db, p)
-        call = Call(practice_id=p.id, persona="", scenario="", appointment_id=appt.id)
+        call = Call(practice_id=p.id, appointment_id=appt.id)
         db.add(call)
         await db.commit()
         call_id = call.id
@@ -276,7 +276,7 @@ async def test_calendar_rollback_returns_tool_error(sessions, monkeypatch, opera
 async def test_availability_requires_appointment_lookup(sessions, monkeypatch):
     p = await seed(sessions)
     async with sessions() as db:
-        call = Call(practice_id=p.id, persona="", scenario="")
+        call = Call(practice_id=p.id)
         db.add(call)
         await db.commit()
         check = AsyncMock()
@@ -312,7 +312,7 @@ async def test_notification_metric_counts_pending_failed_and_missing(sessions):
     p = await seed(sessions, notifications={"emails": ["test@example.invalid"]})
     ended = datetime.utcnow() - timedelta(minutes=2)
     async with sessions() as db:
-        calls = [Call(practice_id=p.id, persona="", scenario="", direction="inbound",
+        calls = [Call(practice_id=p.id, direction="inbound",
                       status=CallStatus.completed, outcome="booked", ended_at=ended) for _ in range(4)]
         db.add_all(calls)
         await db.flush()
@@ -371,7 +371,7 @@ async def test_recording_deletion_survives_provider_failure_and_restart(sessions
 
     monkeypatch.setattr(storage, "delete_recording", failing_delete)
     async with sessions() as db:
-        call = Call(practice_id=p.id, persona="", scenario="", status=CallStatus.completed,
+        call = Call(practice_id=p.id, status=CallStatus.completed,
                     ended_at=datetime.utcnow() - timedelta(minutes=20))
         db.add(call)
         await db.flush()
@@ -396,7 +396,7 @@ async def test_recording_deletion_survives_provider_failure_and_restart(sessions
 async def test_summary_email_recovered_after_recipient_is_configured(sessions):
     p = await seed(sessions, notifications={"emails": []})
     async with sessions() as db:
-        call = Call(practice_id=p.id, persona="", scenario="", direction="inbound",
+        call = Call(practice_id=p.id, direction="inbound",
                     status=CallStatus.completed, outcome="abandoned", finalized=True,
                     summary=finalize.fallback_summary(SimpleNamespace(outcome="abandoned"), "el"),
                     ended_at=datetime.utcnow())
@@ -454,7 +454,7 @@ async def test_earlier_later_and_next_day_follow_the_last_offer(sessions, monkey
                                after=extra.get("after"), before=extra.get("before"))
 
     async with sessions() as db:
-        call = Call(practice_id=p.id, persona="", scenario="")
+        call = Call(practice_id=p.id)
         db.add(call)
         await db.commit()
         first = await receptionist.tool_check_availability(db, call, ask("τη Δευτέρα"))
@@ -476,8 +476,8 @@ async def test_stuck_dialing_call_stops_holding_a_line(sessions):
     p = await seed(sessions)
     async with sessions() as db:
         old = datetime.utcnow() - timedelta(seconds=receptionist.DIALING_STALE_SECONDS + 5)
-        db.add(Call(practice_id=p.id, persona="", scenario="", status=CallStatus.dialing, created_at=old))
-        db.add(Call(practice_id=p.id, persona="", scenario="", status=CallStatus.active, created_at=old))
+        db.add(Call(practice_id=p.id, status=CallStatus.dialing, created_at=old))
+        db.add(Call(practice_id=p.id, status=CallStatus.active, created_at=old))
         await db.commit()
         assert await receptionist.active_calls(db, p.id) == 1
         from app.dispatcher import active_count
@@ -489,7 +489,7 @@ async def test_off_topic_three_strikes(sessions):
     from app import routing
     p = await seed(sessions, language="el")
     async with sessions() as db:
-        call = Call(practice_id=p.id, persona="", scenario="")
+        call = Call(practice_id=p.id)
         db.add(call)
         await db.commit()
         strikes = []

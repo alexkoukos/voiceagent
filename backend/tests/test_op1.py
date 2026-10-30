@@ -27,7 +27,7 @@ async def _seed(sessions, **test_call) -> Practice:
 
 def _test_call(practice: Practice, **kw) -> Call:
     return Call(practice_id=practice.id, direction="outbound", purpose="test", use_case="outbound",
-                persona="", scenario="", caller_number=TEST_NUMBER, created_at=datetime.utcnow(), **kw)
+                caller_number=TEST_NUMBER, created_at=datetime.utcnow(), **kw)
 
 
 async def _count(db, model, **where) -> int:

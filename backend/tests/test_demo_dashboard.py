@@ -71,7 +71,7 @@ async def test_metrics_isolate_links_and_omit_private_fields(shared_http, sessio
     first, second = await make_link(http, pid), await make_link(http, pid)
     async with sessions() as db:
         def call(**kwargs):
-            return Call(persona='', scenario='', practice_id=pid, direction='web',
+            return Call(practice_id=pid, direction='web',
                         status=CallStatus.completed, **kwargs)
         visible = call(demo_dashboard_id=first['id'], summary='PRIVATE NAME', duration_seconds=60,
                        outcome='booked', cost_breakdown={'known_usd': .2, 'complete': True,
@@ -134,7 +134,7 @@ async def test_session_attaches_link_before_dispatch(shared_http, sessions, monk
     http, (pid, _) = shared_http
     link = await make_link(http, pid)
     async def start_call(db, practice, **kwargs):
-        call = Call(practice_id=practice.id, persona='', scenario='', direction='web')
+        call = Call(practice_id=practice.id, direction='web')
         db.add(call); await db.commit()
         return call, {'call_id': call.id}
     async def dispatch(room, metadata):

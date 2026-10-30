@@ -181,8 +181,6 @@ async def start_call(
         direction=direction,
         caller_number=caller_number,
         customer_id=customer.id if customer else None,
-        persona="",
-        scenario="",
         # The web demo's male/female toggle picks the voice for this one call.
         voice=voice or practice.voice,
         language=language,
@@ -394,7 +392,7 @@ def room_of(call: Call) -> str:
 
 def _outbound_call(practice: Practice, phone: str, purpose: str, appointment_id: str | None = None) -> Call:
     return Call(
-        practice_id=practice.id, direction="outbound", caller_number=phone, persona="", scenario="",
+        practice_id=practice.id, direction="outbound", caller_number=phone,
         voice=practice.voice, language=call_language(practice, phone),
         max_duration_seconds=min(180, get_settings().max_call_duration_seconds),
         status=CallStatus.queued, purpose=purpose, appointment_id=appointment_id, use_case="outbound", flags=[],
