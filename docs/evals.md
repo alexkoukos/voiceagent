@@ -34,6 +34,8 @@ Wording checks (outcome, tools, what the agent said) are warnings.
 | EVAL-009 | Transfer with failed-transfer fallback | text |
 | EVAL-010 | Ambiguous caller needing clarification | text |
 | EVAL-011 | No booking without the caller's yes | text, all checks critical |
+| EVAL-012–015 | Everyday Greek yeses, name vs staff, English mode stays on | text |
+| EVAL-016 | A yes with a correction at the readback does not book | text, all checks critical |
 
 Not covered by text evals: speech recognition, turn detection, barge-in, TTS, Gemini
 Live (`realtime`). Use `agent/scripts/scripted_calls.py` (WebRTC, synthetic caller voice)

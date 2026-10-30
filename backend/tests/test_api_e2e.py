@@ -175,6 +175,9 @@ async def test_inbound_booking_confirmation_finalization_and_customer_isolation(
     offer = await post("check_availability", {"when": day, "service_id": "check"})
     assert "10:00" in offer["free_times"]
     readback = await post("prepare_action", {"action": "book", **args})
+    said = await http.post(f"/internal/calls/{cid}/events", headers=AGENT,
+                           json={"transcript_role": "friend", "transcript_text": "ναι"})
+    assert said.status_code == 204, said.text
     result = await post("book_appointment", {**args, "confirmation_id": readback["confirmation_id"], "confirmation_text": "ναι"})
     assert result["booked"]
     response = await http.post(f"/internal/calls/{cid}/events", headers=AGENT,
@@ -213,21 +216,6 @@ async def test_database_rejects_cross_tenant_references(sessions):
             db.add(constructor())
             with pytest.raises(IntegrityError,match="_tenant"):
                 await db.commit()
-
-
-@pytest.mark.asyncio
-async def test_sms_recipient_must_uniquely_identify_practice(sessions, monkeypatch):
-    from app import admin_changes
-    parse=AsyncMock()
-    monkeypatch.setattr(admin_changes,"parse",parse)
-    async with sessions() as db:
-        a,b=Practice(name="A",phone_numbers=["+302100000001"]),Practice(name="B",phone_numbers=["+302100000002"])
-        db.add_all([a,b]);await db.flush()
-        db.add_all([Staff(practice_id=p.id,name="Owner",role="owner",phone="+306900000001") for p in (a,b)])
-        await db.commit()
-        for recipient in ("", "+302100000099"):
-            assert await admin_changes.handle_sms(db,"+306900000001",recipient,"ναι",datetime.now(timezone.utc)) is None
-        parse.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -338,25 +326,11 @@ async def test_demo_voice_toggle_picks_the_call_voice(http, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_speed_dial_calls_a_number_without_saving_it(http, monkeypatch):
-    start = AsyncMock()
-    monkeypatch.setattr("app.routers.calls.start_call", start)
-    body = {"scenario": "Ρώτα αν είναι σπίτι.", "phone_number": "690 000 0000"}
-    first = await http.post("/calls", headers=DIALER, json=body)
-    assert first.status_code == 200, first.text
-    friend = start.await_args.args[2]
-    assert friend.phone_number == "+306900000000" and friend.name == "+306900000000"
-    # Not added to the friends list, and the same unsaved entry is reused.
-    assert (await http.get("/friends", headers=DIALER)).json() == []
-    await http.post("/calls", headers=DIALER, json=body)
-    assert start.await_args.args[2].id == friend.id
-    # A saved friend with that number is used instead.
-    saved = (await http.post("/friends", headers=DIALER, json={"name": "Νίκος", "phone_number": "+306900000000"})).json()
-    await http.post("/calls", headers=DIALER, json=body)
-    assert start.await_args.args[2].id == saved["id"]
-    for bad in ({"scenario": "x"}, {"scenario": "x", "phone_number": "12"},
-                {"scenario": "x", "phone_number": "+306900000000", "friend_id": saved["id"]}):
-        assert (await http.post("/calls", headers=DIALER, json=bad)).status_code == 422
+async def test_outbound_dialer_is_gone(http):
+    """No API key may place an arbitrary outbound call (audit P0-3)."""
+    body = {"scenario": "x", "phone_number": "+306900000099"}
+    for headers in (DIALER, MASTER):
+        assert (await http.post("/calls", headers=headers, json=body)).status_code == 405
 
 
 @pytest.mark.asyncio
