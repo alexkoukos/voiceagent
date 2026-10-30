@@ -1,7 +1,5 @@
-from datetime import datetime
-
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy import delete, select
+from fastapi import APIRouter, HTTPException
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Depends
 from fastapi.concurrency import run_in_threadpool
@@ -12,10 +10,7 @@ from app.auth import require_admin_token, require_app_token
 from app import events
 from app.routers import recordings
 from app.database import get_db
-from app.dispatcher import start_next_queued
-from app.livekit_dispatch import end_call
-from app.models import Call, CallStatus, CallTelemetryEvent, TranscriptEntry
-from app.schemas import CallDetailOut, CallOut
+from app.models import Call, CallTelemetryEvent, TranscriptEntry
 from app.storage import SEALED, presigned_recording_url, queue_recording_deletion, recording_exists
 
 async def protect_practice_call(connection: HTTPConnection, db: AsyncSession = Depends(get_db)):
@@ -36,39 +31,6 @@ async def protect_practice_call(connection: HTTPConnection, db: AsyncSession = D
 
 
 router = APIRouter(prefix="/calls", tags=["calls"], dependencies=[Depends(protect_practice_call)])
-
-
-@router.websocket("/{call_id}/ws")
-async def call_updates(websocket: WebSocket, call_id: str):
-    await websocket.accept()
-    q = events.subscribe(call_id)
-    try:
-        await websocket.send_text("changed")
-        while True:
-            await q.get()
-            await websocket.send_text("changed")
-    except WebSocketDisconnect:
-        pass
-    finally:
-        events.unsubscribe(call_id, q)
-
-
-@router.get("/{call_id}", response_model=CallDetailOut)
-async def get_call(call_id: str, db: AsyncSession = Depends(get_db)):
-    call = await db.get(Call, call_id)
-    if call is None:
-        raise HTTPException(status_code=404, detail="Call not found")
-    await db.refresh(call, attribute_names=["transcript_entries"])
-    return call
-
-
-@router.get("", response_model=list[CallOut])
-async def list_calls(db: AsyncSession = Depends(get_db)):
-    # The app's history is outbound calls; receptionist calls are listed per practice.
-    result = await db.execute(
-        select(Call).where(Call.friend_id.is_not(None)).order_by(Call.created_at.desc())
-    )
-    return result.scalars().all()
 
 
 @router.get("/{call_id}/recording")
@@ -97,31 +59,3 @@ async def delete_call_recording(call_id: str, db: AsyncSession = Depends(get_db)
     await db.execute(delete(CallTelemetryEvent).where(CallTelemetryEvent.call_id == call.id))
     await db.commit()
     events.publish(call.id)
-
-
-@router.post("/{call_id}/hangup", response_model=CallOut)
-async def hangup_call(call_id: str, db: AsyncSession = Depends(get_db)):
-    call = await db.get(Call, call_id)
-    if call is None:
-        raise HTTPException(status_code=404, detail="Call not found")
-
-    if call.status == CallStatus.queued:
-        call.status = CallStatus.cancelled
-        call.ended_at = datetime.utcnow()
-    elif call.status in (CallStatus.dialing, CallStatus.active):
-        try:
-            await end_call(call.id)
-        except Exception:
-            raise HTTPException(status_code=502, detail="Could not end the call")
-        call.status = CallStatus.completed
-        call.ended_at = datetime.utcnow()
-        if call.started_at:
-            call.duration_seconds = int((call.ended_at - call.started_at).total_seconds())
-    else:
-        raise HTTPException(status_code=400, detail="Call is not in progress")
-
-    await db.commit()
-    await db.refresh(call)
-    events.publish(call.id)
-    await start_next_queued(db)
-    return call

@@ -93,11 +93,9 @@ async def test_calls_recordings_alerts_devices_and_revocation_are_scoped(http, s
         person = Staff(practice_id=b["id"], name="B staff")
         db.add_all([ca, cb, aa, ab, person]); await db.commit()
         ids = ca.id, cb.id, aa.id, ab.id, person.id
-    assert (await http.get(f"/calls/{ids[0]}", headers=key)).status_code == 200
-    for path in (f"/calls/{ids[1]}", f"/calls/{ids[1]}/recording"):
-        assert (await http.get(path, headers=key)).status_code == 404
-        assert (await http.get(path, headers=DIALER)).status_code == 403
-    assert (await http.post(f"/calls/{ids[1]}/hangup", headers=key)).status_code == 404
+    path = f"/calls/{ids[1]}/recording"
+    assert (await http.get(path, headers=key)).status_code == 404
+    assert (await http.get(path, headers=DIALER)).status_code == 403
     assert (await http.delete(f"/calls/{ids[1]}/recording", headers=key)).status_code == 404
     assert [x["id"] for x in (await http.get("/alerts", headers=key)).json()] == [ids[2]]
     assert (await http.post(f"/alerts/{ids[3]}/ack", headers=key)).status_code == 404
@@ -224,9 +222,6 @@ async def test_websocket_scope_is_checked_before_accept(http, sessions):
     from contextlib import suppress
     a,b=await create(http,"Alpha"),await create(http,"Bravo")
     key,_=await key_for(http,a["id"])
-    async with sessions() as db:
-        call=Call(practice_id=b["id"],persona="",scenario="")
-        db.add(call);await db.commit();cid=call.id
     async def connect(path, headers):
         outputs=asyncio.Queue()
         inputs=asyncio.Queue()
@@ -243,9 +238,8 @@ async def test_websocket_scope_is_checked_before_accept(http, sessions):
             task.cancel()
             with suppress(asyncio.CancelledError): await task
     assert (await connect(f"/practices/{a['id']}/ws",key))["type"] == "websocket.accept"
-    for path in (f"/practices/{b['id']}/ws",f"/calls/{cid}/ws"):
-        result=await connect(path,key)
-        assert result["type"] == "websocket.http.response.start" and result["status"] == 404
+    result=await connect(f"/practices/{b['id']}/ws",key)
+    assert result["type"] == "websocket.http.response.start" and result["status"] == 404
     assert (await connect(f"/practices/{a['id']}/ws",DIALER))["status"] == 403
 
 
@@ -330,4 +324,4 @@ async def test_outbound_dialer_is_gone(http):
     """No API key may place an arbitrary outbound call (audit P0-3)."""
     body = {"scenario": "x", "phone_number": "+306900000099"}
     for headers in (DIALER, MASTER):
-        assert (await http.post("/calls", headers=headers, json=body)).status_code == 405
+        assert (await http.post("/calls", headers=headers, json=body)).status_code == 404
