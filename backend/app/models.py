@@ -289,6 +289,8 @@ class Call(Base):
     max_duration_seconds: Mapped[int] = mapped_column(Integer, default=300)
     # Language the call starts in (e.g. "el"); the agent follows the friend if they switch.
     language: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Eval calls only: the call's clock starts here (UTC) instead of the real time.
+    clock_start: Mapped[datetime | None] = mapped_column(nullable=True)
 
     status: Mapped[CallStatus] = mapped_column(
         Enum(CallStatus), default=CallStatus.pending
