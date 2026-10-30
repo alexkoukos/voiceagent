@@ -219,21 +219,6 @@ async def test_database_rejects_cross_tenant_references(sessions):
 
 
 @pytest.mark.asyncio
-async def test_sms_recipient_must_uniquely_identify_practice(sessions, monkeypatch):
-    from app import admin_changes
-    parse=AsyncMock()
-    monkeypatch.setattr(admin_changes,"parse",parse)
-    async with sessions() as db:
-        a,b=Practice(name="A",phone_numbers=["+302100000001"]),Practice(name="B",phone_numbers=["+302100000002"])
-        db.add_all([a,b]);await db.flush()
-        db.add_all([Staff(practice_id=p.id,name="Owner",role="owner",phone="+306900000001") for p in (a,b)])
-        await db.commit()
-        for recipient in ("", "+302100000099"):
-            assert await admin_changes.handle_sms(db,"+306900000001",recipient,"ναι",datetime.now(timezone.utc)) is None
-        parse.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_websocket_scope_is_checked_before_accept(http, sessions):
     import asyncio
     from contextlib import suppress

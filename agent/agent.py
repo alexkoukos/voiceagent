@@ -469,6 +469,18 @@ def _chunk_text(chunk) -> str:
     return getattr(getattr(chunk, "delta", None), "content", None) or ""
 
 
+PIN_NOTE = "[The caller said their PIN; the system checked it. Result: {result}]"
+
+
+def mask_pin(chat_ctx) -> None:
+    """Replace a PIN-like latest caller message before it is sent to the model."""
+    for item in reversed(getattr(chat_ctx, "items", [])):
+        if getattr(item, "role", None) == "user":
+            if len(spoken_digits(item.text_content or "")) >= 4:
+                item.content = [PIN_NOTE.format(result="pending")]
+            return
+
+
 class ReceptionistAgent(PrankCallerAgent):
     """Answers a practice's phone. Routing, dates, free times, bookings and messages all
     come from the backend; the model only passes on what the caller said."""
@@ -702,14 +714,18 @@ class ReceptionistAgent(PrankCallerAgent):
         return await self._tool("add_to_waitlist", {"when": when, "service_id": service_id, "customer_name": customer_name})
 
     @function_tool
-    async def admin_login(self, pin: str) -> str:
-        """Checks the PIN of a staff member calling from their registered mobile to change settings.
-        Only when the prompt says this caller may change settings, after stop_recording.
-
-        Args:
-            pin: The digits they said.
-        """
-        return await self._tool("admin_login", {"pin": pin})
+    async def admin_login(self) -> str:
+        """Starts the PIN check for a staff member calling from their registered mobile to change
+        settings. Only when the prompt says this caller may change settings, after stop_recording.
+        Then ask for the PIN: the system reads and checks the digits itself."""
+        if self._rc.engine not in ("pipeline", "text_pipeline"):
+            # Speech-to-speech models hear the digits themselves: no changes by phone there.
+            return json.dumps({"error": "not_available"})
+        result = await self._rc.tool("admin_start", {})
+        if result.get("ok"):
+            self._rc.awaiting_pin = True
+            result["next"] = "Ask for the PIN. Never repeat or confirm any digits."
+        return json.dumps(result, ensure_ascii=False)
 
     @function_tool
     async def admin_change(self, request: str) -> str:
@@ -722,13 +738,30 @@ class ReceptionistAgent(PrankCallerAgent):
         return await self._tool("admin_change", {"request": request})
 
     @function_tool
-    async def admin_confirm(self, yes: bool) -> str:
-        """Applies (yes) or drops (no) the change admin_change read back. Say the returned `say`.
+    async def admin_confirm(self) -> str:
+        """Call after the caller answered the change admin_change read back. The system decides
+        from their own words whether it was a yes or a no. Say the returned `say`."""
+        await self._rc.caller_line_stored()
+        return await self._tool("admin_confirm", {"confirmation_text": self._rc._last_user_text})
 
-        Args:
-            yes: True only for a clear yes.
-        """
-        return await self._tool("admin_confirm", {"yes": yes})
+    async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+        # The PIN: taken from the caller's words here and replaced in the history, transcript
+        # and model input by a note with the result (audit P0-5).
+        if not self._rc.awaiting_pin:
+            return
+        digits = spoken_digits(new_message.text_content or "")
+        if len(digits) < 4:
+            return  # not the PIN yet («ένα λεπτό να τον βρω»): keep waiting for it
+        self._rc.awaiting_pin = False
+        result = await self._rc.tool("admin_login", {"pin": digits[:12]})
+        new_message.content = [PIN_NOTE.format(result=json.dumps(result, ensure_ascii=False))]
+
+    async def llm_node(self, chat_ctx, tools, model_settings):
+        if self._rc.awaiting_pin:
+            # Preemptive generation runs before on_user_turn_completed: keep digits out of it too.
+            mask_pin(chat_ctx)
+        async for chunk in super().llm_node(chat_ctx, tools, model_settings):
+            yield chunk
 
     @function_tool
     async def stop_recording(self) -> str:
@@ -1194,6 +1227,7 @@ class ReceptionistCall:
         self._handoff_pending = False
         self._tool_lock = asyncio.Lock()
         self.caller_reports: set[asyncio.Task] = set()
+        self.awaiting_pin = False
 
     def fixed_voice(self) -> str | None:
         """ElevenLabs voice for pre-voiced fixed lines (pipeline engine only)."""
