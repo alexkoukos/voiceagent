@@ -107,6 +107,7 @@ voiceagent/
 │   ├── agent.py                Engines, agents, tools, call orchestration (the core)
 │   ├── speech.py               Delivery settings, Greek time-to-words, pronunciation aliases
 │   ├── fixed_lines.py          Greeting, goodbye and other fixed lines, voiced in advance and cached
+│   ├── providers/              Speech-to-text, language model and voice per engine (stt.py, llm.py, tts.py)
 │   ├── voices.py               App voice keys -> ElevenLabs / Gemini voices
 │   ├── telemetry.py            Content-free timing/usage events, batched to the backend
 │   ├── evals/                  Eval Suite (evals.json, run_evals.py, practice.json)
@@ -674,6 +675,7 @@ The main settings are below. See `.env.example` for all of them.
 | Variable | Default | Purpose |
 |---|---|---|
 | `RECEPTIONIST_ENGINE` | `pipeline` | Engine for receptionist calls |
+| `STT_PROVIDER` / `LLM_PROVIDER` | engine's own | Replace one part of the `pipeline` engine (`scribe` or `deepgram`; `gemini-flash-lite`). The fallback engine keeps its parts |
 | `LLM_MODEL` | `gemini-3.5-flash-lite` | Text-pipeline brain |
 | `GEMINI_MODEL` | `gemini-3.8-live` | Realtime engine |
 | `GEMINI_TTS_MODEL` / `_FALLBACK_MODEL` | flash-lite-tts / flash-tts | `text_pipeline` voice |
