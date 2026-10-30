@@ -91,7 +91,7 @@ class Settings(BaseSettings):
     # Background jobs: notification sender, digests, reminders, retention.
     scheduler_enabled: bool = True
 
-    max_call_duration_seconds: int = 300
+    max_call_duration_seconds: int = 720  # 12 minutes
     max_concurrent_calls: int = 1
 
     # Agent the backend dispatches receptionist web calls to; "prank-caller-test" for a local worker.

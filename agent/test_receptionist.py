@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -379,3 +380,54 @@ async def test_sparring_heckles_a_long_turn_once(monkeypatch):
     state(type("E", (), {"new_state": "speaking"}))
     await asyncio.sleep(0.1)
     assert len(session.said) == 1
+
+
+@pytest.mark.asyncio
+async def test_emergency_line_is_spoken_word_for_word(monkeypatch):
+    """The 166/112 line is said verbatim, not paraphrased by the model (audit P1-4)."""
+    script = "Αυτό ακούγεται επείγον. Καλέστε αμέσως το 166 ή το 112."
+    spoken = SimpleNamespace(wait_for_playout=AsyncMock())
+    session = SimpleNamespace(interrupt=Mock(), say=Mock(return_value=spoken), generate_reply=Mock())
+    ctx = SimpleNamespace(room=SimpleNamespace(name="room"))
+    rc = worker.ReceptionistCall(ctx, {"call_id": "c", "language": "el", "emergency": {
+        "enabled": True, "phrases": ["δεν αναπνέει"], "script": {"el": script, "en": "Call 112."}}}, "text_pipeline")
+    rc.session = session
+    rc.tool = AsyncMock(return_value={})
+    rc.check_emergency("Βοήθεια, ο πατέρας μου δεν αναπνέει!")
+    await asyncio.gather(*rc._tasks)
+    session.say.assert_called_once()
+    assert session.say.call_args.args[0] == script
+    rc.tool.assert_awaited_once_with("emergency", {})
+    assert "take_message" in session.generate_reply.call_args.kwargs["instructions"]
+    assert script not in session.generate_reply.call_args.kwargs["instructions"]
+
+
+@pytest.mark.parametrize("said,digits", [
+    ("τέσσερα, πέντε, έξι, ένα, δύο, μηδέν", "456120"),
+    ("Ο κωδικός είναι 4 5 6 1 2 0", "456120"),
+    ("Εννιά οχτώ εφτά τρία τρεις μία", "987331"),
+    ("four five six one two zero", "456120"),
+    ("Oh, it's 4 5 6", "456"),
+    ("Δεν τον έχω ακόμα", ""),
+])
+def test_spoken_digits(said, digits):
+    assert worker.spoken_digits(said) == digits
+
+
+@pytest.mark.asyncio
+async def test_pin_is_taken_in_code_and_never_reaches_the_model():
+    rc = SimpleNamespace(awaiting_pin=True, tool=AsyncMock(return_value={"ok": True}), engine="pipeline")
+    agent = worker.ReceptionistAgent(call=rc, instructions="x", call_id="c", language="el", language_name="Greek")
+    waiting = worker.llm.ChatMessage(role="user", content=["Ένα λεπτό να τον βρω"])
+    await agent.on_user_turn_completed(None, waiting)
+    assert rc.awaiting_pin and waiting.text_content == "Ένα λεπτό να τον βρω"
+    rc.tool.assert_not_awaited()
+
+    said = worker.llm.ChatMessage(role="user", content=["Είναι τέσσερα οκτώ δύο ένα"])
+    preemptive = worker.llm.ChatContext([worker.llm.ChatMessage(role="user", content=["Είναι 4 8 2 1"])])
+    worker.mask_pin(preemptive)
+    assert worker.spoken_digits(preemptive.items[-1].text_content) == ""
+    await agent.on_user_turn_completed(None, said)
+    rc.tool.assert_awaited_once_with("admin_login", {"pin": "4821"})
+    assert not rc.awaiting_pin
+    assert worker.spoken_digits(said.text_content) == "" and "ok" in said.text_content
