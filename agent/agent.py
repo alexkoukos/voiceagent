@@ -1724,7 +1724,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
     rc = ReceptionistCall(ctx, metadata, await pick_engine(metadata["call_id"], receptionist=True))
     rc.prewarm_fixed_lines()
     call_id = rc.call_id
-    max_duration_seconds = metadata.get("max_duration_seconds", 300)
+    max_duration_seconds = metadata.get("max_duration_seconds", 720)
     logger.info("call %s: receptionist (%s, %s), engine %s, language %s",
                 call_id, metadata.get("practice_id"), metadata.get("direction"), rc.engine, rc.language)
     session = build_session(ctx, rc.engine, metadata.get("voice", "default"), rc.language, metadata.get("vocabulary"))
