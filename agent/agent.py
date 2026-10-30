@@ -469,6 +469,18 @@ def _chunk_text(chunk) -> str:
     return getattr(getattr(chunk, "delta", None), "content", None) or ""
 
 
+PIN_NOTE = "[The caller said their PIN; the system checked it. Result: {result}]"
+
+
+def mask_pin(chat_ctx) -> None:
+    """Replace a PIN-like latest caller message before it is sent to the model."""
+    for item in reversed(getattr(chat_ctx, "items", [])):
+        if getattr(item, "role", None) == "user":
+            if len(spoken_digits(item.text_content or "")) >= 4:
+                item.content = [PIN_NOTE.format(result="pending")]
+            return
+
+
 class ReceptionistAgent(PrankCallerAgent):
     """Answers a practice's phone. Routing, dates, free times, bookings and messages all
     come from the backend; the model only passes on what the caller said."""
@@ -489,6 +501,7 @@ class ReceptionistAgent(PrankCallerAgent):
         payload = dict(args or {})
         if name in ("book_appointment", "reschedule_appointment", "cancel_appointment"):
             payload.update(self._rc.confirmation_for_write())
+            await self._rc.caller_line_stored()
         result = await self._rc.tool(name, payload)
         if name in ("book_appointment", "reschedule_appointment", "cancel_appointment") and not result.get("error"):
             self._rc.clear_confirmation()
@@ -616,13 +629,20 @@ class ReceptionistAgent(PrankCallerAgent):
         })
 
     @function_tool
-    async def find_appointments(self, phone: str = "") -> str:
+    async def find_appointments(self, phone: str = "", customer_name: str = "") -> str:
         """Finds the caller's upcoming appointments, before changing, cancelling or confirming one.
 
         Args:
             phone: The number they booked with, if different from the one they're calling from.
+            customer_name: With another number: the first and last name the appointment is under.
         """
-        return await self._tool("find_appointments", {"phone": phone or None})
+        return await self._tool("find_appointments", {"phone": phone or None, "customer_name": customer_name or None})
+
+    @function_tool
+    async def verify_code(self) -> str:
+        """Checks the SMS code the caller just read out, after find_appointments said sms_sent.
+        The system reads the digits from what the caller said; never repeat them."""
+        return await self._tool("verify_code", {"code": spoken_digits(self._rc._last_user_text)[:12]})
 
     @function_tool
     async def reschedule_appointment(self, appointment_id: str, date: str, time: str) -> str:
@@ -694,14 +714,18 @@ class ReceptionistAgent(PrankCallerAgent):
         return await self._tool("add_to_waitlist", {"when": when, "service_id": service_id, "customer_name": customer_name})
 
     @function_tool
-    async def admin_login(self, pin: str) -> str:
-        """Checks the PIN of a staff member calling from their registered mobile to change settings.
-        Only when the prompt says this caller may change settings, after stop_recording.
-
-        Args:
-            pin: The digits they said.
-        """
-        return await self._tool("admin_login", {"pin": pin})
+    async def admin_login(self) -> str:
+        """Starts the PIN check for a staff member calling from their registered mobile to change
+        settings. Only when the prompt says this caller may change settings, after stop_recording.
+        Then ask for the PIN: the system reads and checks the digits itself."""
+        if self._rc.engine not in ("pipeline", "text_pipeline"):
+            # Speech-to-speech models hear the digits themselves: no changes by phone there.
+            return json.dumps({"error": "not_available"})
+        result = await self._rc.tool("admin_start", {})
+        if result.get("ok"):
+            self._rc.awaiting_pin = True
+            result["next"] = "Ask for the PIN. Never repeat or confirm any digits."
+        return json.dumps(result, ensure_ascii=False)
 
     @function_tool
     async def admin_change(self, request: str) -> str:
@@ -714,13 +738,30 @@ class ReceptionistAgent(PrankCallerAgent):
         return await self._tool("admin_change", {"request": request})
 
     @function_tool
-    async def admin_confirm(self, yes: bool) -> str:
-        """Applies (yes) or drops (no) the change admin_change read back. Say the returned `say`.
+    async def admin_confirm(self) -> str:
+        """Call after the caller answered the change admin_change read back. The system decides
+        from their own words whether it was a yes or a no. Say the returned `say`."""
+        await self._rc.caller_line_stored()
+        return await self._tool("admin_confirm", {"confirmation_text": self._rc._last_user_text})
 
-        Args:
-            yes: True only for a clear yes.
-        """
-        return await self._tool("admin_confirm", {"yes": yes})
+    async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+        # The PIN: taken from the caller's words here and replaced in the history, transcript
+        # and model input by a note with the result (audit P0-5).
+        if not self._rc.awaiting_pin:
+            return
+        digits = spoken_digits(new_message.text_content or "")
+        if len(digits) < 4:
+            return  # not the PIN yet («ένα λεπτό να τον βρω»): keep waiting for it
+        self._rc.awaiting_pin = False
+        result = await self._rc.tool("admin_login", {"pin": digits[:12]})
+        new_message.content = [PIN_NOTE.format(result=json.dumps(result, ensure_ascii=False))]
+
+    async def llm_node(self, chat_ctx, tools, model_settings):
+        if self._rc.awaiting_pin:
+            # Preemptive generation runs before on_user_turn_completed: keep digits out of it too.
+            mask_pin(chat_ctx)
+        async for chunk in super().llm_node(chat_ctx, tools, model_settings):
+            yield chunk
 
     @function_tool
     async def stop_recording(self) -> str:
@@ -764,11 +805,26 @@ def build_tts(engine: str, voice: str, language: str):
     ], max_retry_per_tts=1)
 
 
+def gemini_auth() -> dict:
+    """AI Studio with the key, or Vertex AI in one region (GEMINI_VERTEX_LOCATION, e.g.
+    europe-west3) with the service account in GOOGLE_SERVICE_ACCOUNT_JSON: EU processing."""
+    location = os.environ.get("GEMINI_VERTEX_LOCATION")
+    if not location:
+        return {"api_key": os.environ.get("GEMINI_API_KEY")}
+    from google.oauth2 import service_account
+
+    credentials = service_account.Credentials.from_service_account_info(
+        json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]),
+        scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    return {"vertexai": True, "project": os.environ["GEMINI_VERTEX_PROJECT"], "location": location,
+            "credentials": credentials}
+
+
 def text_llm() -> google.LLM:
     """The pipeline engines' model; the text-mode evals use exactly this too."""
     return google.LLM(
         model=LLM_MODEL,
-        api_key=os.environ.get("GEMINI_API_KEY"),
+        **gemini_auth(),
         temperature=0.9,
         thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
     )
@@ -1082,10 +1138,16 @@ async def publish_web_transcript(
 def track_transcript(
     session: AgentSession, call_id: str, engine: str, *, room: rtc.Room | None = None,
     caller_identity: str | None = None, language: Callable[[], str] | None = None,
+    caller_reports: set | None = None,
 ) -> None:
+    """`caller_reports` collects the caller-line uploads still in flight: a booking write waits
+    for them, because the backend checks the yes against the stored transcript."""
     def _line(role: str, text: str) -> None:
         logger.info("call %s: %s transcript received", call_id, role)
-        asyncio.create_task(report(call_id, transcript_role=role, transcript_text=text))
+        task = asyncio.create_task(report(call_id, transcript_role=role, transcript_text=text))
+        if role == "friend" and caller_reports is not None:
+            caller_reports.add(task)
+            task.add_done_callback(caller_reports.discard)
         if room is not None and caller_identity and language:
             asyncio.create_task(publish_web_transcript(room, role, text, caller_identity, language()))
 
@@ -1179,6 +1241,8 @@ class ReceptionistCall:
         self._availability_checked = False
         self._handoff_pending = False
         self._tool_lock = asyncio.Lock()
+        self.caller_reports: set[asyncio.Task] = set()
+        self.awaiting_pin = False
 
     def fixed_voice(self) -> str | None:
         """ElevenLabs voice for pre-voiced fixed lines (pipeline engine only)."""
@@ -1191,8 +1255,10 @@ class ReceptionistCall:
         voice = self.fixed_voice()
         if voice is None:
             return
-        texts = {self.metadata.get("greeting"), self.metadata.get("greeting_without_recording"),
-                 CLOSING_LINE["el" if self.language == "el" else "en"]}
+        key = "el" if self.language == "el" else "en"
+        texts = {self.metadata.get("greeting"), self.metadata.get("greeting_without_recording"), CLOSING_LINE[key],
+                 ((self.metadata.get("emergency") or {}).get("script") or {}).get(key),
+                 ((self.metadata.get("profanity") or {}).get("script") or {}).get(key)}
         for text in filter(None, texts):
             prerender(text, voice, self.language)
 
@@ -1275,6 +1341,12 @@ class ReceptionistCall:
         if self._confirmation_id and self._confirmation_armed and self._user_turn > self._confirmation_floor:
             return {"confirmation_id": self._confirmation_id, "confirmation_text": self._last_user_text}
         return {}
+
+    async def caller_line_stored(self, timeout: float = 3.0) -> None:
+        """Wait until the caller's latest line is stored; the backend checks the yes against it."""
+        pending = [t for t in self.caller_reports if not t.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=timeout)
 
     def clear_confirmation(self) -> None:
         self._confirmation_id = None
@@ -1385,10 +1457,24 @@ class ReceptionistCall:
             logger.warning("call %s: emergency phrase heard", self.call_id)
             self.spawn(self.tool("emergency", {}))
             self.session.interrupt()
-            quote = "Πες αμέσως ακριβώς αυτό" if self.language == "el" else "Say exactly this right now"
-            then = ("Μετά κράτα επείγον μήνυμα (take_message με urgent true)." if self.language == "el"
-                    else "Then take an urgent message (take_message with urgent true).")
-            self.session.generate_reply(instructions=f"{quote}: {script} {then}")
+            then = ("Μόλις είπες τη φράση έκτακτης ανάγκης. Τώρα κράτα επείγον μήνυμα (take_message με urgent true)."
+                    if self.language == "el" else
+                    "You just said the emergency line. Now take an urgent message (take_message with urgent true).")
+            self.spawn(self._say_then(script, then))
+
+    async def _say_then(self, line: str, then: str | None = None) -> None:
+        """Speak a fixed line word for word (text engines), then let the model continue."""
+        try:
+            if self.engine in ("pipeline", "text_pipeline"):
+                handle = await self.say_fixed(line, allow_interruptions=False, add_to_chat_ctx=True)
+                await asyncio.wait_for(handle.wait_for_playout(), timeout=20)
+                if then:
+                    self.session.generate_reply(instructions=then)
+            else:
+                quote = "Πες αμέσως ακριβώς αυτό" if self.language == "el" else "Say exactly this right now"
+                self.session.generate_reply(instructions=f"{quote}: {line} {then or ''}".strip())
+        except Exception:
+            logger.exception("call %s: fixed line failed", self.call_id)
 
     # --- profanity: one calm, polite reminder when the caller swears at the agent ---
 
@@ -1407,8 +1493,7 @@ class ReceptionistCall:
             self._profanity_said = True
             logger.info("call %s: profanity heard, one polite reminder", self.call_id)
             self.session.interrupt()
-            quote = "Πες αμέσως ακριβώς αυτό" if self.language == "el" else "Say exactly this right now"
-            self.session.generate_reply(instructions=f"{quote}: {script}")
+            self.spawn(self._say_then(script))
 
     # --- recording (G7) ---
 
@@ -1566,6 +1651,22 @@ def _plain(s: str) -> str:
     return "".join(c for c in s if unicodedata.category(c) != "Mn").replace("ς", "σ")
 
 
+DIGIT_WORDS = {  # after _plain: no accents, final ς as σ
+    "μηδεν": "0", "μηδενικο": "0", "ενα": "1", "μια": "1", "δυο": "2", "τρια": "3", "τρεισ": "3",
+    "τεσσερα": "4", "τεσσερισ": "4", "πεντε": "5", "εξι": "6", "επτα": "7", "εφτα": "7", "οκτω": "8",
+    "οχτω": "8", "εννεα": "9", "εννια": "9",
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
+    "seven": "7", "eight": "8", "nine": "9",
+}
+
+
+def spoken_digits(text: str) -> str:
+    """Digits a caller read out one by one: «τέσσερα, 5, έξι» -> "456". Taken from the
+    transcript in code so codes and PINs never pass through the model's arguments."""
+    return "".join(token if token.isdigit() else DIGIT_WORDS.get(token, "")
+                   for token in re.findall(r"\d+|[^\W\d_]+", _plain(text or "")))
+
+
 def name_from_transcript(text: str) -> str | None:
     """Extract only a standalone full name or an explicit name correction."""
     if len(text) > 100:
@@ -1596,8 +1697,11 @@ async def say_busy_and_leave(ctx: JobContext, engine: str, busy: dict) -> None:
     """All lines busy (G8): one line, then hang up."""
     session = build_session(ctx, engine, busy.get("voice", "default"), busy.get("language", "el"))
     await session.start(agent=Agent(instructions="Say only the line you are given, then stop."), room=ctx.room)
-    quote = "Πες ακριβώς αυτό" if busy.get("language") == "el" else "Say exactly this"
-    handle = session.generate_reply(instructions=f"{quote}: {busy['busy_line']}", allow_interruptions=False)
+    if engine in ("pipeline", "text_pipeline"):
+        handle = session.say(busy["busy_line"], allow_interruptions=False)
+    else:
+        quote = "Πες ακριβώς αυτό" if busy.get("language") == "el" else "Say exactly this"
+        handle = session.generate_reply(instructions=f"{quote}: {busy['busy_line']}", allow_interruptions=False)
     await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
     await ctx.room.disconnect()
     ctx.shutdown(reason="lines busy")
@@ -1635,7 +1739,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
     rc = ReceptionistCall(ctx, metadata, await pick_engine(metadata["call_id"], receptionist=True))
     rc.prewarm_fixed_lines()
     call_id = rc.call_id
-    max_duration_seconds = metadata.get("max_duration_seconds", 300)
+    max_duration_seconds = metadata.get("max_duration_seconds", 720)
     logger.info("call %s: receptionist (%s, %s), engine %s, language %s",
                 call_id, metadata.get("practice_id"), metadata.get("direction"), rc.engine, rc.language)
     session = build_session(ctx, rc.engine, metadata.get("voice", "default"), rc.language, metadata.get("vocabulary"))
@@ -1679,6 +1783,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
         session, call_id, rc.engine,
         caller_identity=rc.caller_identity,
         language=lambda: rc.language,
+        caller_reports=rc.caller_reports,
     )
     rc.telemetry = track_telemetry(session, ctx, call_id, rc.engine)
     rc.watch_llm_errors()

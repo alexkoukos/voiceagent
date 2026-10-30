@@ -1,10 +1,11 @@
-"""Changes the business asks for in plain words, by SMS or by phone (PRD OP2).
+"""Changes the business asks for in plain words, by phone (PRD OP2).
 
 "Κλειστά 10 έως 25 Αυγούστου", "ο Γιώργος λείπει Παρασκευή", "Τρίτη 10 με 2", "ο καθαρισμός
 κάνει 55€". A text model only turns the words into a structured change; this code checks
 it, reads it back, and applies it after a clear yes. Closures, leave and hours apply at once;
 prices and information go to the founder's approval queue, like the magic link.
-Only a registered staff mobile can ask, and by phone only after the practice PIN.
+Only a registered staff mobile can ask, and only after the practice PIN. Changes by SMS are
+off: a sender number alone can be spoofed (audit P0-5).
 """
 
 import hashlib
@@ -12,7 +13,6 @@ import hmac
 import logging
 import re
 import secrets
-import unicodedata
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 MANAGERS = ("owner", "doctor", "secretary")
 PENDING_MINUTES = 30
 PIN_TRIES = 3
-YES = {"ναι", "ναί", "ne", "nai", "yes", "y", "ok", "οκ", "σωστα", "σωστο", "ν"}
-NO = {"οχι", "ochi", "oxi", "no", "n", "ακυρο", "ακυρωση", "cancel", "ο"}
+# Wrong PINs for one practice across all calls before phone changes lock for PIN_LOCK_HOURS.
+PIN_PRACTICE_FAILS = 6
+PIN_LOCK_HOURS = 24
 
 PARSE_PROMPT = """You turn a message from a business owner or employee into one settings change.
 Today is {today} ({weekday}). Timezone Europe/Athens. Staff: {staff}. Services: {services}.
@@ -46,17 +47,6 @@ Return JSON only, one of:
 {{"action": "unknown"}}
 Dates: a weekday means the next one from today (today itself if it is that weekday).
 Never invent dates or times that are not in the message."""
-
-
-def _plain(s: str) -> str:
-    s = unicodedata.normalize("NFD", s.lower().strip())
-    return re.sub(r"[^\w]", "", "".join(c for c in s if unicodedata.category(c) != "Mn"))
-
-
-def answer(text: str) -> bool | None:
-    """True for yes, False for no, None for anything else."""
-    p = _plain(text)
-    return True if p in YES else False if p in NO else None
 
 
 # --- PIN (phone) ---
@@ -283,34 +273,5 @@ async def decide(db: AsyncSession, practice: Practice, req: AdminRequest, yes: b
               "Sent for review; it applies once approved.")
 
 
-def confirm_prompt(practice: Practice, readback: str, channel: str) -> str:
-    if channel == "sms":
-        return readback + _t(practice, " Απαντήστε ΝΑΙ ή ΟΧΙ.", " Reply YES or NO.")
+def confirm_prompt(practice: Practice, readback: str) -> str:
     return readback + _t(practice, " Σωστά;", " Is that right?")
-
-
-# --- SMS ---
-
-
-async def handle_sms(db: AsyncSession, sender: str, to: str, text: str, now: datetime) -> str | None:
-    """The reply to an SMS from a registered staff mobile; None ignores the sender (unknown
-    numbers get no reply, so nobody can run up SMS costs)."""
-    rows = (await db.execute(select(Staff, Practice).join(Practice, Practice.id == Staff.practice_id).where(
-        Staff.phone == sender, Staff.active.is_(True), Practice.offboarded_at.is_(None)))).all()
-    if not rows:
-        return None
-    matches = [(s, p) for s, p in rows if to and (to in (p.phone_numbers or []) or to == p.outbound_number)]
-    if len(matches) != 1:
-        return None
-    staff, practice = matches[0]
-    yes = answer(text)
-    if yes is not None:
-        req = await pending_for(db, practice, sender)
-        if req is None:
-            return _t(practice, "Δεν υπάρχει αλλαγή σε αναμονή.", "There's no change waiting.")
-        return await decide(db, practice, req, yes)
-    try:
-        req = await request(db, practice, staff, text, channel="sms", now=now)
-    except Rejected as e:
-        return e.reply
-    return confirm_prompt(practice, req.readback, "sms")

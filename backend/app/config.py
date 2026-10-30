@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     livekit_api_secret: str = ""
 
     gemini_api_key: str = ""
+    # Gemini through Vertex AI in one region (e.g. europe-west3, Frankfurt) instead of the global
+    # AI Studio API: EU processing. Uses GOOGLE_SERVICE_ACCOUNT_JSON; the account needs the
+    # "Vertex AI User" role on GEMINI_VERTEX_PROJECT.
+    gemini_vertex_location: str = ""
+    gemini_vertex_project: str = ""
 
     sip_trunk_id: str = ""
     sip_outbound_number: str = ""
@@ -86,7 +91,7 @@ class Settings(BaseSettings):
     # Background jobs: notification sender, digests, reminders, retention.
     scheduler_enabled: bool = True
 
-    max_call_duration_seconds: int = 300
+    max_call_duration_seconds: int = 720  # 12 minutes
     max_concurrent_calls: int = 1
 
     # Agent the backend dispatches receptionist web calls to; "prank-caller-test" for a local worker.
