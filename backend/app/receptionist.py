@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import admin_changes, alerts, booking, events, notifications, routing, texts
 from app.config import get_settings
-from app.languages import english_name
 from app.models import (
     Appointment, Call, CallStatus, Customer, Handoff, Message, Practice, RoutingEvent, Staff, TranscriptEntry,
     TranscriptRole, WaitlistEntry,
@@ -181,8 +180,6 @@ async def start_call(
         direction=direction,
         caller_number=caller_number,
         customer_id=customer.id if customer else None,
-        persona="",
-        scenario="",
         # The web demo's male/female toggle picks the voice for this one call.
         voice=voice or practice.voice,
         language=language,
@@ -265,7 +262,6 @@ async def build_metadata(
         "greeting_instruction": instruction,
         "voice": call.voice or practice.voice,
         "language": language,
-        "language_name": english_name(language),
         "max_duration_seconds": call.max_duration_seconds,
         "record": record,
         "emergency": {
@@ -394,7 +390,7 @@ def room_of(call: Call) -> str:
 
 def _outbound_call(practice: Practice, phone: str, purpose: str, appointment_id: str | None = None) -> Call:
     return Call(
-        practice_id=practice.id, direction="outbound", caller_number=phone, persona="", scenario="",
+        practice_id=practice.id, direction="outbound", caller_number=phone,
         voice=practice.voice, language=call_language(practice, phone),
         max_duration_seconds=min(180, get_settings().max_call_duration_seconds),
         status=CallStatus.queued, purpose=purpose, appointment_id=appointment_id, use_case="outbound", flags=[],

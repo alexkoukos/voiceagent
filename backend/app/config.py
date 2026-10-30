@@ -5,7 +5,6 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
-MASTER_PROMPT_PATH = CONFIG_DIR / "master_prompt.md"
 
 
 class Settings(BaseSettings):
@@ -26,11 +25,6 @@ class Settings(BaseSettings):
 
     sip_trunk_id: str = ""
     sip_outbound_number: str = ""
-    # The owner's own number, verified with Telnyx, for calls placed "from my number".
-    own_caller_number: str = ""
-    # Internal web-only "sparring" page (/sparring/<token>): the agent argues and swears
-    # back. Empty turns the page off.
-    sparring_token: str = ""
     telnyx_public_key: str = ""
 
     # S3-compatible recording storage (a Railway bucket, Cloudflare R2, ...).
@@ -128,8 +122,3 @@ def load_receptionist_prompt(language: str = "el") -> str:
     name = "receptionist_prompt.md" if language == "el" else "receptionist_prompt.en.md"
     return (CONFIG_DIR / name).read_text(encoding="utf-8")
 
-
-def load_master_prompt(language: str = "el") -> str:
-    """Greek calls use the Greek master prompt; every other language the English one."""
-    path = MASTER_PROMPT_PATH if language == "el" else CONFIG_DIR / "master_prompt.en.md"
-    return path.read_text(encoding="utf-8")

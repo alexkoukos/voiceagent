@@ -5,11 +5,11 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import is_master, require_app_token, require_admin_token, require_any_token
+from app.auth import is_master, require_admin_token, require_any_token
 from app.config import get_settings
 from app.database import get_db
 from app.languages import LANGUAGES
-from app.routers import calls, demo, demo_dashboard, friends, internal, landing, manage, monitor, oauth, ops, practices, recordings, sparring, templates, webhooks
+from app.routers import calls, demo, demo_dashboard, internal, landing, manage, monitor, oauth, ops, practices, recordings, webhooks
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
@@ -42,9 +42,7 @@ app = FastAPI(
     openapi_url="/openapi.json" if _docs else None,
 )
 
-app.include_router(friends.router, dependencies=[Depends(require_app_token)])
 app.include_router(calls.router)
-app.include_router(templates.router, dependencies=[Depends(require_app_token)])
 app.include_router(practices.router, dependencies=[Depends(require_admin_token)])
 app.include_router(practices.misc, dependencies=[Depends(require_admin_token)])
 app.include_router(ops.router, dependencies=[Depends(require_admin_token)])
@@ -53,7 +51,6 @@ app.include_router(ops.alerts_router, dependencies=[Depends(require_admin_token)
 app.include_router(internal.router)
 app.include_router(demo.router)
 app.include_router(demo_dashboard.router)
-app.include_router(sparring.router)
 app.include_router(manage.router)
 app.include_router(recordings.router)
 app.include_router(oauth.public)
@@ -74,6 +71,5 @@ async def options(db: AsyncSession = Depends(get_db), x_api_key: str = Header(de
     tenant = bool(db.info.get("tenant_id"))
     return {
         "account_scope": "practice" if tenant else "founder" if is_master(x_api_key) else "dialer",
-        "own_number_available": not tenant and bool(get_settings().own_caller_number),
-        "languages": [{"code": c, "name": n} for c, (n, _) in LANGUAGES.items()],
+        "languages": [{"code": c, "name": n} for c, n in LANGUAGES.items()],
     }

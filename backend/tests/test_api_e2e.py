@@ -87,17 +87,15 @@ async def test_calls_recordings_alerts_devices_and_revocation_are_scoped(http, s
     a, b = await create(http, "Alpha"), await create(http, "Bravo")
     key, key_id = await key_for(http, a["id"])
     async with sessions() as db:
-        ca = Call(practice_id=a["id"], persona="", scenario="", status=CallStatus.completed)
-        cb = Call(practice_id=b["id"], persona="", scenario="", status=CallStatus.completed)
+        ca = Call(practice_id=a["id"], status=CallStatus.completed)
+        cb = Call(practice_id=b["id"], status=CallStatus.completed)
         aa, ab = Alert(practice_id=a["id"], kind="test", subject="A", body=""), Alert(practice_id=b["id"], kind="test", subject="B", body="")
         person = Staff(practice_id=b["id"], name="B staff")
         db.add_all([ca, cb, aa, ab, person]); await db.commit()
         ids = ca.id, cb.id, aa.id, ab.id, person.id
-    assert (await http.get(f"/calls/{ids[0]}", headers=key)).status_code == 200
-    for path in (f"/calls/{ids[1]}", f"/calls/{ids[1]}/recording"):
-        assert (await http.get(path, headers=key)).status_code == 404
-        assert (await http.get(path, headers=DIALER)).status_code == 403
-    assert (await http.post(f"/calls/{ids[1]}/hangup", headers=key)).status_code == 404
+    path = f"/calls/{ids[1]}/recording"
+    assert (await http.get(path, headers=key)).status_code == 404
+    assert (await http.get(path, headers=DIALER)).status_code == 403
     assert (await http.delete(f"/calls/{ids[1]}/recording", headers=key)).status_code == 404
     assert [x["id"] for x in (await http.get("/alerts", headers=key)).json()] == [ids[2]]
     assert (await http.post(f"/alerts/{ids[3]}/ack", headers=key)).status_code == 404
@@ -201,11 +199,11 @@ async def test_database_rejects_cross_tenant_references(sessions):
         db.add_all([a,b]); await db.flush()
         staff = Staff(practice_id=b.id,name="B")
         customer = Customer(practice_id=b.id,phone="+306900000001",name="B")
-        call = Call(practice_id=b.id,persona="",scenario="")
+        call = Call(practice_id=b.id)
         db.add_all([staff,customer,call]);await db.commit()
         aid,sid,cuid,cid=a.id,staff.id,customer.id,call.id
     constructors = [
-        lambda: Call(practice_id=aid,customer_id=cuid,persona="",scenario=""),
+        lambda: Call(practice_id=aid,customer_id=cuid),
         lambda: Message(practice_id=aid,call_id=cid,reason="Test"),
         lambda: Message(practice_id=aid,staff_id=sid,reason="Test"),
         lambda: Device(token="a"*64,practice_id=aid,staff_id=sid),
@@ -224,9 +222,6 @@ async def test_websocket_scope_is_checked_before_accept(http, sessions):
     from contextlib import suppress
     a,b=await create(http,"Alpha"),await create(http,"Bravo")
     key,_=await key_for(http,a["id"])
-    async with sessions() as db:
-        call=Call(practice_id=b["id"],persona="",scenario="")
-        db.add(call);await db.commit();cid=call.id
     async def connect(path, headers):
         outputs=asyncio.Queue()
         inputs=asyncio.Queue()
@@ -243,9 +238,8 @@ async def test_websocket_scope_is_checked_before_accept(http, sessions):
             task.cancel()
             with suppress(asyncio.CancelledError): await task
     assert (await connect(f"/practices/{a['id']}/ws",key))["type"] == "websocket.accept"
-    for path in (f"/practices/{b['id']}/ws",f"/calls/{cid}/ws"):
-        result=await connect(path,key)
-        assert result["type"] == "websocket.http.response.start" and result["status"] == 404
+    result=await connect(f"/practices/{b['id']}/ws",key)
+    assert result["type"] == "websocket.http.response.start" and result["status"] == 404
     assert (await connect(f"/practices/{a['id']}/ws",DIALER))["status"] == 403
 
 
@@ -285,7 +279,7 @@ async def test_billing_guarantee_excludes_demo_other_tenant_and_duplicates(sessi
                              customer_name="Test",starts_at=datetime(2030,2,5,10+i,tzinfo=timezone.utc),
                              ends_at=datetime(2030,2,5,11+i,tzinfo=timezone.utc))
             db.add(appt);await db.flush()
-            db.add(Call(practice_id=owner.id,persona="",scenario="",direction=direction,appointment_id=appt.id,
+            db.add(Call(practice_id=owner.id,direction=direction,appointment_id=appt.id,
                         outcome="booked",status=CallStatus.completed,created_at=datetime(2030,2,1)))
         await db.commit()
         assert await billing.prepare_due(db,a,datetime(2030,2,1,tzinfo=timezone.utc)) == []
@@ -330,36 +324,4 @@ async def test_outbound_dialer_is_gone(http):
     """No API key may place an arbitrary outbound call (audit P0-3)."""
     body = {"scenario": "x", "phone_number": "+306900000099"}
     for headers in (DIALER, MASTER):
-        assert (await http.post("/calls", headers=headers, json=body)).status_code == 405
-
-
-@pytest.mark.asyncio
-async def test_sparring_page_is_secret_web_only(http, monkeypatch):
-    import json
-    from app.routers import sparring
-    settings = get_settings()
-    monkeypatch.setattr(settings, "sparring_token", "")
-    assert (await http.get("/sparring/anything")).status_code == 404
-    monkeypatch.setattr(settings, "sparring_token", "s3cret-token")
-    assert (await http.get("/sparring/wrong")).status_code == 404
-    page = await http.get("/sparring/s3cret-token")
-    assert page.status_code == 200 and "Μπάμπη" in page.text and 'data-default="male"' in page.text
-
-    dispatched = []
-
-    class FakeLK:
-        def __init__(self, *a): self.agent_dispatch = self
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
-        async def create_dispatch(self, request): dispatched.append(request)
-
-    monkeypatch.setattr(sparring.api, "LiveKitAPI", FakeLK)
-    monkeypatch.setattr("app.receptionist.room_token", lambda *a, **k: "tok")
-    r = await http.post("/sparring/s3cret-token/session", json={"gender": "female"})
-    assert r.status_code == 200, r.text
-    meta = json.loads(dispatched[0].metadata)
-    # Never dials or records, and never shows up in the app's call history.
-    assert meta["test_no_dial"] and meta["sparring"] and "phone" not in json.dumps(meta).lower()
-    assert meta["voice"] == "Kore" and "νταής" in meta["prompt"]
-    assert dispatched[0].room == f"spar-{meta['call_id']}"
-    assert (await http.get("/calls", headers=DIALER)).json() == []
+        assert (await http.post("/calls", headers=headers, json=body)).status_code == 404

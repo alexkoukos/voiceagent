@@ -23,7 +23,7 @@ async def _setup(db):
     start = datetime.now(timezone.utc) + timedelta(days=3)
     appt = Appointment(practice_id=practice.id, customer_name="Μαρία Παπαδάκη", customer_phone=OTHER,
                        service_id="visit", service_name="Επίσκεψη", starts_at=start, ends_at=start + timedelta(minutes=30))
-    call = Call(practice_id=practice.id, persona="", scenario="", language="el", caller_number="+306900000001")
+    call = Call(practice_id=practice.id, language="el", caller_number="+306900000001")
     db.add_all([appt, call])
     await db.commit()
     return practice, appt, call

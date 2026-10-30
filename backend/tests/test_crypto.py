@@ -35,8 +35,8 @@ async def test_rows_encrypted_at_rest(sessions, key):
         db.add(practice)
         await db.flush()
         db.add(Customer(practice_id=practice.id, phone="+306900000001", name="Άντα"))
-        call = Call(practice_id=practice.id, direction="inbound", caller_number="+306900000001", persona="",
-                    scenario="", status=CallStatus.completed, summary="Πονάει το δόντι της")
+        call = Call(practice_id=practice.id, direction="inbound", caller_number="+306900000001",
+                    status=CallStatus.completed, summary="Πονάει το δόντι της")
         db.add(call)
         await db.flush()
         db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="με πονάει το δόντι"))
