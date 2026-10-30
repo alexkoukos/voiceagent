@@ -650,16 +650,36 @@ YES_PHRASES = ("κλεισ το", "κλειστε το", "κλεισε το", "�
                "go ahead", "book it", "that s right", "sounds good")
 
 
+# Words that may stand next to a yes without changing it («Ναι, τώρα σωστά», «Ναι, ακυρώστε το»).
+# Anything else (a day, a time, a name, «όμως», «περιμένετε») means the reply is not a plain
+# yes: «Ναι ναι, αλλάξτε την ώρα» and «Σωστά, όμως θέλω Τρίτη» were accepted before (audit P0-1).
+YES_COMPANIONS = {
+    "πολυ", "ολο", "τωρα", "το", "αυτο", "ετσι", "ειναι", "μια", "χαρα", "κλεισ", "κλειστε", "κλεισε",
+    "ακυρωστε", "ακυρωσε", "προχωρηστε", "προχωρα", "παρακαλω", "ευχαριστω", "κυρια", "κυριε",
+    "go", "ahead", "book", "it", "that", "s", "is", "right", "sounds", "good", "please", "thanks",
+    "thank", "you", "all", "fine", "do", "cancel", "great",
+}
+NOT_YES = {"οχι", "μη", "μην", "δεν", "no", "not", "wait", "αλλα", "but", "λαθοσ", "wrong"}
+MAX_YES_WORDS = 6
+
+
+def _yes_word(word: str) -> bool:
+    return word in YES_WORDS or word.startswith(YES_STEMS) or "σωστ" in word
+
+
 def _affirmative(text: str | None) -> bool:
-    """Require an unambiguous yes in the caller's transcribed reply."""
-    plain = booking._plain(text or "")
-    words = set(re.findall(r"[\w]+", plain))
-    if words & {"οχι", "μη", "μην", "δεν", "no", "not", "wait", "αλλα", "but", "λαθοσ", "wrong"}:
+    """A plain yes to the readback, nothing more. Questions, corrections, hesitations and
+    long replies are not a yes: the agent asks again instead of guessing."""
+    raw = (text or "").strip()
+    if not raw or re.search(r"[?;;]", raw):
         return False
-    spaced = " ".join(re.findall(r"[\w]+", plain))
-    return (bool(words & YES_WORDS)
-            or any(w.startswith(YES_STEMS) or "σωστ" in w for w in words)
-            or any(phrase in spaced for phrase in YES_PHRASES))
+    words = re.findall(r"\w+", booking._plain(raw))
+    if not words or len(words) > MAX_YES_WORDS or set(words) & NOT_YES:
+        return False
+    spaced = " ".join(words)
+    phrase_words = {w for phrase in YES_PHRASES if phrase in spaced for w in phrase.split()}
+    has_yes = any(_yes_word(w) for w in words) or bool(phrase_words)
+    return has_yes and all(_yes_word(w) or w in YES_COMPANIONS or w in phrase_words for w in words)
 
 
 async def _offered(db: AsyncSession, call: Call, *, day: str, time: str, service_id: str,
