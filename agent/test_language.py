@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 
 import agent as worker
@@ -42,10 +43,11 @@ def test_text_pipeline_feeds_deepgram_transcript_to_text_model(monkeypatch):
     vad = object()
     models = []
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    monkeypatch.setattr(worker, "caller_stt", lambda language, vocabulary=None: stt)
+    stt_providers = worker.providers.stt.PROVIDERS
+    monkeypatch.setitem(stt_providers, "deepgram", replace(stt_providers["deepgram"], build=lambda *args: stt))
     monkeypatch.setattr(worker.google, "LLM", lambda **kwargs: llm)
     monkeypatch.setattr(worker.google.beta, "GeminiTTS", lambda **kwargs: models.append(kwargs["model"]) or object())
-    monkeypatch.setattr(worker.livekit_tts, "FallbackAdapter", lambda providers, **kwargs: tts)
+    monkeypatch.setattr(worker.providers.tts.livekit_tts, "FallbackAdapter", lambda providers, **kwargs: tts)
     monkeypatch.setattr(worker, "AgentSession", lambda **kwargs: kwargs)
     ctx = SimpleNamespace(proc=SimpleNamespace(userdata={"vad": vad}))
 
@@ -54,7 +56,7 @@ def test_text_pipeline_feeds_deepgram_transcript_to_text_model(monkeypatch):
     assert session["stt"] is stt
     assert session["llm"] is llm
     assert session["tts"] is tts
-    assert models == [worker.GEMINI_TTS_MODEL, worker.GEMINI_TTS_FALLBACK_MODEL]
+    assert models == [worker.providers.tts.GEMINI_TTS_MODEL, worker.providers.tts.GEMINI_TTS_FALLBACK_MODEL]
     assert session["vad"] is vad
     assert session["turn_handling"]["turn_detection"] == "stt"
 
@@ -101,14 +103,22 @@ def test_mentioning_a_language_is_not_a_request():
     assert worker.wants_language("Greek mode") == "el"
 
 
+def stub_parts(monkeypatch):
+    """Every provider builds a placeholder; returns what each one was asked to build."""
+    built = []
+    for registry in (worker.providers.stt.PROVIDERS, worker.providers.tts.PROVIDERS, worker.providers.llm.PROVIDERS):
+        for name, provider in list(registry.items()):
+            monkeypatch.setitem(registry, name, replace(
+                provider, build=lambda *args, name=name: built.append((name, *args)) or (name, *args)))
+    return built
+
+
 @pytest.mark.parametrize("language,semantic", [("el", False), ("en", True)])
 def test_scribe_uses_one_greek_end_of_turn_decision(monkeypatch, language, semantic):
     from unittest.mock import Mock
     detector = Mock(return_value="semantic-detector")
     monkeypatch.setattr(worker.inference, "TurnDetector", detector)
-    monkeypatch.setattr(worker, "scribe_stt", lambda *args: object())
-    monkeypatch.setattr(worker, "build_tts", lambda *args: object())
-    monkeypatch.setattr(worker, "text_llm", lambda: object())
+    stub_parts(monkeypatch)
     monkeypatch.setattr(worker, "AgentSession", lambda **kwargs: kwargs)
     ctx = SimpleNamespace(proc=SimpleNamespace(userdata={"vad": object()}))
     session = worker.build_session(ctx, "pipeline", "default", language)
@@ -117,3 +127,18 @@ def test_scribe_uses_one_greek_end_of_turn_decision(monkeypatch, language, seman
     assert options["endpointing"]["min_delay"] == (worker.ENDPOINT_MIN_DELAY if semantic else 0)
     assert detector.call_count == int(semantic)
     assert options["interruption"]["resume_false_interruption"] is True
+
+
+def test_stt_provider_can_be_swapped_on_the_main_engine_only(monkeypatch):
+    stub_parts(monkeypatch)
+    monkeypatch.setattr(worker, "AgentSession", lambda **kwargs: kwargs)
+    ctx = SimpleNamespace(proc=SimpleNamespace(userdata={"vad": object()}))
+    monkeypatch.setenv("STT_PROVIDER", "deepgram")
+    session = worker.build_session(ctx, "pipeline", "Kore", "el", ["Γιώργος"])
+    assert session["stt"] == ("deepgram", "el", ["Γιώργος"])
+    assert session["tts"] == ("elevenlabs", "Kore", "el")
+    assert session["turn_handling"]["endpointing"]["min_delay"] == worker.ENDPOINT_MIN_DELAY
+    # The fallback engine keeps its own parts.
+    assert worker.build_session(ctx, "text_pipeline", "Kore", "el")["tts"] == ("gemini", "Kore", "el")
+    monkeypatch.delenv("STT_PROVIDER")
+    assert worker.build_session(ctx, "pipeline", "Kore", "el")["stt"] == ("scribe", "el", None)
