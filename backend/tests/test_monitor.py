@@ -34,7 +34,7 @@ async def monitor_http(sessions, monkeypatch):
             yield session
     app.dependency_overrides[get_db] = db
     async with sessions() as db:
-        call = Call(persona="", scenario="", status=CallStatus.active, direction="web")
+        call = Call(status=CallStatus.active, direction="web")
         db.add(call)
         await db.flush()
         db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="Γεια σας"))

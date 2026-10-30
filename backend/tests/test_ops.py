@@ -28,8 +28,7 @@ async def _practice(db, **kw) -> Practice:
 
 
 def _call(practice, **kw) -> Call:
-    return Call(practice_id=practice.id, direction="inbound", caller_number=PHONE, persona="", scenario="",
-                status=CallStatus.completed, **kw)
+    return Call(practice_id=practice.id, direction="inbound", caller_number=PHONE, status=CallStatus.completed, **kw)
 
 
 @pytest.mark.asyncio
@@ -45,8 +44,8 @@ async def test_export_then_erase_one_caller(sessions, monkeypatch):
         db.add(customer)
         await db.flush()
         call = _call(practice, customer_id=customer.id, summary="Ada booked", recording_url="rec/1.ogg")
-        other = Call(practice_id=practice.id, direction="inbound", caller_number="+306900000002", persona="",
-                     scenario="", status=CallStatus.completed, summary="someone else")
+        other = Call(practice_id=practice.id, direction="inbound", caller_number="+306900000002",
+                     status=CallStatus.completed, summary="someone else")
         db.add_all([call, other])
         await db.flush()
         start = datetime.now(timezone.utc) + timedelta(days=2)

@@ -87,8 +87,8 @@ async def test_calls_recordings_alerts_devices_and_revocation_are_scoped(http, s
     a, b = await create(http, "Alpha"), await create(http, "Bravo")
     key, key_id = await key_for(http, a["id"])
     async with sessions() as db:
-        ca = Call(practice_id=a["id"], persona="", scenario="", status=CallStatus.completed)
-        cb = Call(practice_id=b["id"], persona="", scenario="", status=CallStatus.completed)
+        ca = Call(practice_id=a["id"], status=CallStatus.completed)
+        cb = Call(practice_id=b["id"], status=CallStatus.completed)
         aa, ab = Alert(practice_id=a["id"], kind="test", subject="A", body=""), Alert(practice_id=b["id"], kind="test", subject="B", body="")
         person = Staff(practice_id=b["id"], name="B staff")
         db.add_all([ca, cb, aa, ab, person]); await db.commit()
@@ -199,11 +199,11 @@ async def test_database_rejects_cross_tenant_references(sessions):
         db.add_all([a,b]); await db.flush()
         staff = Staff(practice_id=b.id,name="B")
         customer = Customer(practice_id=b.id,phone="+306900000001",name="B")
-        call = Call(practice_id=b.id,persona="",scenario="")
+        call = Call(practice_id=b.id)
         db.add_all([staff,customer,call]);await db.commit()
         aid,sid,cuid,cid=a.id,staff.id,customer.id,call.id
     constructors = [
-        lambda: Call(practice_id=aid,customer_id=cuid,persona="",scenario=""),
+        lambda: Call(practice_id=aid,customer_id=cuid),
         lambda: Message(practice_id=aid,call_id=cid,reason="Test"),
         lambda: Message(practice_id=aid,staff_id=sid,reason="Test"),
         lambda: Device(token="a"*64,practice_id=aid,staff_id=sid),
@@ -279,7 +279,7 @@ async def test_billing_guarantee_excludes_demo_other_tenant_and_duplicates(sessi
                              customer_name="Test",starts_at=datetime(2030,2,5,10+i,tzinfo=timezone.utc),
                              ends_at=datetime(2030,2,5,11+i,tzinfo=timezone.utc))
             db.add(appt);await db.flush()
-            db.add(Call(practice_id=owner.id,persona="",scenario="",direction=direction,appointment_id=appt.id,
+            db.add(Call(practice_id=owner.id,direction=direction,appointment_id=appt.id,
                         outcome="booked",status=CallStatus.completed,created_at=datetime(2030,2,1)))
         await db.commit()
         assert await billing.prepare_due(db,a,datetime(2030,2,1,tzinfo=timezone.utc)) == []
