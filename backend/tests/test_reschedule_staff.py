@@ -30,7 +30,7 @@ async def test_reschedule_offers_only_the_appointments_own_staff_times(sessions)
                                   customer_name="Πελάτης", customer_phone="+306900000001", call_id=None,
                                   now=datetime.now(timezone.utc), staff_name="Άλφα", source="app")
         assert appt.staff_id == monday_only.id
-        call = Call(persona="", scenario="", status=CallStatus.active, direction="inbound",
+        call = Call(status=CallStatus.active, direction="inbound",
                     practice_id=practice.id, caller_number="+306900000001")
         db.add(call)
         await db.commit()

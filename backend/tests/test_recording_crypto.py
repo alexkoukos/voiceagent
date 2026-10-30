@@ -64,7 +64,7 @@ async def test_seal_and_play(sessions, setup):
     audio = bytes(range(256)) * 40
     setup.objects["recordings/c1.mp4"] = audio
     async with sessions() as db:
-        call = Call(persona="", scenario="", status=CallStatus.completed, recording_url="recordings/c1.mp4",
+        call = Call(status=CallStatus.completed, recording_url="recordings/c1.mp4",
                     ended_at=datetime.utcnow() - timedelta(minutes=5))
         db.add(call)
         await db.commit()

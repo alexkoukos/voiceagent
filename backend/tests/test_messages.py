@@ -19,7 +19,7 @@ async def test_repeat_calls_update_one_message_and_alert_once(sessions, monkeypa
         db.add(practice)
         await db.flush()
         doctor = Staff(practice_id=practice.id, name="Δρ. Νίκος", role="doctor", aliases=["γιατρό"])
-        call = Call(persona="", scenario="", status=CallStatus.active, direction="inbound",
+        call = Call(status=CallStatus.active, direction="inbound",
                     practice_id=practice.id, caller_number="+306900000001")
         db.add_all([doctor, call])
         await db.commit()

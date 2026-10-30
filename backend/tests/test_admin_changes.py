@@ -78,8 +78,7 @@ async def test_phone_pin_lockout_and_change(sessions, monkeypatch):
         practice, owner, _ = await _setup(db)
 
         def new_call(number):
-            c = Call(practice_id=practice.id, direction="inbound", caller_number=number, persona="", scenario="",
-                     status=CallStatus.active)
+            c = Call(practice_id=practice.id, direction="inbound", caller_number=number, status=CallStatus.active)
             db.add(c)
             return c
 
@@ -132,16 +131,14 @@ async def test_wrong_pins_lock_the_practice_across_calls(sessions):
         await ops.set_admin_pin(practice.id, AdminPinIn(pin="4821"), db)
         calls = []
         for _ in range(admin_changes.PIN_PRACTICE_FAILS // admin_changes.PIN_TRIES):
-            call = Call(practice_id=practice.id, direction="inbound", caller_number=OWNER, persona="", scenario="",
-                        status=CallStatus.active)
+            call = Call(practice_id=practice.id, direction="inbound", caller_number=OWNER, status=CallStatus.active)
             db.add(call)
             await db.commit()
             assert (await receptionist.tool_admin_start(db, call))["ok"]
             for _ in range(admin_changes.PIN_TRIES):
                 await receptionist.tool_admin_login(db, call, AdminLoginArgs(pin="0000"))
             calls.append(call)
-        redial = Call(practice_id=practice.id, direction="inbound", caller_number=OWNER, persona="", scenario="",
-                      status=CallStatus.active)
+        redial = Call(practice_id=practice.id, direction="inbound", caller_number=OWNER, status=CallStatus.active)
         db.add(redial)
         await db.commit()
         assert (await receptionist.tool_admin_start(db, redial))["error"] == "locked"

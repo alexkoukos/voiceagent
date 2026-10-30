@@ -45,7 +45,7 @@ async def telemetry_http(sessions, monkeypatch):
             yield session
     app.dependency_overrides[get_db] = db
     async with sessions() as db:
-        call = Call(persona="", scenario="", status=CallStatus.completed)
+        call = Call(status=CallStatus.completed)
         db.add(call)
         await db.commit()
         call_id = call.id

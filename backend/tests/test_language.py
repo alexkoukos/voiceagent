@@ -18,8 +18,8 @@ async def test_greek_by_default_english_only_on_request(sessions):
         await db.commit()
         # A foreign number no longer starts the call in English.
         assert receptionist.call_language(practice, "+447700900123") == "el"
-        call = Call(practice_id=practice.id, direction="inbound", caller_number="+447700900123", persona="",
-                    scenario="", status=CallStatus.active, language="el")
+        call = Call(practice_id=practice.id, direction="inbound", caller_number="+447700900123",
+                    status=CallStatus.active, language="el")
         db.add(call)
         await db.commit()
 
