@@ -32,8 +32,7 @@ async def test_receptionist_uses_text_pipeline_when_elevenlabs_has_no_credits(mo
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("ELEVEN_API_KEY", "test-key")
     monkeypatch.setattr(worker, "elevenlabs_usable", unusable)
-    assert await worker.pick_engine("test-call", receptionist=True) == "text_pipeline"
-    assert await worker.pick_engine("test-call", receptionist=False) == "realtime"
+    assert await worker.pick_engine("test-call") == "text_pipeline"
 
 
 def test_text_pipeline_feeds_deepgram_transcript_to_text_model(monkeypatch):

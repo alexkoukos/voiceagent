@@ -1,21 +1,15 @@
 """LiveKit worker for AI Caller.
 
-Registered as agent "prank-caller". It runs two kinds of calls:
-- Receptionist (2.0): an inbound phone call (dispatched by LiveKit's SIP dispatch rule,
-  with no metadata; the backend finds the practice by the dialed number) or a web demo
-  (dispatched by the backend with mode "receptionist"). The agent greets first and books
-  through backend tools (check_availability, book_appointment).
-- Outbound (Level 1): the backend dispatches a job per call
-(see backend/app/livekit_dispatch.py) with job.metadata carrying the merged
-master + per-call prompt, the friend's number, voice, language and the hard
-duration cap. This worker dials out over the Telnyx SIP trunk, runs the
-conversation, records it to S3-compatible storage, reports transcript/status
-back to the backend, and hangs up via its own tool or the duration cap.
+Registered as agent "prank-caller" (the name predates the receptionist; renaming it needs a
+LiveKit dispatch-rule change). It answers a practice's phone: an inbound phone call
+(dispatched by LiveKit's SIP dispatch rule, with no metadata; the backend finds the practice
+by the dialed number), a web demo (dispatched by the backend with mode "receptionist"), or
+an outbound reminder / waitlist call (metadata has dial_number). The agent greets first and
+books through backend tools (check_availability, book_appointment).
 
-Four engines (AGENT_ENGINE):
+Four engines (RECEPTIONIST_ENGINE):
 - "pipeline" (default): ElevenLabs Scribe realtime -> Gemini Flash-Lite ->
-  ElevenLabs voice, with multilingual turn detection, preemptive generation,
-  filler words when a reply is slow, and an opening line prepared during the ring.
+  ElevenLabs voice, with multilingual turn detection and preemptive generation.
 - "realtime": Gemini Live speech-to-speech (the original engine; fallback).
 - "text_pipeline": Deepgram transcription -> Gemini text model -> Gemini speech.
   Receptionist fallback when ElevenLabs is unavailable, so the model receives
@@ -44,7 +38,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
-    StopResponse,
     WorkerOptions,
     RunContext,
     cli,
@@ -54,9 +47,8 @@ from livekit.agents import (
 from livekit.plugins import elevenlabs, google, noise_cancellation, silero
 from livekit.agents.voice.turn import TurnHandlingOptions
 
-from fillers import FILLERS, FillerPicker
 from telemetry import observe_span, track_telemetry
-from opening import fixed_audio, prepare_opening, prerender, ready_opening
+from fixed_lines import fixed_audio, prerender
 from voices import elevenlabs_voice, gemini_voice, openai_voice
 from speech import (
     ELEVENLABS_TTS_MODEL, Pronunciation, elevenlabs_voice_settings, env_number,
@@ -67,10 +59,9 @@ logger = logging.getLogger("prank-caller")
 
 BACKEND_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://localhost:8000")
 AGENT_TOKEN = os.environ.get("INTERNAL_API_TOKEN", "")
-# How long the friend's phone rings before we give up (the library default is 30s).
+# How long a reminder call rings before we give up (the library default is 30s).
 RINGING_TIMEOUT_SECONDS = int(os.environ.get("RINGING_TIMEOUT_SECONDS", "45"))
-ENGINE = os.environ.get("AGENT_ENGINE", "pipeline")
-if ENGINE == "openai":
+if os.environ.get("RECEPTIONIST_ENGINE") == "openai":
     # Plugins must register at import time on the main process; import it only when used,
     # since every worker process pays for what's imported and memory is tight on Railway.
     from livekit.plugins import openai
@@ -88,10 +79,6 @@ REALTIME_SILENCE_MS = int(env_number("REALTIME_SILENCE_MS", 700, 200, 3000))
 # Turn detector (pipeline engine): the longest we wait after the caller stops before
 # treating the turn as finished. Lower is snappier at the risk of cutting slow speech.
 TURN_MAX_DELAY_MS = int(os.environ.get("TURN_MAX_DELAY_MS", "1000"))
-# Say a filler word if the reply hasn't started this long after the friend stops talking.
-FILLER_DELAY_SECONDS = 0.5
-# At most one filler within this many seconds.
-FILLER_GAP_SECONDS = 4
 # Pipeline engine: pause that ends a transcribed segment, and the least wait after the caller
 # stops before replying. Lower is snappier but splits normal-speed speech into fragments.
 SCRIBE_SILENCE_SECS = env_number("SCRIBE_SILENCE_SECS", 0.7, 0.3, 2.0)
@@ -100,12 +87,10 @@ SCRIBE_SILENCE_SECS = env_number("SCRIBE_SILENCE_SECS", 0.7, 0.3, 2.0)
 CONFIRM_MIN_DELAY = env_number("CONFIRM_MIN_DELAY", 0.8, 0.2, 3.0)
 CONFIRM_MAX_DELAY = env_number("CONFIRM_MAX_DELAY", 1.6, 0.5, 5.0)
 ENDPOINT_MIN_DELAY = float(os.environ.get("ENDPOINT_MIN_DELAY", "0.5"))
-# If the callee stays silent after answering, open the conversation after this long.
+# A reminder call waits this long for the customer's "Εμπρός;" before greeting.
 GREETING_WAIT_SECONDS = 4
 # Noise filter on the friend's audio before any model hears it; "off" to compare recognition without it.
 NOISE_CANCELLATION = noise_cancellation_enabled()
-# If the callee spoke but no reply has started this long after, open the conversation anyway.
-OPENING_FALLBACK_SECONDS = 5
 
 
 async def backend_post(path: str, payload: dict, timeout: float = 10) -> dict:
@@ -140,11 +125,6 @@ STORAGE_VARS = ("AWS_ENDPOINT_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"
 
 def storage_configured() -> bool:
     return all(os.environ.get(v) for v in STORAGE_VARS)
-
-
-async def start_recording(lk: api.LiveKitAPI, room_name: str, call_id: str) -> str:
-    key, _ = await start_recording_with_id(lk, room_name, call_id)
-    return key
 
 
 async def start_recording_with_id(lk: api.LiveKitAPI, room_name: str, call_id: str) -> tuple[str, str]:
@@ -184,10 +164,6 @@ def dial_failure_reason(e: Exception) -> str:
     return "error"
 
 
-GREETING = {
-    "el": "Χαιρέτα ευγενικά, όπως στο τηλέφωνο, και ξεκίνα.",
-    "other": "Greet them politely, as on the phone, and start. Speak {language}.",
-}
 TIME_UP = {
     "el": "Ο χρόνος τελειώνει. Κλείσε σύντομα τη συζήτηση, αποχαιρέτα ευγενικά και κλείσε.",
     "other": "Time is almost up. Wrap up briefly, say goodbye politely and hang up.",
@@ -212,219 +188,6 @@ DEFAULT_PROFANITY_SCRIPT = {
 CLOSING_LINE = {"el": "Ευχαριστούμε που καλέσατε. Γεια σας.", "en": "Thank you for calling. Goodbye."}
 
 
-def _for_language(texts: dict[str, str], language: str, language_name: str) -> str:
-    return texts["el"] if language == "el" else texts["other"].format(language=language_name)
-
-
-class PrankCallerAgent(Agent):
-    def __init__(
-        self,
-        *,
-        instructions: str,
-        call_id: str,
-        language: str,
-        language_name: str,
-        opening_task: "asyncio.Task | None" = None,
-        fillers: bool = False,
-        **agent_kwargs,
-    ) -> None:
-        # agent_kwargs: per-agent model parts (llm/stt) and chat_ctx, for a language switch.
-        self._pronunciation = Pronunciation(language)
-        if self._pronunciation.aliases:
-            # Provider alignment contains spoken aliases. Keep the original LLM text
-            # for the visible transcript and chat history instead.
-            agent_kwargs["use_tts_aligned_transcript"] = False
-        super().__init__(instructions=f"{instructions}\n\n{speech_instructions(language)}", **agent_kwargs)
-        self._call_id = call_id
-        # The call's language (Greek or English); it stays the same for the whole call.
-        self.language = language
-        self._language_name = language_name
-        self._opening_task = opening_task
-        self._opened = False
-        self._fillers = FillerPicker() if fillers else None
-        self._last_filler_at = 0.0
-
-    def tts_node(self, text, model_settings):
-        return Agent.default.tts_node(self, self._pronunciation.stream(text), model_settings)
-
-    @function_tool
-    async def delete_recording(self) -> str:
-        """Deletes the recording and transcript of this call. Use it as soon as
-        the friend asks for the recording to be deleted."""
-        await report(self._call_id, delete_recording=True)
-        return "recording and transcript will be deleted"
-
-    @function_tool
-    async def hang_up(self, context: RunContext, silent: bool = False) -> str | None:
-        """Says a final goodbye and ends the call after it has played. Use silent=true only for voicemail."""
-        # current_speech.wait_for_playout() waits for the tool itself to finish and
-        # raises inside a function tool. Wait for the speech before this tool instead.
-        context.disallow_interruptions()
-        try:
-            await asyncio.wait_for(context.wait_for_playout(), timeout=10)
-        except asyncio.TimeoutError:
-            logger.warning("call %s: timed out waiting for speech before hang-up", self._call_id)
-        if silent:
-            await get_job_context().room.disconnect()
-            return "call ended"
-        closing = CLOSING_LINE["el" if self.language == "el" else "en"]
-        rc = getattr(self, "_rc", None)
-        if rc is not None and self._fillers is not None:
-            handle = await rc.say_fixed(closing, allow_interruptions=False)
-        elif self._fillers is not None:
-            handle = self.session.say(closing, allow_interruptions=False)
-        else:
-            quote = "Πες μόνο αυτή τη φράση" if self.language == "el" else "Say only this phrase"
-            handle = self.session.generate_reply(instructions=f"{quote}: {closing}", allow_interruptions=False)
-        room = get_job_context().room
-
-        async def finish() -> None:
-            try:
-                # The tool must return before the new speech can finish playing.
-                await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
-            except Exception:
-                logger.exception("call %s: goodbye playout failed", self._call_id)
-            await room.disconnect()
-
-        asyncio.create_task(finish())
-        return self._spoken_already("The call is ending. Do not speak again.")
-
-    def _spoken_already(self, note: str) -> str | None:
-        """Result for a tool that already queued its own speech. Realtime models get the note;
-        see ReceptionistAgent for the text engines."""
-        return note
-
-    async def _play_opening(self) -> bool:
-        opening = await ready_opening(self._opening_task)
-        if opening is None:
-            return False
-        self.session.say(opening.text, audio=opening.audio(), add_to_chat_ctx=True)
-        return True
-
-    async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
-        # The friend's first words ("Εμπρός;"): answer with the line prepared during the ring.
-        if self._opened:
-            return
-        self._opened = True
-        if await self._play_opening():
-            raise StopResponse()
-
-    async def open_after_silence(self) -> None:
-        """The friend picked up but hasn't said anything: open the conversation ourselves."""
-        if self._opened:
-            return
-        self._opened = True
-        if not await self._play_opening():
-            await self.session.generate_reply(
-                instructions=_for_language(GREETING, self.language, self._language_name)
-            )
-
-    async def llm_node(self, chat_ctx, tools, model_settings):
-        # Filler words: if the reply hasn't started after FILLER_DELAY_SECONDS, start it with
-        # a short "Ε…" / "Κοίτα…" so the friend isn't left in silence. It's part of the reply
-        # itself, so it always plays before the answer.
-        stream = Agent.default.llm_node(self, chat_ctx, tools, model_settings)
-        started = time.perf_counter()
-        answered = False
-
-        def observe(chunk):
-            # The model's first words, not our filler: the answer the caller waits for.
-            nonlocal answered
-            if not answered and _chunk_text(chunk).strip():
-                answered = True
-                telemetry = getattr(getattr(self, "_rc", None), "telemetry", None)
-                if telemetry:
-                    telemetry.answer_started((time.perf_counter() - started) * 1000)
-            return chunk
-
-        if self._fillers is None or not self._opened:
-            async for chunk in stream:
-                yield observe(chunk)
-            return
-        it = stream.__aiter__()
-        first = asyncio.ensure_future(it.__anext__())
-        try:
-            done, _ = await asyncio.wait({first}, timeout=FILLER_DELAY_SECONDS)
-            # One filler per turn: a reply started early and then restarted must not add a second.
-            now = asyncio.get_event_loop().time()
-            # No filler before the goodbye: «Ευχαριστώ, γεια.» got «Μάλιστα…» and then the
-            # closing line, which sounded broken (2026-10-01).
-            if not done and now - self._last_filler_at > FILLER_GAP_SECONDS and not _closing(_last_user_text(chat_ctx)):
-                self._last_filler_at = now
-                said_filler = True
-                yield self._fillers.pick(self.language) + " "
-            else:
-                said_filler = False
-            try:
-                head = await first
-            except StopAsyncIteration:
-                return
-            rest = _chain(head, it)
-            if said_filler:
-                # The model sometimes opens with its own «Ένα λεπτό…» too, which came out as
-                # «Ένα λεπτό… Ένα λεπτό…» (2026-10-01).
-                rest = _drop_leading_fillers(rest)
-            async for chunk in rest:
-                yield observe(chunk)
-        finally:
-            if not first.done():
-                first.cancel()
-
-
-CLOSING_WORDS = re.compile(
-    r"\b(ευχαριστ\w*|γει[αά]\w*|αντίο|αντιο|καληνύχτα|καλή συνέχεια|τίποτα άλλο|"
-    r"thanks?|thank you|bye|goodbye|nothing else)\b", re.I)
-
-
-def _closing(text: str) -> bool:
-    return bool(text and CLOSING_WORDS.search(text))
-
-
-def _last_user_text(chat_ctx) -> str:
-    for item in reversed(getattr(chat_ctx, "items", [])):
-        if getattr(item, "role", None) == "user":
-            return getattr(item, "text_content", None) or ""
-    return ""
-
-
-LEADING_FILLER = re.compile(
-    r"^(?:\s*(?:" + "|".join(sorted({re.escape(f.rstrip("…")) for lang in ("el", "en") for f in FILLERS[lang]}
-                                    | {"Μια στιγμή να δω", "Μια στιγμή", "Ένα λεπτό να δω", "Let me check"},
-                                    key=len, reverse=True))
-    + r")\s*[.,…!]*)+\s*", re.I)
-
-
-async def _chain(head, rest):
-    yield head
-    async for chunk in rest:
-        yield chunk
-
-
-async def _drop_leading_fillers(chunks):
-    """Strip filler phrases from the start of the model's text. Text is held back until
-    there's enough of it to tell (40 characters, a tool call, or the end)."""
-    buffered = ""
-    stream = chunks.__aiter__()
-    async for chunk in stream:
-        text = _chunk_text(chunk)
-        if isinstance(chunk, str) or (text and not getattr(getattr(chunk, "delta", None), "tool_calls", None)):
-            buffered += text
-            if len(buffered) < 40:
-                continue
-            chunk = None
-        cleaned = LEADING_FILLER.sub("", buffered)
-        if cleaned:
-            yield cleaned
-        if chunk is not None:
-            yield chunk
-        async for later in stream:
-            yield later
-        return
-    cleaned = LEADING_FILLER.sub("", buffered)
-    if cleaned:
-        yield cleaned
-
-
 def _chunk_text(chunk) -> str:
     if isinstance(chunk, str):
         return chunk
@@ -443,20 +206,68 @@ def mask_pin(chat_ctx) -> None:
             return
 
 
-class ReceptionistAgent(PrankCallerAgent):
+class ReceptionistAgent(Agent):
     """Answers a practice's phone. Routing, dates, free times, bookings and messages all
     come from the backend; the model only passes on what the caller said."""
 
-    def __init__(self, *, call: "ReceptionistCall", **kwargs) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, *, call: "ReceptionistCall", instructions: str, call_id: str, language: str,
+                 **agent_kwargs) -> None:
+        # agent_kwargs: per-agent model parts (llm/stt) and chat_ctx, for a language switch.
+        self._pronunciation = Pronunciation(language)
+        if self._pronunciation.aliases:
+            # Provider alignment contains spoken aliases. Keep the original LLM text
+            # for the visible transcript and chat history instead.
+            agent_kwargs["use_tts_aligned_transcript"] = False
+        super().__init__(instructions=f"{instructions}\n\n{speech_instructions(language)}", **agent_kwargs)
         self._rc = call
-        # The receptionist speaks first; the callee-speaks-first logic doesn't apply.
-        self._opened = True
+        self._call_id = call_id
+        # The call's language (Greek or English); a language switch builds a new agent.
+        self.language = language
+
+    def tts_node(self, text, model_settings):
+        return Agent.default.tts_node(self, self._pronunciation.stream(text), model_settings)
+
+    @function_tool
+    async def delete_recording(self) -> str:
+        """Deletes the recording and transcript of this call. Use it as soon as
+        the caller asks for the recording to be deleted."""
+        await report(self._call_id, delete_recording=True)
+        return "recording and transcript will be deleted"
+
+    @function_tool
+    async def hang_up(self, context: RunContext, silent: bool = False) -> str | None:
+        """Says a final goodbye and ends the call after it has played. Use silent=true only for voicemail."""
+        # current_speech.wait_for_playout() waits for the tool itself to finish and
+        # raises inside a function tool. Wait for the speech before this tool instead.
+        context.disallow_interruptions()
+        try:
+            await asyncio.wait_for(context.wait_for_playout(), timeout=10)
+        except asyncio.TimeoutError:
+            logger.warning("call %s: timed out waiting for speech before hang-up", self._call_id)
+        if silent:
+            await get_job_context().room.disconnect()
+            return "call ended"
+        closing = CLOSING_LINE["el" if self.language == "el" else "en"]
+        quote = "Πες μόνο αυτή τη φράση" if self.language == "el" else "Say only this phrase"
+        handle = self.session.generate_reply(instructions=f"{quote}: {closing}", allow_interruptions=False)
+        room = get_job_context().room
+
+        async def finish() -> None:
+            try:
+                # The tool must return before the new speech can finish playing.
+                await asyncio.wait_for(handle.wait_for_playout(), timeout=15)
+            except Exception:
+                logger.exception("call %s: goodbye playout failed", self._call_id)
+            await room.disconnect()
+
+        asyncio.create_task(finish())
+        return self._spoken_already("The call is ending. Do not speak again.")
 
     def _spoken_already(self, note: str) -> str | None:
-        # Text engines: a note makes the LLM run again with nothing to say. Gemini then
-        # returns empty completions (retried, then an error) or improvises "Συγγνώμη, δεν
-        # σας άκουσα" before the read-back (EVAL-001, 2026-09-30). None asks for no reply.
+        """Result for a tool that already queued its own speech. Text engines: a note makes the
+        LLM run again with nothing to say. Gemini then returns empty completions (retried, then
+        an error) or improvises "Συγγνώμη, δεν σας άκουσα" before the read-back (EVAL-001,
+        2026-09-30). None asks for no reply; realtime models get the note."""
         return None if self._rc.engine not in ("realtime", "openai") else note
 
     async def _tool(self, name: str, args: dict | None = None) -> str:
@@ -722,7 +533,14 @@ class ReceptionistAgent(PrankCallerAgent):
         if self._rc.awaiting_pin:
             # Preemptive generation runs before on_user_turn_completed: keep digits out of it too.
             mask_pin(chat_ctx)
-        async for chunk in super().llm_node(chat_ctx, tools, model_settings):
+        started = time.perf_counter()
+        answered = False
+        async for chunk in Agent.default.llm_node(self, chat_ctx, tools, model_settings):
+            # The model's first words: the answer the caller waits for.
+            if not answered and _chunk_text(chunk).strip():
+                answered = True
+                if self._rc.telemetry:
+                    self._rc.telemetry.answer_started((time.perf_counter() - started) * 1000)
             yield chunk
 
     @function_tool
@@ -746,7 +564,7 @@ class ReceptionistAgent(PrankCallerAgent):
 
 def prewarm(proc: JobProcess) -> None:
     # Loaded once per worker process, not per call; both text pipelines need it.
-    if any(engine in ("pipeline", "text_pipeline") for engine in (ENGINE, RECEPTIONIST_ENGINE)):
+    if RECEPTIONIST_ENGINE in ("pipeline", "text_pipeline"):
         proc.userdata["vad"] = silero.VAD.load()
 
 
@@ -1036,9 +854,9 @@ async def elevenlabs_usable() -> bool:
     return True
 
 
-async def pick_engine(call_id: str, receptionist: bool = False) -> str:
-    engine = RECEPTIONIST_ENGINE if receptionist else ENGINE
-    fallback = "text_pipeline" if receptionist and os.environ.get("GEMINI_API_KEY") else "realtime"
+async def pick_engine(call_id: str) -> str:
+    engine = RECEPTIONIST_ENGINE
+    fallback = "text_pipeline" if os.environ.get("GEMINI_API_KEY") else "realtime"
     if engine == "pipeline" and not os.environ.get("ELEVEN_API_KEY"):
         logger.warning("call %s: ELEVEN_API_KEY missing, using %s", call_id, fallback)
         engine = fallback
@@ -1325,8 +1143,7 @@ class ReceptionistCall:
         prompts = self.metadata.get("prompts") or {}
         return ReceptionistAgent(
             call=self, instructions=prompts.get(language) or self.metadata["prompt"], call_id=self.call_id,
-            language=language, language_name="Greek" if language == "el" else "English",
-            fillers=False, **(parts or {}),
+            language=language, **(parts or {}),
         )
 
     async def switch_language(self, language: str) -> None:
@@ -1673,7 +1490,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
                                       json={"dialed_number": dialed, "caller_number": caller_number,
                                             "forwarding_reason": forwarding_reason})
             if r.status_code == 429:
-                await say_busy_and_leave(ctx, await pick_engine("busy", receptionist=True), r.json())
+                await say_busy_and_leave(ctx, await pick_engine("busy"), r.json())
                 return
             r.raise_for_status()
             metadata = r.json()
@@ -1683,7 +1500,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
             ctx.shutdown(reason="no practice")
             return
 
-    rc = ReceptionistCall(ctx, metadata, await pick_engine(metadata["call_id"], receptionist=True))
+    rc = ReceptionistCall(ctx, metadata, await pick_engine(metadata["call_id"]))
     rc.prewarm_fixed_lines()
     call_id = rc.call_id
     max_duration_seconds = metadata.get("max_duration_seconds", 720)
@@ -1756,7 +1573,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
         warn_at = max(max_duration_seconds - 25, max_duration_seconds * 0.75)
         await asyncio.sleep(warn_at)
         if not rc.handed_off:
-            session.generate_reply(instructions=_for_language(TIME_UP, rc.language, "English"))
+            session.generate_reply(instructions=TIME_UP["el" if rc.language == "el" else "other"])
         await asyncio.sleep(max_duration_seconds - warn_at)
         if rc.handed_off:
             return
@@ -1846,160 +1663,14 @@ async def entrypoint(ctx: JobContext) -> None:
         return
     await ctx.connect()
 
-    if metadata.get("mode") == "receptionist" or "call_id" not in metadata:
-        try:
-            await run_receptionist(ctx, metadata)
-        except BaseException:
-            # E.g. the worker is shutting down for a deploy, or the caller left before joining:
-            # tell the backend so the call doesn't hold a line. Ignored if it already ended.
-            if metadata.get("call_id"):
-                await asyncio.shield(report(metadata["call_id"], status="failed", end_reason="error"))
-            raise
-        return
-    call_id = metadata["call_id"]
-    friend_phone_number = metadata.get("friend_phone_number", "")
-    prompt = metadata["prompt"]
-    voice = metadata.get("voice", "default")
-    language = metadata.get("language", "el")
-    language_name = metadata.get("language_name", "Greek")
-    max_duration_seconds = metadata.get("max_duration_seconds", 300)
-    sip_trunk_id = metadata.get("sip_trunk_id") or os.environ.get("SIP_TRUNK_ID", "")
-    outbound_number = metadata.get("outbound_number")
-    # Test mode: skip the phone call and talk to whoever joins the room.
-    test_no_dial = bool(metadata.get("test_no_dial"))
-
-    engine = await pick_engine(call_id)
-
-    # Everything that doesn't need the friend happens while the phone rings:
-    # connections open and the opening line gets written and voiced.
-    session = build_session(ctx, engine, voice, language)
-    opening_task = None
-    if engine == "pipeline":
-        opening_task = asyncio.create_task(prepare_opening(
-            prompt=prompt, language=language, language_name=language_name,
-            voice_id=elevenlabs_voice(voice, language), llm_model=LLM_MODEL,
-        ))
-
-    agent = PrankCallerAgent(
-        instructions=prompt, call_id=call_id, language=language, language_name=language_name,
-        opening_task=opening_task, fillers=engine == "pipeline",
-    )
-
-    track_transcript(session, call_id, engine)
-    track_telemetry(session, ctx, call_id, engine)
-    log_latency(session, call_id)
-    guard_repetition(session, ctx, call_id)
-
-    @session.on("close")
-    def _on_close(_ev) -> None:
-        ctx.shutdown(reason="session closed")
-
-    # Let the callee speak first ("Εμπρός;") like a real caller would. This also
-    # lets the agent hear a voicemail greeting before it says anything.
-    callee_spoke = asyncio.Event()
-
-    @session.on("user_state_changed")
-    def _on_user_state(ev) -> None:
-        if ev.new_state == "speaking":
-            callee_spoke.set()
-
-    logger.info("call %s: engine %s, language %s, dialing", call_id, engine, language)
-
-    # Warm up the model connection during the ring: start the session concurrently with the
-    # dial so the (Gemini) cold start is hidden behind the ringing, not paid after pickup.
-    # The agent only greets once the callee speaks or open_after_silence runs, so nothing is
-    # said before someone answers.
-    warm_task = asyncio.create_task(session.start(
-        agent=agent, room=ctx.room,
-        room_options=room_options(caller_identity=None if test_no_dial else f"friend-{call_id}"),
-    ))
-
-    lk = api.LiveKitAPI()
     try:
-        try:
-            if test_no_dial:
-                await ctx.wait_for_participant()
-            else:
-                await lk.sip.create_sip_participant(
-                    api.CreateSIPParticipantRequest(
-                        sip_trunk_id=sip_trunk_id,
-                        sip_call_to=friend_phone_number,
-                        sip_number=outbound_number,
-                        room_name=ctx.room.name,
-                        participant_identity=f"friend-{call_id}",
-                        participant_name="Friend",
-                        wait_until_answered=True,
-                        ringing_timeout=Duration(seconds=RINGING_TIMEOUT_SECONDS),
-                    )
-                )
-        except Exception as e:
-            warm_task.cancel()
-            if opening_task:
-                opening_task.cancel()
-            reason = dial_failure_reason(e)
-            if reason == "error":
-                logger.exception("call %s: dial failed", call_id)
-            else:
-                # Expected outcomes of calling a phone, not bugs: one line, no traceback.
-                logger.warning("call %s: not connected (%s): %s", call_id, reason, e)
-            await report(call_id, status="failed", end_reason=reason)
-            # Close the room so the job exits instead of idling until LiveKit times it out.
-            try:
-                await lk.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
-            except Exception:
-                logger.warning("call %s: could not delete room after failed dial", call_id)
-            ctx.shutdown(reason=f"dial {reason}")
-            return
-
-        recording_key = None
-        if test_no_dial:
-            logger.info("call %s: test mode, not recording", call_id)
-        elif not storage_configured():
-            logger.warning("call %s: recording storage not configured, not recording", call_id)
-        else:
-            try:
-                recording_key = await start_recording(lk, ctx.room.name, call_id)
-            except Exception:
-                logger.exception("call %s: recording failed to start", call_id)
-    finally:
-        await lk.aclose()
-
-    await report(call_id, status="active")
-
-    async def _enforce_duration_cap() -> None:
-        # Warn the agent shortly before the cap so it wraps up and says goodbye
-        # instead of the call being cut off mid-sentence.
-        warn_at = max(max_duration_seconds - 25, max_duration_seconds * 0.75)
-        await asyncio.sleep(warn_at)
-        session.generate_reply(instructions=_for_language(TIME_UP, agent.language, language_name))
-        await asyncio.sleep(max_duration_seconds - warn_at)
-        logger.info("call %s: hard duration cap reached, disconnecting", call_id)
-        await ctx.room.disconnect()
-
-    async def _finish() -> None:
-        cap_task.cancel()
-        if opening_task:
-            opening_task.cancel()
-        event = {"status": "completed"}
-        if recording_key:
-            event["recording_url"] = recording_key
-        await report(call_id, **event)
-
-    ctx.add_shutdown_callback(_finish)
-
-    cap_task = asyncio.create_task(_enforce_duration_cap())
-    # The warm-up usually finishes during the ring; make sure it's done before we rely
-    # on the session for the greeting.
-    await warm_task
-    try:
-        await asyncio.wait_for(callee_spoke.wait(), timeout=GREETING_WAIT_SECONDS)
-    except asyncio.TimeoutError:
-        await agent.open_after_silence()
-        return
-    # Safety net: if the friend's "Εμπρός;" never becomes a finished turn, open anyway
-    # instead of leaving them in silence.
-    await asyncio.sleep(OPENING_FALLBACK_SECONDS)
-    await agent.open_after_silence()
+        await run_receptionist(ctx, metadata)
+    except BaseException:
+        # E.g. the worker is shutting down for a deploy, or the caller left before joining:
+        # tell the backend so the call doesn't hold a line. Ignored if it already ended.
+        if metadata.get("call_id"):
+            await asyncio.shield(report(metadata["call_id"], status="failed", end_reason="error"))
+        raise
 
 
 if __name__ == "__main__":

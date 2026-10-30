@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import admin_changes, alerts, booking, events, notifications, routing, texts
 from app.config import get_settings
-from app.languages import english_name
 from app.models import (
     Appointment, Call, CallStatus, Customer, Handoff, Message, Practice, RoutingEvent, Staff, TranscriptEntry,
     TranscriptRole, WaitlistEntry,
@@ -263,7 +262,6 @@ async def build_metadata(
         "greeting_instruction": instruction,
         "voice": call.voice or practice.voice,
         "language": language,
-        "language_name": english_name(language),
         "max_duration_seconds": call.max_duration_seconds,
         "record": record,
         "emergency": {
