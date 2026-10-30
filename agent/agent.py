@@ -239,8 +239,12 @@ class ReceptionistAgent(Agent):
             await get_job_context().room.disconnect()
             return "call ended"
         closing = CLOSING_LINE["el" if self.language == "el" else "en"]
-        quote = "Πες μόνο αυτή τη φράση" if self.language == "el" else "Say only this phrase"
-        handle = self.session.generate_reply(instructions=f"{quote}: {closing}", allow_interruptions=False)
+        if self._rc.engine in ("pipeline", "text_pipeline"):
+            # Word for word, with the audio voiced at call start (prewarm_fixed_lines).
+            handle = await self._rc.say_fixed(closing, allow_interruptions=False)
+        else:
+            quote = "Πες μόνο αυτή τη φράση" if self.language == "el" else "Say only this phrase"
+            handle = self.session.generate_reply(instructions=f"{quote}: {closing}", allow_interruptions=False)
         room = get_job_context().room
 
         async def finish() -> None:
