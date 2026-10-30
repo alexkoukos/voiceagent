@@ -1,4 +1,4 @@
-"""Which language a call is in, from the friend's phone prefix.
+"""Which languages a call can be in.
 
 Calls are only in Greek or English. Every call starts in Greek, whatever the number
 (the owner's receptionist rule); English is reachable only when the caller asks for it.
@@ -13,18 +13,6 @@ LANGUAGES: dict[str, tuple[str, str]] = {
 }
 
 DEFAULT_LANGUAGE = "el"
-
-# International dialling prefix -> language. Longest prefix wins; everyone else starts in Greek.
-_PREFIXES: dict[str, str] = {"30": "el", "357": "el"}
-
-
-def language_for_phone(phone_number: str) -> str:
-    digits = phone_number.lstrip("+")
-    for length in (3, 2, 1):
-        lang = _PREFIXES.get(digits[:length])
-        if lang:
-            return lang
-    return DEFAULT_LANGUAGE
 
 
 def english_name(code: str) -> str:
