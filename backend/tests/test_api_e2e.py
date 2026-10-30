@@ -175,6 +175,9 @@ async def test_inbound_booking_confirmation_finalization_and_customer_isolation(
     offer = await post("check_availability", {"when": day, "service_id": "check"})
     assert "10:00" in offer["free_times"]
     readback = await post("prepare_action", {"action": "book", **args})
+    said = await http.post(f"/internal/calls/{cid}/events", headers=AGENT,
+                           json={"transcript_role": "friend", "transcript_text": "ναι"})
+    assert said.status_code == 204, said.text
     result = await post("book_appointment", {**args, "confirmation_id": readback["confirmation_id"], "confirmation_text": "ναι"})
     assert result["booked"]
     response = await http.post(f"/internal/calls/{cid}/events", headers=AGENT,

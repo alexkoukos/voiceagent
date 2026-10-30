@@ -779,12 +779,28 @@ async def tool_prepare_action(db: AsyncSession, call: Call, args) -> dict:
     return {"confirmation_id": event.id, "say": line}
 
 
+async def _is_latest_caller_turn(db: AsyncSession, call: Call, text: str | None, *, since: datetime) -> bool:
+    """The yes must be what the caller actually said after the readback: their latest stored
+    transcript line, recorded after `since`. After a deletion request no transcript is kept,
+    so the worker's copy of the caller's turn is used."""
+    if call.delete_requested:
+        return True
+    last = (await db.execute(select(TranscriptEntry).where(
+        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.friend,
+    ).order_by(TranscriptEntry.created_at.desc()).limit(1))).scalar_one_or_none()
+    return (last is not None and last.created_at >= since
+            and " ".join(last.text.split()) == " ".join((text or "").split()))
+
+
 async def _confirmed(db: AsyncSession, call: Call, args, action: str) -> bool:
     if not args.confirmation_id or not _affirmative(args.confirmation_text):
         return False
-    event = await db.get(RoutingEvent, args.confirmation_id)
+    # Row lock: two write tools for one confirmation run one after the other.
+    event = await db.get(RoutingEvent, args.confirmation_id, with_for_update=True)
     if (event is None or event.call_id != call.id or event.kind != "confirmation"
             or event.created_at < datetime.utcnow() - timedelta(minutes=4)):
+        return False
+    if not await _is_latest_caller_turn(db, call, args.confirmation_text, since=event.created_at):
         return False
     data = json.loads(event.value)
     if data["action"] != action:

@@ -291,7 +291,7 @@ class Harness:
         await worker.report(call_id, status="active")
         rc.agent = rc.make_agent(rc.language)
         worker.track_transcript(session, call_id, rc.engine, room=None, caller_identity=None,
-                                language=lambda: rc.language)
+                                language=lambda: rc.language, caller_reports=rc.caller_reports)
         rc.telemetry = worker.track_telemetry(session, ctx, call_id, "text_eval")
         rc.watch_llm_errors()
         await session.start(agent=rc.agent)
