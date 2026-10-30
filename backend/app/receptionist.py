@@ -237,13 +237,13 @@ async def build_metadata(
         )
         if admin:
             prompt += ("\n## Αλλαγές ρυθμίσεων\nΚαλεί από το κινητό του/της " + admin.name + ". Αν ζητήσει αλλαγή "
-                       "(κλειστά, άδεια, ωράριο, τιμή, πληροφορία), κάλεσε πρώτα stop_recording, μετά ζήτα τον κωδικό PIN και κάλεσε admin_login. Μετά "
-                       "admin_change με τα λόγια του, διάβασε το say_and_ask και περίμενε καθαρό «ναι» ή «όχι» πριν το "
-                       "admin_confirm. Ποτέ μην επαναλάβεις τον κωδικό.\n" if lang == "el" else
+                       "(κλειστά, άδεια, ωράριο, τιμή, πληροφορία), κάλεσε πρώτα stop_recording, μετά admin_login (χωρίς στοιχεία) και ζήτα τον κωδικό PIN· "
+                       "το σύστημα ελέγχει μόνο του τα ψηφία. Μετά admin_change με τα λόγια του, διάβασε το say_and_ask "
+                       "και, όταν απαντήσει, κάλεσε admin_confirm. Ποτέ μην επαναλάβεις τον κωδικό.\n" if lang == "el" else
                        "\n## Settings changes\nThis is " + admin.name + "'s registered mobile. If they ask for a change "
-                       "(closure, leave, hours, a price, information), first call stop_recording, then ask for the PIN and call admin_login. Then "
-                       "admin_change with their words, read say_and_ask, and wait for a clear yes or no before "
-                       "admin_confirm. Never repeat the PIN.\n")
+                       "(closure, leave, hours, a price, information), first call stop_recording, then admin_login (no arguments) and ask for the PIN; "
+                       "the system checks the digits itself. Then admin_change with their words, read say_and_ask, "
+                       "and when they answer call admin_confirm. Never repeat the PIN.\n")
         return prompt
 
     record = call.direction != "web"
@@ -661,6 +661,12 @@ YES_COMPANIONS = {
 }
 NOT_YES = {"οχι", "μη", "μην", "δεν", "no", "not", "wait", "αλλα", "but", "λαθοσ", "wrong"}
 MAX_YES_WORDS = 6
+
+
+def _negative(text: str | None) -> bool:
+    """A clear no («Όχι», «Άκυρο», «no»), for dropping a settings change."""
+    words = set(re.findall(r"\w+", booking._plain(text or "")))
+    return bool(words & {"οχι", "μη", "μην", "ακυρο", "ακυρωσ", "no", "nope", "cancel"})
 
 
 def _yes_word(word: str) -> bool:
@@ -1211,17 +1217,40 @@ async def _admin(db: AsyncSession, call: Call) -> tuple[Practice, Staff | None]:
     return practice, await admin_changes.sender_staff(db, practice, call.caller_number)
 
 
+async def _admin_locked(db: AsyncSession, call: Call) -> bool:
+    """Three wrong PINs in this call, or too many for the practice across calls lately:
+    redialling must not give unlimited tries (audit P0-5)."""
+    if await routing._count(db, call, "admin_login", "fail") >= admin_changes.PIN_TRIES:
+        return True
+    since = datetime.utcnow() - timedelta(hours=admin_changes.PIN_LOCK_HOURS)
+    fails = (await db.execute(select(func.count()).select_from(RoutingEvent).where(
+        RoutingEvent.practice_id == call.practice_id, RoutingEvent.kind == "admin_login",
+        RoutingEvent.value == "fail", RoutingEvent.created_at >= since))).scalar_one()
+    return fails >= admin_changes.PIN_PRACTICE_FAILS
+
+
+async def tool_admin_start(db: AsyncSession, call: Call) -> dict:
+    """Whether this caller may give the PIN now. The worker then takes the PIN digits from the
+    caller's next turn in code; they never reach the model."""
+    _, staff = await _admin(db, call)
+    if staff is None:
+        return {"error": "not_available"}
+    if await _admin_locked(db, call):
+        return {"error": "locked"}
+    return {"ok": True}
+
+
 async def tool_admin_login(db: AsyncSession, call: Call, args) -> dict:
     practice, staff = await _admin(db, call)
     if staff is None:
         return {"error": "not_available"}
-    if await routing._count(db, call, "admin_login", "fail") >= admin_changes.PIN_TRIES:
+    if await _admin_locked(db, call):
         return {"error": "locked"}
     await scrub_pins(db, call)
     if not admin_changes.pin_ok(practice, re.sub(r"\D", "", args.pin)):
         await routing.log(db, call, "admin_login", "fail", "OP2")
         failures = await routing._count(db, call, "admin_login", "fail") + 1
-        if failures >= admin_changes.PIN_TRIES:
+        if failures >= admin_changes.PIN_TRIES or await _admin_locked(db, call):
             await alerts.raise_alert(db, practice, "admin_pin", f"{practice.name}: {failures} wrong PINs",
                                      f"From {call.caller_number}.", call_id=call.id, dedupe_key=f"pin:{call.id}")
         await db.commit()
@@ -1256,7 +1285,7 @@ async def tool_admin_change(db: AsyncSession, call: Call, args) -> dict:
     except admin_changes.Rejected as e:
         return {"error": "not_understood", "say": e.reply}
     await db.commit()
-    return {"say_and_ask": admin_changes.confirm_prompt(practice, req.readback, "phone")}
+    return {"say_and_ask": admin_changes.confirm_prompt(practice, req.readback)}
 
 
 async def tool_admin_confirm(db: AsyncSession, call: Call, args) -> dict:
@@ -1267,7 +1296,17 @@ async def tool_admin_confirm(db: AsyncSession, call: Call, args) -> dict:
     if req is None or req.call_id != call.id:
         await db.commit()
         return {"error": "nothing_pending"}
-    reply = await admin_changes.decide(db, practice, req, args.yes)
+    # Decided on what the caller said after the readback, like bookings (invariant 1).
+    text = args.confirmation_text
+    if not await _is_latest_caller_turn(db, call, text, since=req.created_at):
+        return {"error": "confirmation_required", "next": "Ask again for a clear yes or no."}
+    if _affirmative(text):
+        yes = True
+    elif _negative(text):
+        yes = False
+    else:
+        return {"error": "confirmation_required", "next": "Ask again for a clear yes or no."}
+    reply = await admin_changes.decide(db, practice, req, yes)
     await routing.log(db, call, "admin_change", req.status, "OP2")
     await db.commit()
     notifications.kick()

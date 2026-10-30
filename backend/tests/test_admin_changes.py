@@ -1,4 +1,4 @@
-"""OP2 by SMS and by phone: only registered staff, readback then yes, PIN with lockout."""
+"""OP2 by phone: only registered staff, readback then the caller's yes, PIN with lockout."""
 
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
@@ -27,49 +27,46 @@ async def _setup(db):
     return practice, owner, nurse
 
 
-def test_yes_no_words():
-    assert admin_changes.answer("ΝΑΙ") and admin_changes.answer("Ναί!") and admin_changes.answer("yes")
-    assert admin_changes.answer("Όχι") is False and admin_changes.answer("no") is False
-    assert admin_changes.answer("κλειστά αύριο") is None
-
-
 @pytest.mark.asyncio
-async def test_sms_closure_needs_yes_and_staff_only_own_leave(sessions, monkeypatch):
+async def test_change_rules_staff_only_own_leave_and_prices_to_approval(sessions, monkeypatch):
     later = (datetime.now(timezone.utc) + timedelta(days=10)).date()
     parse = AsyncMock()
     monkeypatch.setattr(admin_changes, "parse", parse)
     now = datetime.now(timezone.utc)
+
+    async def ask(practice, who, text):
+        try:
+            req = await admin_changes.request(db, practice, who, text, channel="phone", now=now)
+        except admin_changes.Rejected as e:
+            return e.reply, None
+        return admin_changes.confirm_prompt(practice, req.readback), req
+
     async with sessions() as db:
         practice, owner, nurse = await _setup(db)
-        assert await admin_changes.handle_sms(db, "+306933333333", "+302100000000", "κλειστά", now) is None
-
         parse.return_value = {"action": "closure", "date_from": later.isoformat(), "date_to": later.isoformat()}
-        reply = await admin_changes.handle_sms(db, OWNER, "+302100000000", "Κλειστά ...", now)
-        assert "ΝΑΙ ή ΟΧΙ" in reply and "Όλη η επιχείρηση" in reply
+        reply, req = await ask(practice, owner, "Κλειστά ...")
+        assert "Σωστά;" in reply and "Όλη η επιχείρηση" in reply
         assert not (await db.get(Practice, practice.id)).rules.get("closures")
-        assert "Έγινε" in await admin_changes.handle_sms(db, OWNER, "+302100000000", "ναι", now)
+        assert "Έγινε" in await admin_changes.decide(db, practice, req, True)
         assert len((await db.get(Practice, practice.id)).rules["closures"]) == 1
-        assert "Δεν υπάρχει" in await admin_changes.handle_sms(db, OWNER, "+302100000000", "ναι", now)
 
         # Staff: "I'm off" means them; other people's leave and prices are refused.
-        parse.return_value = {"action": "closure", "date_from": later.isoformat(), "date_to": later.isoformat()}
-        await admin_changes.handle_sms(db, NURSE, "+302100000000", "λείπω", now)
-        req = await admin_changes.pending_for(db, practice, NURSE)
+        _, req = await ask(practice, nurse, "λείπω")
         assert req.parsed["staff_id"] == nurse.id
         parse.return_value = {"action": "closure", "date_from": later.isoformat(), "staff_name": "Μαρία"}
-        assert "μόνο τη δική σας" in await admin_changes.handle_sms(db, NURSE, "+302100000000", "η Μαρία λείπει", now)
+        assert "μόνο τη δική σας" in (await ask(practice, nurse, "η Μαρία λείπει"))[0]
         parse.return_value = {"action": "price", "service_name": "καθαρισμός", "price": "55€"}
-        assert "μόνο τη δική σας" in await admin_changes.handle_sms(db, NURSE, "+302100000000", "55€", now)
+        assert "μόνο τη δική σας" in (await ask(practice, nurse, "55€"))[0]
 
         # Owner: price goes to approval, not live.
-        await admin_changes.handle_sms(db, OWNER, "+302100000000", "ο καθαρισμός 55€", now)
-        assert "έλεγχο" in await admin_changes.handle_sms(db, OWNER, "+302100000000", "ναι", now)
+        _, req = await ask(practice, owner, "ο καθαρισμός 55€")
+        assert "έλεγχο" in await admin_changes.decide(db, practice, req, True)
         assert (await db.get(Practice, practice.id)).services[0]["price"] == "50€"
         pending = (await db.execute(select(ConfigVersion).where(ConfigVersion.status == "pending"))).scalars().all()
-        assert pending[0].changes["services"][0]["price"] == "55€" and pending[0].source == "sms"
+        assert pending[0].changes["services"][0]["price"] == "55€" and pending[0].source == "phone"
 
         parse.return_value = {"action": "closure", "date_from": "2020-01-01", "date_to": "2020-01-02"}
-        assert "Δεν κατάλαβα" in await admin_changes.handle_sms(db, OWNER, "+302100000000", "παλιό", now)
+        assert "Δεν κατάλαβα" in (await ask(practice, owner, "παλιό"))[0]
 
 
 @pytest.mark.asyncio
@@ -108,11 +105,44 @@ async def test_phone_pin_lockout_and_change(sessions, monkeypatch):
         assert (await receptionist.tool_admin_login(db, call2, AdminLoginArgs(pin="4 8 2 1")))["ok"]
         out = await receptionist.tool_admin_change(db, call2, AdminChangeArgs(request="Τρίτη 10 με 1"))
         assert "Τρίτη 10:00-13:00" in out["say_and_ask"]
-        assert (await receptionist.tool_admin_confirm(db, call2, AdminConfirmArgs(yes=True)))["say"].startswith("Έγινε")
+        # The model's word is not enough: the caller's own reply after the readback decides.
+        assert (await receptionist.tool_admin_confirm(db, call2, AdminConfirmArgs(confirmation_text="ναι")))["error"] == "confirmation_required"
+        db.add(TranscriptEntry(call_id=call2.id, role=TranscriptRole.friend, text="Ναι, σωστά, αλλά και τη Δευτέρα"))
+        await db.commit()
+        unclear = AdminConfirmArgs(confirmation_text="Ναι, σωστά, αλλά και τη Δευτέρα")
+        assert (await receptionist.tool_admin_confirm(db, call2, unclear))["error"] == "confirmation_required"
+        db.add(TranscriptEntry(call_id=call2.id, role=TranscriptRole.friend, text="Ναι, σωστά.",
+                               created_at=datetime.utcnow() + timedelta(seconds=1)))
+        await db.commit()
+        yes = AdminConfirmArgs(confirmation_text="Ναι, σωστά.")
+        assert (await receptionist.tool_admin_confirm(db, call2, yes))["say"].startswith("Έγινε")
         practice = await db.get(Practice, practice.id)
         assert practice.hours["tue"] == [["10:00", "13:00"]] and practice.hours["mon"] == [["09:00", "14:00"]]
-        assert (await receptionist.tool_admin_confirm(db, call2, AdminConfirmArgs(yes=True)))["error"] == "nothing_pending"
+        assert (await receptionist.tool_admin_confirm(db, call2, yes))["error"] == "nothing_pending"
 
         meta = await receptionist.build_metadata(db, practice, call2)
         assert "admin_login" in meta["prompt"]
         assert "admin_login" not in (await receptionist.build_metadata(db, practice, stranger))["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_wrong_pins_lock_the_practice_across_calls(sessions):
+    async with sessions() as db:
+        practice, _, _ = await _setup(db)
+        await ops.set_admin_pin(practice.id, AdminPinIn(pin="4821"), db)
+        calls = []
+        for _ in range(admin_changes.PIN_PRACTICE_FAILS // admin_changes.PIN_TRIES):
+            call = Call(practice_id=practice.id, direction="inbound", caller_number=OWNER, persona="", scenario="",
+                        status=CallStatus.active)
+            db.add(call)
+            await db.commit()
+            assert (await receptionist.tool_admin_start(db, call))["ok"]
+            for _ in range(admin_changes.PIN_TRIES):
+                await receptionist.tool_admin_login(db, call, AdminLoginArgs(pin="0000"))
+            calls.append(call)
+        redial = Call(practice_id=practice.id, direction="inbound", caller_number=OWNER, persona="", scenario="",
+                      status=CallStatus.active)
+        db.add(redial)
+        await db.commit()
+        assert (await receptionist.tool_admin_start(db, redial))["error"] == "locked"
+        assert (await receptionist.tool_admin_login(db, redial, AdminLoginArgs(pin="4821")))["error"] == "locked"

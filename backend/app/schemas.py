@@ -716,7 +716,8 @@ class AdminChangeArgs(BaseModel):
 
 
 class AdminConfirmArgs(BaseModel):
-    yes: bool
+    # The caller's own reply to the readback, from the transcript (never the model's judgement).
+    confirmation_text: str = Field(default="", max_length=SHORT_TEXT)
 
 
 class AdminPinIn(BaseModel):

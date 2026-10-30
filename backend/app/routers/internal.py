@@ -196,6 +196,11 @@ async def t_set_language(call_id: str, args: LanguageArgs, db: AsyncSession = De
     return await receptionist.tool_set_language(db, await _receptionist_call(db, call_id), args)
 
 
+@tools.post("/admin_start")
+async def t_admin_start(call_id: str, db: AsyncSession = Depends(get_db)):
+    return await receptionist.tool_admin_start(db, await _receptionist_call(db, call_id))
+
+
 @tools.post("/admin_login")
 async def t_admin_login(call_id: str, args: AdminLoginArgs, db: AsyncSession = Depends(get_db)):
     return await receptionist.tool_admin_login(db, await _receptionist_call(db, call_id), args)

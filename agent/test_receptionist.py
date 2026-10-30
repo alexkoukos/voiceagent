@@ -412,3 +412,22 @@ async def test_emergency_line_is_spoken_word_for_word(monkeypatch):
 ])
 def test_spoken_digits(said, digits):
     assert worker.spoken_digits(said) == digits
+
+
+@pytest.mark.asyncio
+async def test_pin_is_taken_in_code_and_never_reaches_the_model():
+    rc = SimpleNamespace(awaiting_pin=True, tool=AsyncMock(return_value={"ok": True}), engine="pipeline")
+    agent = worker.ReceptionistAgent(call=rc, instructions="x", call_id="c", language="el", language_name="Greek")
+    waiting = worker.llm.ChatMessage(role="user", content=["Ένα λεπτό να τον βρω"])
+    await agent.on_user_turn_completed(None, waiting)
+    assert rc.awaiting_pin and waiting.text_content == "Ένα λεπτό να τον βρω"
+    rc.tool.assert_not_awaited()
+
+    said = worker.llm.ChatMessage(role="user", content=["Είναι τέσσερα οκτώ δύο ένα"])
+    preemptive = worker.llm.ChatContext([worker.llm.ChatMessage(role="user", content=["Είναι 4 8 2 1"])])
+    worker.mask_pin(preemptive)
+    assert worker.spoken_digits(preemptive.items[-1].text_content) == ""
+    await agent.on_user_turn_completed(None, said)
+    rc.tool.assert_awaited_once_with("admin_login", {"pin": "4821"})
+    assert not rc.awaiting_pin
+    assert worker.spoken_digits(said.text_content) == "" and "ok" in said.text_content
