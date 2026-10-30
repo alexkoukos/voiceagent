@@ -1045,7 +1045,8 @@ class ReceptionistCall:
         self.session.update_agent(self.agent)
         # update_agent swaps in a background task. Speaking before it finishes lands on
         # the draining old agent ("cannot schedule new speech"), so the caller never heard
-        # the "English mode" line (EVAL-007, 2026-10-01). The task is SDK-internal (1.8.3).
+        # the "English mode" line (EVAL-007, 2026-10-01). The task is SDK-internal; there is
+        # still no public way to wait for it in 1.8.10.
         swap = getattr(self.session, "_update_activity_atask", None)
         if swap is not None:
             try:
