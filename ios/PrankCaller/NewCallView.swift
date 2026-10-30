@@ -381,7 +381,7 @@ struct AddFriendView: View {
     @State private var errorMessage: String?
     @State private var saving = false
 
-    /// "+30 690 762-6384" / "0030 (690) 7626384" -> "+306907626384"; the backend normalizes the same way.
+    /// "+30 690 000-0123" / "0030 (690) 0000123" -> "+306900000123"; the backend normalizes the same way.
     private var normalizedPhone: String {
         var p = phone.filter { !" -().\u{00A0}".contains($0) && !$0.isWhitespace }
         if p.hasPrefix("00") { p = "+" + p.dropFirst(2) }
