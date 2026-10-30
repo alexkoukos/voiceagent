@@ -764,11 +764,26 @@ def build_tts(engine: str, voice: str, language: str):
     ], max_retry_per_tts=1)
 
 
+def gemini_auth() -> dict:
+    """AI Studio with the key, or Vertex AI in one region (GEMINI_VERTEX_LOCATION, e.g.
+    europe-west3) with the service account in GOOGLE_SERVICE_ACCOUNT_JSON: EU processing."""
+    location = os.environ.get("GEMINI_VERTEX_LOCATION")
+    if not location:
+        return {"api_key": os.environ.get("GEMINI_API_KEY")}
+    from google.oauth2 import service_account
+
+    credentials = service_account.Credentials.from_service_account_info(
+        json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]),
+        scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    return {"vertexai": True, "project": os.environ["GEMINI_VERTEX_PROJECT"], "location": location,
+            "credentials": credentials}
+
+
 def text_llm() -> google.LLM:
     """The pipeline engines' model; the text-mode evals use exactly this too."""
     return google.LLM(
         model=LLM_MODEL,
-        api_key=os.environ.get("GEMINI_API_KEY"),
+        **gemini_auth(),
         temperature=0.9,
         thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
     )
