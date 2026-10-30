@@ -326,25 +326,11 @@ async def test_demo_voice_toggle_picks_the_call_voice(http, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_speed_dial_calls_a_number_without_saving_it(http, monkeypatch):
-    start = AsyncMock()
-    monkeypatch.setattr("app.routers.calls.start_call", start)
-    body = {"scenario": "Ρώτα αν είναι σπίτι.", "phone_number": "690 000 0000"}
-    first = await http.post("/calls", headers=DIALER, json=body)
-    assert first.status_code == 200, first.text
-    friend = start.await_args.args[2]
-    assert friend.phone_number == "+306900000000" and friend.name == "+306900000000"
-    # Not added to the friends list, and the same unsaved entry is reused.
-    assert (await http.get("/friends", headers=DIALER)).json() == []
-    await http.post("/calls", headers=DIALER, json=body)
-    assert start.await_args.args[2].id == friend.id
-    # A saved friend with that number is used instead.
-    saved = (await http.post("/friends", headers=DIALER, json={"name": "Νίκος", "phone_number": "+306900000000"})).json()
-    await http.post("/calls", headers=DIALER, json=body)
-    assert start.await_args.args[2].id == saved["id"]
-    for bad in ({"scenario": "x"}, {"scenario": "x", "phone_number": "12"},
-                {"scenario": "x", "phone_number": "+306900000000", "friend_id": saved["id"]}):
-        assert (await http.post("/calls", headers=DIALER, json=bad)).status_code == 422
+async def test_outbound_dialer_is_gone(http):
+    """No API key may place an arbitrary outbound call (audit P0-3)."""
+    body = {"scenario": "x", "phone_number": "+306900000099"}
+    for headers in (DIALER, MASTER):
+        assert (await http.post("/calls", headers=headers, json=body)).status_code == 405
 
 
 @pytest.mark.asyncio
