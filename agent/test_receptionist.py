@@ -78,8 +78,8 @@ def test_deepgram_transcript_uses_a_bounded_practice_glossary(monkeypatch):
     calls = []
     monkeypatch.setattr(worker.inference, "STT", lambda *args, **kwargs: calls.append((args, kwargs)))
 
-    worker.caller_stt("el", [" Κομμωτήριο   Αθηνά ", "Γιώργος", "γιώργος", "Ανδρικό κούρεμα"]
-                      + [f"Υπηρεσία {i}" for i in range(60)])
+    worker.provider_stt.deepgram("el", [" Κομμωτήριο   Αθηνά ", "Γιώργος", "γιώργος", "Ανδρικό κούρεμα"]
+                                 + [f"Υπηρεσία {i}" for i in range(60)])
     args, kwargs = calls[-1]
     assert args == ("deepgram/nova-3",)
     assert kwargs["language"] == "el"
@@ -87,7 +87,7 @@ def test_deepgram_transcript_uses_a_bounded_practice_glossary(monkeypatch):
         "Κομμωτήριο Αθηνά", "Γιώργος", "Ανδρικό κούρεμα"]
     assert len(kwargs["extra_kwargs"]["keyterm"]) == 40
 
-    worker.caller_stt("en")
+    worker.provider_stt.deepgram("en")
     assert calls[-1][1] == {"language": "en"}
 
 
