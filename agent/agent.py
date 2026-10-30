@@ -489,6 +489,7 @@ class ReceptionistAgent(PrankCallerAgent):
         payload = dict(args or {})
         if name in ("book_appointment", "reschedule_appointment", "cancel_appointment"):
             payload.update(self._rc.confirmation_for_write())
+            await self._rc.caller_line_stored()
         result = await self._rc.tool(name, payload)
         if name in ("book_appointment", "reschedule_appointment", "cancel_appointment") and not result.get("error"):
             self._rc.clear_confirmation()
@@ -1082,10 +1083,16 @@ async def publish_web_transcript(
 def track_transcript(
     session: AgentSession, call_id: str, engine: str, *, room: rtc.Room | None = None,
     caller_identity: str | None = None, language: Callable[[], str] | None = None,
+    caller_reports: set | None = None,
 ) -> None:
+    """`caller_reports` collects the caller-line uploads still in flight: a booking write waits
+    for them, because the backend checks the yes against the stored transcript."""
     def _line(role: str, text: str) -> None:
         logger.info("call %s: %s transcript received", call_id, role)
-        asyncio.create_task(report(call_id, transcript_role=role, transcript_text=text))
+        task = asyncio.create_task(report(call_id, transcript_role=role, transcript_text=text))
+        if role == "friend" and caller_reports is not None:
+            caller_reports.add(task)
+            task.add_done_callback(caller_reports.discard)
         if room is not None and caller_identity and language:
             asyncio.create_task(publish_web_transcript(room, role, text, caller_identity, language()))
 
@@ -1179,6 +1186,7 @@ class ReceptionistCall:
         self._availability_checked = False
         self._handoff_pending = False
         self._tool_lock = asyncio.Lock()
+        self.caller_reports: set[asyncio.Task] = set()
 
     def fixed_voice(self) -> str | None:
         """ElevenLabs voice for pre-voiced fixed lines (pipeline engine only)."""
@@ -1275,6 +1283,12 @@ class ReceptionistCall:
         if self._confirmation_id and self._confirmation_armed and self._user_turn > self._confirmation_floor:
             return {"confirmation_id": self._confirmation_id, "confirmation_text": self._last_user_text}
         return {}
+
+    async def caller_line_stored(self, timeout: float = 3.0) -> None:
+        """Wait until the caller's latest line is stored; the backend checks the yes against it."""
+        pending = [t for t in self.caller_reports if not t.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=timeout)
 
     def clear_confirmation(self) -> None:
         self._confirmation_id = None
@@ -1679,6 +1693,7 @@ async def run_receptionist(ctx: JobContext, metadata: dict) -> None:
         session, call_id, rc.engine,
         caller_identity=rc.caller_identity,
         language=lambda: rc.language,
+        caller_reports=rc.caller_reports,
     )
     rc.telemetry = track_telemetry(session, ctx, call_id, rc.engine)
     rc.watch_llm_errors()
