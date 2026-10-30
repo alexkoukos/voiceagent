@@ -325,3 +325,26 @@ async def test_outbound_dialer_is_gone(http):
     body = {"scenario": "x", "phone_number": "+306900000099"}
     for headers in (DIALER, MASTER):
         assert (await http.post("/calls", headers=headers, json=body)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_eval_session_runs_on_a_fixed_clock(http, sessions):
+    practice = await create(http, "Clock")
+    body = {"practice_id": practice["id"], "caller_number": "+306900000077",
+            # Monday 2031-03-03, 10:00 in Athens.
+            "now": "2031-03-03T10:00:00+02:00"}
+    for headers in (AGENT, DIALER):
+        assert (await http.post("/internal/evals/sessions", headers=headers, json=body)).status_code in (401, 403)
+    r = await http.post("/internal/evals/sessions", headers=MASTER, json=body)
+    assert r.status_code == 200, r.text
+    meta = r.json()
+    async with sessions() as db:
+        call = await db.get(Call, meta["call_id"])
+        assert call.clock_start == datetime(2031, 3, 3, 8, 0)
+    r = await http.post(f"/internal/calls/{meta['call_id']}/tools/check_availability", headers=AGENT,
+                        json={"when": "αύριο", "service_id": "check"})
+    assert r.status_code == 200, r.text
+    assert r.json()["date"] == "2031-03-04"
+    r = await http.post(f"/internal/calls/{meta['call_id']}/tools/check_availability", headers=AGENT,
+                        json={"when": "σήμερα", "service_id": "check"})
+    assert r.json()["date"] == "2031-03-03" and min(r.json()["free_times"]) >= "10:00"
