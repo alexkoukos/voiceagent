@@ -1,0 +1,101 @@
+"""Speech-to-text providers: the caller's words, pinned to the call's language."""
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Literal
+
+from livekit.agents import inference
+from livekit.plugins import elevenlabs
+
+from speech import env_number
+
+# Pause that ends a transcribed segment, and the least wait after the caller stops before
+# replying. Lower is snappier but splits normal-speed speech into fragments.
+SCRIBE_SILENCE_SECS = env_number("SCRIBE_SILENCE_SECS", 0.7, 0.3, 2.0)
+
+# How a provider's transcripts end the caller's turn:
+# "own": its end-of-speech event is the turn end, nothing waits after it;
+# "pause": its end-of-speech event plus the fixed ENDPOINT_MIN_DELAY;
+# "semantic": LiveKit's turn detector decides.
+TurnMode = Literal["own", "pause", "semantic"]
+
+
+@dataclass(frozen=True)
+class SttProvider:
+    name: str
+    build: Callable[[str, list[str] | None], object]  # (language, business vocabulary) -> stt.STT
+    turns: Callable[[str], TurnMode]  # by language
+
+
+# Everyday Greek the transcriber should expect; the business adds its own names and services.
+GREEK_VOCABULARY = [
+    "ρε", "μωρέ", "κομπλέ", "γαμώτο", "άσ' το", "θα 'ρθω", "κάνα", "τίποτα", "εντάξει", "μπορείς",
+    "απογευματάκι", "πρωινό", "ραντεβουδάκι", "ρε φίλε", "έλα", "λέγε", "άντε", "οκ", "ναι ρε",
+    "English", "ίνγκλις", "ένγκλις", "αγγλικά",
+    # Scribe heard "Τετάρτη" as "Δευτέρα" twice on a real call (2026-10-01).
+    "Δευτέρα", "Τρίτη", "Τετάρτη", "Πέμπτη", "Παρασκευή", "Σάββατο", "Κυριακή",
+]
+
+
+def vocab_terms(language: str, vocabulary: list[str] | None) -> list[str]:
+    """Everyday Greek plus the business's names, split into words: Scribe realtime rejects
+    the whole session if any keyterm is over 20 characters."""
+    terms = list(GREEK_VOCABULARY if language == "el" else [])
+    for phrase in vocabulary or []:
+        terms += [phrase] if len(phrase) <= 20 else phrase.split()
+    return [t for t in dict.fromkeys(terms) if 2 <= len(t) <= 20][:100]
+
+
+def scribe(language: str, vocabulary: list[str] | None = None):
+    keyterms = vocab_terms(language, vocabulary)
+    return elevenlabs.STT(
+        keyterms=keyterms or None,
+        model="scribe_v2_realtime",
+        # Without a language hint Scribe hears Greek phone audio as Ukrainian (Cyrillic text).
+        language_code=language,
+        # ElevenLabs decides when a sentence is finished. The plugin's default ("manual")
+        # waits for a commit the session never sends, so no final transcript ever arrived
+        # and the agent stayed silent for the whole call.
+        # 0.3 s cut normal-speed sentences into fragments at every short pause.
+        server_vad={"vad_silence_threshold_secs": SCRIBE_SILENCE_SECS},
+    )
+
+
+def deepgram_terms(vocabulary: list[str] | None) -> list[str]:
+    """Favor distinctive business names without over-biasing ordinary speech.
+
+    Deepgram recommends a focused glossary and rejects requests over 500 tokens.
+    Keep this well below that limit even when a practice has many services.
+    """
+    terms: list[str] = []
+    seen: set[str] = set()
+    words_left = 120
+    for value in vocabulary or []:
+        term = " ".join(value.split())
+        word_count = len(term.split())
+        if (not term or len(term) > 80 or word_count > 8 or word_count > words_left
+                or term.casefold() in seen):
+            continue
+        terms.append(term)
+        seen.add(term.casefold())
+        words_left -= word_count
+        if len(terms) == 40:
+            break
+    return terms
+
+
+def deepgram(language: str, vocabulary: list[str] | None = None):
+    """Deepgram nova-3 via LiveKit Inference: the best streaming option on a real Greek
+    phone recording (2026-09-25); Speechmatics, Cartesia and Gemini Transcribe Live garbled
+    more, AssemblyAI has no Greek."""
+    terms = deepgram_terms(vocabulary)
+    options = {"extra_kwargs": {"keyterm": terms}} if terms else {}
+    return inference.STT("deepgram/nova-3", language=language, **options)
+
+
+PROVIDERS = {
+    # Greek: Scribe's end-of-speech is the turn end (the turn model has no Greek, so it
+    # waited for max_delay every turn). English: the semantic turn detector.
+    "scribe": SttProvider("scribe", scribe, lambda language: "own" if language == "el" else "semantic"),
+    "deepgram": SttProvider("deepgram", deepgram, lambda language: "pause"),
+}
