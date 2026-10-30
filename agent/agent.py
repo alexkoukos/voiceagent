@@ -617,13 +617,20 @@ class ReceptionistAgent(PrankCallerAgent):
         })
 
     @function_tool
-    async def find_appointments(self, phone: str = "") -> str:
+    async def find_appointments(self, phone: str = "", customer_name: str = "") -> str:
         """Finds the caller's upcoming appointments, before changing, cancelling or confirming one.
 
         Args:
             phone: The number they booked with, if different from the one they're calling from.
+            customer_name: With another number: the first and last name the appointment is under.
         """
-        return await self._tool("find_appointments", {"phone": phone or None})
+        return await self._tool("find_appointments", {"phone": phone or None, "customer_name": customer_name or None})
+
+    @function_tool
+    async def verify_code(self) -> str:
+        """Checks the SMS code the caller just read out, after find_appointments said sms_sent.
+        The system reads the digits from what the caller said; never repeat them."""
+        return await self._tool("verify_code", {"code": spoken_digits(self._rc._last_user_text)[:12]})
 
     @function_tool
     async def reschedule_appointment(self, appointment_id: str, date: str, time: str) -> str:
@@ -1593,6 +1600,22 @@ def _plain(s: str) -> str:
     import unicodedata
     s = unicodedata.normalize("NFD", s.lower())
     return "".join(c for c in s if unicodedata.category(c) != "Mn").replace("ς", "σ")
+
+
+DIGIT_WORDS = {  # after _plain: no accents, final ς as σ
+    "μηδεν": "0", "μηδενικο": "0", "ενα": "1", "μια": "1", "δυο": "2", "τρια": "3", "τρεισ": "3",
+    "τεσσερα": "4", "τεσσερισ": "4", "πεντε": "5", "εξι": "6", "επτα": "7", "εφτα": "7", "οκτω": "8",
+    "οχτω": "8", "εννεα": "9", "εννια": "9",
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6",
+    "seven": "7", "eight": "8", "nine": "9",
+}
+
+
+def spoken_digits(text: str) -> str:
+    """Digits a caller read out one by one: «τέσσερα, 5, έξι» -> "456". Taken from the
+    transcript in code so codes and PINs never pass through the model's arguments."""
+    return "".join(token if token.isdigit() else DIGIT_WORDS.get(token, "")
+                   for token in re.findall(r"\d+|[^\W\d_]+", _plain(text or "")))
 
 
 def name_from_transcript(text: str) -> str | None:

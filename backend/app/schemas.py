@@ -726,6 +726,11 @@ class AdminPinIn(BaseModel):
 
 class FindArgs(BaseModel):
     phone: str | None = Field(default=None, max_length=30)
+    customer_name: str | None = Field(default=None, max_length=SHORT_TEXT)
+
+
+class VerifyCodeArgs(BaseModel):
+    code: str = Field(pattern=r"^\d{0,12}$")
 
 
 class RescheduleArgs(BaseModel):

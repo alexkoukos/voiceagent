@@ -17,7 +17,7 @@ from app.models import Call, CallStatus, CallTelemetryEvent, TranscriptEntry, Tr
 from app.telemetry import TelemetryBatch, telemetry_expired
 from app.schemas import (
     AdminChangeArgs, AdminConfirmArgs, AdminLoginArgs, AppointmentRef, BookAppointment, LanguageArgs, CallEvent, CheckAvailability, FindArgs, FlagArgs, HandoffResult, InboundStart,
-    MessageArgs, PrepareAction, RescheduleArgs, RouteArgs, TransferArgs, WaitlistArgs, normalize_phone,
+    MessageArgs, PrepareAction, RescheduleArgs, RouteArgs, TransferArgs, VerifyCodeArgs, WaitlistArgs, normalize_phone,
 )
 from app.storage import queue_recording_deletion
 
@@ -214,6 +214,11 @@ async def t_admin_confirm(call_id: str, args: AdminConfirmArgs, db: AsyncSession
 @tools.post("/find_appointments")
 async def t_find(call_id: str, args: FindArgs, db: AsyncSession = Depends(get_db)):
     return await receptionist.tool_find_appointments(db, await _receptionist_call(db, call_id), args)
+
+
+@tools.post("/verify_code")
+async def t_verify_code(call_id: str, args: VerifyCodeArgs, db: AsyncSession = Depends(get_db)):
+    return await receptionist.tool_verify_code(db, await _receptionist_call(db, call_id), args)
 
 
 @tools.post("/reschedule_appointment")
