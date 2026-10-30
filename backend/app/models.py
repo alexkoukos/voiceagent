@@ -28,33 +28,6 @@ class TranscriptRole(str, enum.Enum):
     friend = "friend"
 
 
-class Friend(Base):
-    __tablename__ = "friends"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    phone_number: Mapped[str] = mapped_column(String, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
-    # Set on delete; the row stays so past calls still show the name.
-    deleted_at: Mapped[datetime | None] = mapped_column(nullable=True)
-
-    calls: Mapped[list["Call"]] = relationship(back_populates="friend")
-
-
-class PromptTemplate(Base):
-    __tablename__ = "prompt_templates"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    title: Mapped[str] = mapped_column(String, nullable=False)
-    persona: Mapped[str] = mapped_column(Text, nullable=False)
-    scenario: Mapped[str] = mapped_column(Text, nullable=False)
-    context: Mapped[str] = mapped_column(Text, default="")
-    reveal: Mapped[str] = mapped_column(Text, default="")
-    # Voice the app switches to when this preset is picked; None keeps the user's choice.
-    voice: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
-
-
 class Practice(Base):
     """A business whose calls the agent answers (2.0 receptionist).
 
@@ -285,8 +258,6 @@ class Call(Base):
     __tablename__ = "calls"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
-    # Outbound (Level 1) calls have a friend; inbound and web calls have a practice.
-    friend_id: Mapped[str | None] = mapped_column(ForeignKey("friends.id"), nullable=True)
     practice_id: Mapped[str | None] = mapped_column(ForeignKey("practices.id"), nullable=True)
     # outbound, inbound or web
     demo_dashboard_id: Mapped[str | None] = mapped_column(
@@ -314,13 +285,8 @@ class Call(Base):
     review: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     finalized: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    persona: Mapped[str] = mapped_column(Text, nullable=False)
-    scenario: Mapped[str] = mapped_column(Text, nullable=False)
-    context: Mapped[str] = mapped_column(Text, default="")
-    reveal: Mapped[str] = mapped_column(Text, default="")
     voice: Mapped[str] = mapped_column(String, default="default")
     max_duration_seconds: Mapped[int] = mapped_column(Integer, default=300)
-    from_own_number: Mapped[bool] = mapped_column(Boolean, default=False)
     # Language the call starts in (e.g. "el"); the agent follows the friend if they switch.
     language: Mapped[str | None] = mapped_column(String, nullable=True)
 
@@ -337,7 +303,6 @@ class Call(Base):
     started_at: Mapped[datetime | None] = mapped_column(nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
-    friend: Mapped["Friend | None"] = relationship(back_populates="calls")
     transcript_entries: Mapped[list["TranscriptEntry"]] = relationship(
         back_populates="call", order_by="TranscriptEntry.created_at"
     )

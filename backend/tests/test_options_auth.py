@@ -16,7 +16,6 @@ async def test_options_reports_practice_scope(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "admin_api_token", "founder-test")
     monkeypatch.setattr(settings, "app_api_token", "dialer-test")
-    monkeypatch.setattr(settings, "own_caller_number", "+302100000000")
 
     class Database:
         def __init__(self):
@@ -38,11 +37,9 @@ async def test_options_reports_practice_scope(monkeypatch):
             tenant = await client.get("/options", headers={"x-api-key": "practice-test"})
             assert tenant.status_code == 200
             assert tenant.json()["account_scope"] == "practice"
-            assert tenant.json()["own_number_available"] is False
 
             founder = await client.get("/options", headers={"x-api-key": "founder-test"})
             assert founder.json()["account_scope"] == "founder"
-            assert founder.json()["own_number_available"] is True
 
             dialer = await client.get("/options", headers={"x-api-key": "dialer-test"})
             assert dialer.json()["account_scope"] == "dialer"

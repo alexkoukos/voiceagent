@@ -62,7 +62,7 @@ def test_version_is_chosen_by_call_date(monkeypatch):
 @pytest.mark.asyncio
 async def test_recompute_sums_every_session(sessions):
     async with sessions() as db:
-        row = Call(persona="", scenario="", status=CallStatus.completed, direction="web", duration_seconds=60)
+        row = Call(status=CallStatus.completed, direction="web", duration_seconds=60)
         db.add(row)
         await db.flush()
         for sequence in (1, 2):

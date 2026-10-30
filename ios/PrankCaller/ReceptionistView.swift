@@ -113,9 +113,9 @@ struct ReceptionistView: View {
         Section {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Space.s) {
-                    FriendChip(name: "Όλες", selected: outcome == nil) { outcome = nil }
+                    Chip(name: "Όλες", selected: outcome == nil) { outcome = nil }
                     ForEach(["booked", "message_taken", "info_given", "transferred", "abandoned", "failed"], id: \.self) { o in
-                        FriendChip(name: ReceptionistCall.label(o), selected: outcome == o) { outcome = o }
+                        Chip(name: ReceptionistCall.label(o), selected: outcome == o) { outcome = o }
                     }
                 }
                 .padding(.vertical, Space.xs)

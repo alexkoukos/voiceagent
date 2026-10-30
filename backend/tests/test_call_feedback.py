@@ -62,7 +62,7 @@ async def test_two_word_off_topic_is_not_a_strike(sessions, monkeypatch):
     monkeypatch.setattr(receptionist.notifications, "kick", lambda: None)
     async with sessions() as db:
         practice = await _practice(db)
-        call = Call(persona="", scenario="", status=CallStatus.active, direction="web", practice_id=practice.id)
+        call = Call(status=CallStatus.active, direction="web", practice_id=practice.id)
         db.add(call)
         await db.flush()
         db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="Μακρόνησος. Τίποτα."))
@@ -90,7 +90,7 @@ async def test_answer_to_our_clarification_is_not_a_strike(sessions, monkeypatch
     monkeypatch.setattr(receptionist.notifications, "kick", lambda: None)
     async with sessions() as db:
         practice = await _practice(db)
-        call = Call(persona="", scenario="", status=CallStatus.active, direction="web", practice_id=practice.id)
+        call = Call(status=CallStatus.active, direction="web", practice_id=practice.id)
         db.add(call)
         await db.flush()
         t = datetime.utcnow()
