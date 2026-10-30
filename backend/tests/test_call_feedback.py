@@ -15,14 +15,24 @@ from app.schemas import RouteArgs
                                   # Second call (2026-10-01): «Ολόσωστα.» was asked to repeat.
                                   "Ολόσωστα.", "Σωστότατα", "Πολύ σωστά", "Βεβαιότατα", "Εγκρίνω",
                                   "Θετικό", "Θετικότατο", "Επιβεβαιώνω", "Ασφαλώς", "Σίγουρα", "Μια χαρά",
-                                  "Έτσι είναι", "Κομπλέ", "Εννοείται", "Ναι ναι", "Οπωσδήποτε", "Ok"])
+                                  "Έτσι είναι", "Κομπλέ", "Εννοείται", "Ναι ναι", "Οπωσδήποτε", "Ok",
+                                  # Confirmations used by the eval suite and scripted calls.
+                                  "Ναι, σωστά.", "Ναι, τώρα σωστά.", "Ναι.", "Ναι, ακυρώστε το.",
+                                  "Yes, that's right.", "Ναι, παρακαλώ", "Σωστά, ευχαριστώ"])
 def test_everyday_yes(text):
     assert _affirmative(text)
 
 
 @pytest.mark.parametrize("text", ["Όχι μάλιστα", "Μάλιστα, αλλά την Πέμπτη", "Μην το κλείσετε", "Καλά",
                                   "Δεν ξέρω", "Περιμένετε", "not right now", "",
-                                  "Λάθος", "Σωστά, όχι, λάθος το τηλέφωνο", "wrong time"])
+                                  "Λάθος", "Σωστά, όχι, λάθος το τηλέφωνο", "wrong time",
+                                  # Corrections and questions after a readback (audit P0-1).
+                                  "Ναι ναι, αλλάξτε την ώρα", "Σωστά, όμως θέλω Τρίτη",
+                                  "Ναι, μόνο που θέλω άλλη ώρα", "Ναι; Ποια ώρα είπατε;",
+                                  "Σωστά κατάλαβα ότι είναι Τρίτη;", "Περιμένετε, ναι", "μισό λεπτό, ναι",
+                                  "Εντάξει, για Πέμπτη μάλλον", "ok actually make it 10", "Ναι, στις δέκα",
+                                  "Ναι, Γιώργος Παπαδόπουλος", "Yes?", "Ναι, αλλά την Πέμπτη",
+                                  "Ναι ναι ναι, σωστά, εντάξει, πολύ ωραία μου ακούγεται"])
 def test_not_a_yes(text):
     assert not _affirmative(text)
 
@@ -69,7 +79,7 @@ async def test_two_word_off_topic_is_not_a_strike(sessions, monkeypatch):
 
 def test_greek_number_said_without_country_code():
     from app.schemas import normalize_phone
-    assert normalize_phone("690 000 0000") == "+306900000000"
+    assert normalize_phone("690 000 0123") == "+306900000123"
     assert normalize_phone("2101234567") == "+302101234567"
     assert normalize_phone("+12025550100") == "+12025550100"
 
