@@ -283,7 +283,7 @@ class ReceptionistAgent(Agent):
         2026-09-30). None asks for no reply; realtime models get the note."""
         return None if self._rc.engine != "realtime" else note
 
-    async def _tool(self, name: str, args: dict | None = None) -> str:
+    async def _tool(self, name: str, args: dict | None = None) -> str | llm.ToolResult:
         payload = dict(args or {})
         if name in ("book_appointment", "reschedule_appointment", "cancel_appointment"):
             payload.update(self._rc.confirmation_for_write())
@@ -291,7 +291,20 @@ class ReceptionistAgent(Agent):
         result = await self._rc.tool(name, payload)
         if name in ("book_appointment", "reschedule_appointment", "cancel_appointment") and not result.get("error"):
             self._rc.clear_confirmation()
-        return json.dumps(result, ensure_ascii=False)
+        return self._speak(result)
+
+    def _speak(self, result: dict) -> str | llm.ToolResult:
+        """A result the backend already worded (`say`): speak it now and skip the model's second
+        round, which made tool turns ~0.7-1.8 s slower than plain ones (scripted calls,
+        2026-10-31). The model still gets the result for the next turn."""
+        text = result.get("say")
+        if not text or self._rc.engine not in ("pipeline", "text_pipeline"):
+            return json.dumps(result, ensure_ascii=False)
+        if self._rc.telemetry:
+            self._rc.telemetry.answer_started(None)
+        self.session.say(text)
+        result = {k: v for k, v in result.items() if k != "say"}
+        return llm.ToolResult(json.dumps({**result, "already_said": text}, ensure_ascii=False), reply_required=False)
 
     @function_tool
     async def route_call(self, context: RunContext, intent: str, staff: str = "", department: str = "") -> str | None:
@@ -324,7 +337,7 @@ class ReceptionistAgent(Agent):
     async def check_availability(
         self, when: str, service_id: str = "", staff: str = "", appointment_id: str = "",
         after: str = "", before: str = "",
-    ) -> str:
+    ) -> str | llm.ToolResult:
         """Finds free appointment times. Call it before offering any time, and again whenever
         the caller wants a different day or time ("νωρίτερα", "αργότερα", "την επόμενη μέρα").
 
@@ -351,10 +364,10 @@ class ReceptionistAgent(Agent):
                 and self._rc.metadata.get("direction") in ("web", "inbound")
                 and not appointment_id and self._rc._last_user_text):
             payload["when"] = self._rc._last_user_text
-        reply = await self._tool("check_availability", payload)
-        if json.loads(reply).get("date"):
+        result = await self._rc.tool("check_availability", payload)
+        if result.get("date"):
             self._rc._availability_checked = True
-        return reply
+        return self._speak(result)
 
     @function_tool
     async def prepare_action(
@@ -395,7 +408,7 @@ class ReceptionistAgent(Agent):
     async def book_appointment(
         self, date: str, time: str, service_id: str, customer_name: str, customer_phone: str = "",
         staff: str = "", name_uncertain: bool = False,
-    ) -> str:
+    ) -> str | llm.ToolResult:
         """Books the appointment. Only after reading the details back and the caller said yes.
 
         Args:
@@ -415,7 +428,7 @@ class ReceptionistAgent(Agent):
         })
 
     @function_tool
-    async def find_appointments(self, phone: str = "", customer_name: str = "") -> str:
+    async def find_appointments(self, phone: str = "", customer_name: str = "") -> str | llm.ToolResult:
         """Finds the caller's upcoming appointments, before changing, cancelling or confirming one.
 
         Args:
@@ -425,13 +438,13 @@ class ReceptionistAgent(Agent):
         return await self._tool("find_appointments", {"phone": phone or None, "customer_name": customer_name or None})
 
     @function_tool
-    async def verify_code(self) -> str:
+    async def verify_code(self) -> str | llm.ToolResult:
         """Checks the SMS code the caller just read out, after find_appointments said sms_sent.
         The system reads the digits from what the caller said; never repeat them."""
         return await self._tool("verify_code", {"code": spoken_digits(self._rc._last_user_text)[:12]})
 
     @function_tool
-    async def reschedule_appointment(self, appointment_id: str, date: str, time: str) -> str:
+    async def reschedule_appointment(self, appointment_id: str, date: str, time: str) -> str | llm.ToolResult:
         """Moves an appointment to a new free time, after reading it back and a clear yes.
 
         Args:
@@ -442,7 +455,7 @@ class ReceptionistAgent(Agent):
         return await self._tool("reschedule_appointment", {"appointment_id": appointment_id, "date": date, "time": time})
 
     @function_tool
-    async def cancel_appointment(self, appointment_id: str) -> str:
+    async def cancel_appointment(self, appointment_id: str) -> str | llm.ToolResult:
         """Cancels an appointment, after the caller confirmed which one and said yes.
 
         Args:
@@ -451,7 +464,7 @@ class ReceptionistAgent(Agent):
         return await self._tool("cancel_appointment", {"appointment_id": appointment_id})
 
     @function_tool
-    async def confirm_appointment(self, appointment_id: str) -> str:
+    async def confirm_appointment(self, appointment_id: str) -> str | llm.ToolResult:
         """Marks an appointment as confirmed by the caller (e.g. on a reminder call).
 
         Args:
@@ -463,7 +476,7 @@ class ReceptionistAgent(Agent):
     async def take_message(
         self, caller_name: str, reason: str, callback_number: str = "", best_time: str = "",
         urgent: bool = False, for_whom: str = "",
-    ) -> str:
+    ) -> str | llm.ToolResult:
         """Saves a message for the business; they call the caller back.
 
         Args:
@@ -489,7 +502,7 @@ class ReceptionistAgent(Agent):
         return json.dumps(await self._rc.start_handoff(target), ensure_ascii=False)
 
     @function_tool
-    async def add_to_waitlist(self, when: str, service_id: str, customer_name: str) -> str:
+    async def add_to_waitlist(self, when: str, service_id: str, customer_name: str) -> str | llm.ToolResult:
         """Puts the caller on the waitlist when no time suits them; they're called if a slot frees up.
 
         Args:
@@ -514,7 +527,7 @@ class ReceptionistAgent(Agent):
         return json.dumps(result, ensure_ascii=False)
 
     @function_tool
-    async def admin_change(self, request: str) -> str:
+    async def admin_change(self, request: str) -> str | llm.ToolResult:
         """Plans a settings change (closure, leave, hours, a price, information) after admin_login.
         Read say_and_ask to them and wait for a clear yes or no.
 
@@ -524,7 +537,7 @@ class ReceptionistAgent(Agent):
         return await self._tool("admin_change", {"request": request})
 
     @function_tool
-    async def admin_confirm(self) -> str:
+    async def admin_confirm(self) -> str | llm.ToolResult:
         """Call after the caller answered the change admin_change read back. The system decides
         from their own words whether it was a yes or a no. Say the returned `say`."""
         await self._rc.caller_line_stored()
