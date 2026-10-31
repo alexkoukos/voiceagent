@@ -73,6 +73,29 @@ TURN_MAX_DELAY_MS = int(os.environ.get("TURN_MAX_DELAY_MS", "1000"))
 CONFIRM_MIN_DELAY = env_number("CONFIRM_MIN_DELAY", 0.8, 0.2, 3.0)
 CONFIRM_MAX_DELAY = env_number("CONFIRM_MAX_DELAY", 1.6, 0.5, 5.0)
 ENDPOINT_MIN_DELAY = float(os.environ.get("ENDPOINT_MIN_DELAY", "0.5"))
+# Greek "early" turns: silence after the caller's last word before the turn ends. Same as
+# Scribe's old window, so pauses are tolerated as before; only the reply starts sooner.
+GREEK_TURN_SILENCE = env_number("GREEK_TURN_SILENCE", 0.7, 0.4, 2.0)
+
+
+def endpointing_for(turns: str, patient: bool = False) -> dict:
+    """How long to wait after the caller stops. Patient: right after a readback, so a slow
+    «Ναι… ολόσωστα» is not cut after «Ναι…» (2026-10-01)."""
+    if turns == "semantic":
+        return {"mode": "dynamic", "min_delay": CONFIRM_MIN_DELAY if patient else ENDPOINT_MIN_DELAY,
+                "max_delay": CONFIRM_MAX_DELAY if patient else TURN_MAX_DELAY_MS / 1000}
+    if turns == "early":
+        return {"mode": "fixed", "min_delay": GREEK_TURN_SILENCE + (CONFIRM_MIN_DELAY if patient else 0)}
+    if turns == "own":
+        return {"mode": "fixed", "min_delay": CONFIRM_MIN_DELAY if patient else 0}
+    return {"mode": "fixed", "min_delay": CONFIRM_MIN_DELAY if patient else ENDPOINT_MIN_DELAY}
+
+
+def turns_for(engine: str, language: str) -> str | None:
+    """The call's turn mode (text engines), fixed when the session is built."""
+    if engine not in ("pipeline", "text_pipeline"):
+        return None
+    return providers.for_engine(engine)[0].turns(language)
 # A reminder call waits this long for the customer's "Εμπρός;" before greeting.
 GREETING_WAIT_SECONDS = 4
 # Noise filter on the friend's audio before any model hears it; "off" to compare recognition without it.
@@ -589,18 +612,16 @@ def build_session(ctx: JobContext, engine: str, voice: str, language: str, vocab
                 # Deepgram fallback calls use their STT end-of-speech events.
                 # Avoid loading a local turn model in the fallback worker: it previously
                 # exhausted Railway's memory.
-                turn_detection=(inference.TurnDetector(local_fallback=False)
-                                if turns == "semantic" else "stt"),
-                endpointing=({"mode": "dynamic", "min_delay": ENDPOINT_MIN_DELAY,
-                              "max_delay": TURN_MAX_DELAY_MS / 1000}
-                             if turns == "semantic" else
-                             {"mode": "fixed", "min_delay": 0 if turns == "own" else ENDPOINT_MIN_DELAY}),
+                turn_detection=(inference.TurnDetector(local_fallback=False) if turns == "semantic"
+                                else "vad" if turns == "early" else "stt"),
+                endpointing=endpointing_for(turns),
                 # A cough or a one-word "ναι" mid-reply shouldn't cut the agent off; if it was
                 # a false alarm, carry on where it stopped.
                 interruption={"min_duration": 0.6, "min_words": 2, "resume_false_interruption": True,
                               "false_interruption_timeout": 1.5},
-                # Prepare the text early, but do not voice it over a caller who is still speaking.
-                preemptive_generation={"enabled": True, "preemptive_tts": False},
+                # Prepare the reply, text and voice, before the turn is confirmed. It plays only
+                # once the turn ends, and tools run only then; if the caller goes on, it is redone.
+                preemptive_generation={"enabled": True, "preemptive_tts": True},
             ),
         )
     return AgentSession(**language_parts(engine, voice, language, vocabulary))
@@ -894,6 +915,7 @@ class ReceptionistCall:
         self._tool_lock = asyncio.Lock()
         self.caller_reports: set[asyncio.Task] = set()
         self.awaiting_pin = False
+        self.turns = turns_for(engine, self.language)
 
     def fixed_voice(self) -> str | None:
         """ElevenLabs voice for pre-voiced fixed lines (pipeline engine only)."""
@@ -952,13 +974,16 @@ class ReceptionistCall:
         self._last_user_text = text
         if self._patient:
             self._patient = False
-            self._set_endpointing(ENDPOINT_MIN_DELAY, TURN_MAX_DELAY_MS / 1000)
+            self._set_endpointing(patient=False)
 
-    def _set_endpointing(self, min_delay: float, max_delay: float) -> None:
-        if self.engine != "pipeline":
+    def _set_endpointing(self, *, patient: bool) -> None:
+        # Back to the call's own setting after a readback: resetting to the English values
+        # added 0.5 s to every later Greek turn.
+        if self.engine != "pipeline" or self.turns is None:
             return
+        options = {k: v for k, v in endpointing_for(self.turns, patient).items() if k != "mode"}
         try:
-            self.session.update_options(endpointing_opts={"min_delay": min_delay, "max_delay": max_delay})
+            self.session.update_options(endpointing_opts=options)
         except Exception:
             logger.exception("call %s: endpointing update failed", self.call_id)
 
@@ -982,7 +1007,7 @@ class ReceptionistCall:
                 self._confirmation_floor = self._user_turn
                 self._confirmation_armed = True
                 self._patient = True
-                self._set_endpointing(CONFIRM_MIN_DELAY, CONFIRM_MAX_DELAY)
+                self._set_endpointing(patient=True)
             except Exception:
                 logger.exception("call %s: confirmation readback failed", self.call_id)
 
