@@ -1,5 +1,6 @@
 """Speech-to-text providers: the caller's words, pinned to the call's language."""
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -9,15 +10,22 @@ from livekit.plugins import elevenlabs
 
 from speech import env_number
 
-# Pause that ends a transcribed segment, and the least wait after the caller stops before
-# replying. Lower is snappier but splits normal-speed speech into fragments.
+# Pause that ends a transcribed segment. In "own" mode it is also the whole wait before the
+# reply; lower split normal-speed speech into fragments (0.3 s, 2026-09-25).
 SCRIBE_SILENCE_SECS = env_number("SCRIBE_SILENCE_SECS", 0.7, 0.3, 2.0)
+# "early" mode: Scribe finalises the text after this short pause so the reply can be prepared
+# (model and voice) while the agent still waits for the turn to end.
+SCRIBE_EARLY_SECS = env_number("SCRIBE_EARLY_SECS", 0.35, 0.2, 1.0)
+# Greek turns: "early" (default) or "stt" (Scribe's end-of-speech ends the turn, as before).
+TURN_MODE_EL = os.environ.get("TURN_MODE_EL", "early")
 
 # How a provider's transcripts end the caller's turn:
+# "early": voice activity plus a fixed silence ends it; Scribe's quick final text starts the
+#   reply before that, so the model and the voice overlap the wait;
 # "own": its end-of-speech event is the turn end, nothing waits after it;
 # "pause": its end-of-speech event plus the fixed ENDPOINT_MIN_DELAY;
 # "semantic": LiveKit's turn detector decides.
-TurnMode = Literal["own", "pause", "semantic"]
+TurnMode = Literal["early", "own", "pause", "semantic"]
 
 
 @dataclass(frozen=True)
@@ -46,8 +54,16 @@ def vocab_terms(language: str, vocabulary: list[str] | None) -> list[str]:
     return [t for t in dict.fromkeys(terms) if 2 <= len(t) <= 20][:100]
 
 
+def scribe_turns(language: str) -> TurnMode:
+    # The turn model has no Greek: it waited for max_delay every turn. English: the semantic detector.
+    if language != "el":
+        return "semantic"
+    return "own" if TURN_MODE_EL == "stt" else "early"
+
+
 def scribe(language: str, vocabulary: list[str] | None = None):
     keyterms = vocab_terms(language, vocabulary)
+    silence = SCRIBE_EARLY_SECS if scribe_turns(language) == "early" else SCRIBE_SILENCE_SECS
     return elevenlabs.STT(
         keyterms=keyterms or None,
         model="scribe_v2_realtime",
@@ -57,7 +73,7 @@ def scribe(language: str, vocabulary: list[str] | None = None):
         # waits for a commit the session never sends, so no final transcript ever arrived
         # and the agent stayed silent for the whole call.
         # 0.3 s cut normal-speed sentences into fragments at every short pause.
-        server_vad={"vad_silence_threshold_secs": SCRIBE_SILENCE_SECS},
+        server_vad={"vad_silence_threshold_secs": silence},
     )
 
 
@@ -94,8 +110,6 @@ def deepgram(language: str, vocabulary: list[str] | None = None):
 
 
 PROVIDERS = {
-    # Greek: Scribe's end-of-speech is the turn end (the turn model has no Greek, so it
-    # waited for max_delay every turn). English: the semantic turn detector.
-    "scribe": SttProvider("scribe", scribe, lambda language: "own" if language == "el" else "semantic"),
+    "scribe": SttProvider("scribe", scribe, scribe_turns),
     "deepgram": SttProvider("deepgram", deepgram, lambda language: "pause"),
 }
