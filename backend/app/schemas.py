@@ -615,6 +615,14 @@ class AdminChangeArgs(BaseModel):
     request: str = Field(min_length=2, max_length=500)
 
 
+class ConfirmPendingArgs(BaseModel):
+    """The caller's reply to a readback, from the transcript. Without `execute` it only says
+    whether the reply is a plain yes; with it the backend carries out the stored action."""
+    confirmation_id: str
+    confirmation_text: str = Field(default="", max_length=SHORT_TEXT)
+    execute: bool = False
+
+
 class AdminConfirmArgs(BaseModel):
     # The caller's own reply to the readback, from the transcript (never the model's judgement).
     confirmation_text: str = Field(default="", max_length=SHORT_TEXT)

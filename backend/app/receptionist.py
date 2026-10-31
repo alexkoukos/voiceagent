@@ -13,7 +13,7 @@ from livekit import api
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import admin_changes, alerts, booking, events, notifications, routing, texts
+from app import admin_changes, alerts, booking, events, notifications, routing, schemas, texts
 from app.config import get_settings
 from app.models import (
     Appointment, Call, CallStatus, Customer, Handoff, Message, Practice, RoutingEvent, Staff, TranscriptEntry,
@@ -832,6 +832,31 @@ async def _confirmed(db: AsyncSession, call: Call, args, action: str) -> bool:
         event.path = "accepted"
         await routing.log(db, call, "confirmation_answer", args.confirmation_text.strip(), "B3 caller yes")
     return matches
+
+
+async def tool_confirm_pending(db: AsyncSession, call: Call, args) -> dict:
+    """The caller answered a readback with a plain yes: carry out exactly what was read back,
+    with no model in between. Gemini's own book call after a «Ναι» came back malformed four
+    times in a row and the booking was lost (scripted calls, 2026-10-31). The write tools
+    still check the yes against the caller's stored line (_confirmed)."""
+    if not _affirmative(args.confirmation_text):
+        return {"yes": False}
+    if not args.execute:
+        return {"yes": True}
+    event = await db.get(RoutingEvent, args.confirmation_id)
+    if event is None or event.call_id != call.id or event.kind != "confirmation":
+        return {"yes": True, "error": "unknown_confirmation"}
+    data = json.loads(event.value)
+    confirm = {"confirmation_id": args.confirmation_id, "confirmation_text": args.confirmation_text}
+    if data["action"] == "book":
+        return await tool_book(db, call, schemas.BookAppointment(
+            date=data["date"], time=data["time"], service_id=data["service_id"],
+            customer_name=data["customer_name"], customer_phone=data.get("customer_phone"),
+            staff=data.get("staff") or None, **confirm))
+    if data["action"] == "reschedule":
+        return await tool_reschedule(db, call, schemas.RescheduleArgs(
+            appointment_id=data["appointment_id"], date=data["date"], time=data["time"], **confirm))
+    return await tool_cancel(db, call, schemas.AppointmentRef(appointment_id=data["appointment_id"], **confirm))
 
 
 async def _customer_sms(db: AsyncSession, practice: Practice, call: Call, kind: str, appt: Appointment) -> None:
