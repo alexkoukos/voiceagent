@@ -849,6 +849,22 @@ async def _customer_sms(db: AsyncSession, practice: Practice, call: Call, kind: 
     )
 
 
+def done_line(kind: str, done: dict, language: str) -> str:
+    """What the agent says after a booking write, worded here so it needs no second model round."""
+    when = f"{booking.on_day(done.get('date_spoken', ''), language)} {done.get('time_spoken', '')}".removesuffix(".")
+    if language == "el":
+        return {
+            "booked": f"Έγινε, το ραντεβού σας κλείστηκε για {when}. Θα θέλατε κάτι άλλο;",
+            "rescheduled": f"Έγινε, το ραντεβού σας μεταφέρθηκε για {when}. Θα θέλατε κάτι άλλο;",
+            "cancelled": "Το ραντεβού ακυρώθηκε. Θα θέλατε κάτι άλλο;",
+        }[kind]
+    return {
+        "booked": f"Done, you're booked for {when}. Is there anything else?",
+        "rescheduled": f"Done, your appointment is now {when}. Is there anything else?",
+        "cancelled": "The appointment is cancelled. Is there anything else?",
+    }[kind]
+
+
 async def tool_book(db: AsyncSession, call: Call, args) -> dict:
     call_id = call.id  # Rollback expires ORM attributes, including call.id.
     practice = await _practice(db, call)
@@ -887,7 +903,8 @@ async def tool_book(db: AsyncSession, call: Call, args) -> dict:
     await db.commit()
     notifications.kick()
     staff = await booking.staff_of(db, practice.id)
-    return {"booked": True, **booking.describe(practice, appt, staff, language)}
+    done = booking.describe(practice, appt, staff, language)
+    return {"booked": True, **done, "say": done_line("booked", done, language)}
 
 
 async def _found_ids(db: AsyncSession, call: Call) -> set[str]:
@@ -1036,7 +1053,9 @@ async def tool_reschedule(db: AsyncSession, call: Call, args) -> dict:
     await db.commit()
     notifications.kick()
     staff = await booking.staff_of(db, practice.id)
-    return {"rescheduled": True, **booking.describe(practice, appt, staff, _lang(call, practice))}
+    language = _lang(call, practice)
+    done = booking.describe(practice, appt, staff, language)
+    return {"rescheduled": True, **done, "say": done_line("rescheduled", done, language)}
 
 
 async def tool_cancel(db: AsyncSession, call: Call, args) -> dict:
@@ -1068,7 +1087,7 @@ async def tool_cancel(db: AsyncSession, call: Call, args) -> dict:
     notifications.kick()
     from app.dispatcher import start_next_queued
     await start_next_queued(db)
-    return {"cancelled": True}
+    return {"cancelled": True, "say": done_line("cancelled", {}, _lang(call, practice))}
 
 
 async def tool_confirm(db: AsyncSession, call: Call, args) -> dict:
