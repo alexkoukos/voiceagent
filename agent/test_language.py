@@ -113,20 +113,52 @@ def stub_parts(monkeypatch):
     return built
 
 
-@pytest.mark.parametrize("language,semantic", [("el", False), ("en", True)])
-def test_scribe_uses_one_greek_end_of_turn_decision(monkeypatch, language, semantic):
+@pytest.mark.parametrize("language,mode,detection,min_delay", [
+    ("el", "early", "vad", 0.7),  # default: the reply is prepared during the 0.7 s wait
+    ("el", "stt", "stt", 0),      # TURN_MODE_EL=stt: Scribe's end-of-speech ends the turn, as before
+    ("en", "early", "semantic-detector", 0.5),
+])
+def test_greek_turns_wait_the_same_silence_but_start_the_reply_early(monkeypatch, language, mode, detection, min_delay):
     from unittest.mock import Mock
     detector = Mock(return_value="semantic-detector")
     monkeypatch.setattr(worker.inference, "TurnDetector", detector)
+    monkeypatch.setattr(worker.provider_stt, "TURN_MODE_EL", mode)
     stub_parts(monkeypatch)
     monkeypatch.setattr(worker, "AgentSession", lambda **kwargs: kwargs)
     ctx = SimpleNamespace(proc=SimpleNamespace(userdata={"vad": object()}))
     session = worker.build_session(ctx, "pipeline", "default", language)
     options = session["turn_handling"]
-    assert options["turn_detection"] == ("semantic-detector" if semantic else "stt")
-    assert options["endpointing"]["min_delay"] == (worker.ENDPOINT_MIN_DELAY if semantic else 0)
-    assert detector.call_count == int(semantic)
+    assert options["turn_detection"] == detection
+    assert options["endpointing"]["min_delay"] == min_delay
+    assert detector.call_count == int(language == "en")
     assert options["interruption"]["resume_false_interruption"] is True
+    assert options["preemptive_generation"] == {"enabled": True, "preemptive_tts": True}
+
+
+def test_scribe_finalises_early_only_in_early_mode(monkeypatch):
+    sent = []
+    monkeypatch.setattr(worker.provider_stt.elevenlabs, "STT", lambda **kwargs: sent.append(kwargs))
+    for mode, language, silence in (("early", "el", 0.35), ("stt", "el", 0.7), ("early", "en", 0.7)):
+        monkeypatch.setattr(worker.provider_stt, "TURN_MODE_EL", mode)
+        worker.provider_stt.scribe(language)
+        assert sent[-1]["server_vad"]["vad_silence_threshold_secs"] == silence
+
+
+@pytest.mark.parametrize("turns,normal,patient", [
+    ("early", 0.7, 1.5),  # the same total patience after a readback as the old 0.7 + 0.8
+    ("own", 0, 0.8),
+    ("semantic", 0.5, 0.8),
+])
+def test_patience_after_a_readback_returns_to_the_calls_own_setting(monkeypatch, turns, normal, patient):
+    rc = worker.ReceptionistCall(SimpleNamespace(), {"call_id": "call"}, "pipeline")
+    rc.turns = turns
+    sent = []
+    rc.session = SimpleNamespace(update_options=lambda **kwargs: sent.append(kwargs["endpointing_opts"]))
+    rc._set_endpointing(patient=True)
+    rc._patient = True
+    rc.heard_user("Ναι, σωστά.")
+    assert [round(o["min_delay"], 2) for o in sent] == [patient, normal]
+    assert all("mode" not in o for o in sent)
 
 
 def test_stt_provider_can_be_swapped_on_the_main_engine_only(monkeypatch):
