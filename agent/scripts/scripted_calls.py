@@ -229,6 +229,7 @@ async def main() -> None:
     p.add_argument("--practice", help="practice id (to read its call log)")
     p.add_argument("--scenarios", default="scripts/scenarios.el.json")
     p.add_argument("--only", help="run scenarios whose name contains this")
+    p.add_argument("--limit", type=int, help="run only the first N selected scenarios")
     p.add_argument("--caller-tts", choices=("auto", "gemini", "elevenlabs"), default="auto")
     p.add_argument("--isolated", action="store_true", help="Create synthetic fixtures; backend must enable TEST_SESSIONS_ENABLED")
     args = p.parse_args()
@@ -240,6 +241,7 @@ async def main() -> None:
     scenarios = json.load(open(args.scenarios, encoding="utf-8"))
     if args.only:
         scenarios = [s for s in scenarios if args.only in s["name"]]
+    scenarios = scenarios[:args.limit] if args.limit else scenarios
     if not scenarios:
         p.error("No scenarios selected")
     results = []
