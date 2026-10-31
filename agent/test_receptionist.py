@@ -358,7 +358,8 @@ def test_spoken_digits(said, digits):
 
 @pytest.mark.asyncio
 async def test_pin_is_taken_in_code_and_never_reaches_the_model():
-    rc = SimpleNamespace(awaiting_pin=True, tool=AsyncMock(return_value={"ok": True}), engine="pipeline")
+    rc = SimpleNamespace(awaiting_pin=True, tool=AsyncMock(return_value={"ok": True}), engine="pipeline",
+                         answer_readback=AsyncMock(return_value=False))
     agent = worker.ReceptionistAgent(call=rc, instructions="x", call_id="c", language="el")
     waiting = worker.llm.ChatMessage(role="user", content=["Ένα λεπτό να τον βρω"])
     await agent.on_user_turn_completed(None, waiting)
@@ -391,3 +392,54 @@ def test_a_reply_the_backend_worded_is_spoken_without_a_second_model_round(engin
         assert said == [] and json.loads(out)["say"] == line
     # Without a worded line the model replies as before.
     assert worker.ReceptionistAgent._speak(receiver, {"error": "no_date"}) == '{"error": "no_date"}'
+
+
+@pytest.mark.asyncio
+async def test_a_plain_yes_to_the_readback_is_carried_out_without_the_model():
+    calls, said, added, replies = [], [], [], []
+
+    async def tool(name, args):
+        calls.append((name, dict(args)))
+        if not args.get("execute"):
+            return {"yes": args["confirmation_text"].startswith("Ναι")}
+        return {"booked": True, "say": "Έγινε, το ραντεβού σας κλείστηκε για την Τρίτη 3 Νοεμβρίου στις εννέα το πρωί."}
+
+    rc = worker.ReceptionistCall(SimpleNamespace(), {"call_id": "call"}, "pipeline")
+    rc.tool = tool
+    rc.session = SimpleNamespace(say=said.append, _conversation_item_added=added.append,
+                                 generate_reply=lambda **kw: replies.append(kw))
+    agent = SimpleNamespace(_chat_ctx=SimpleNamespace(items=[]))
+
+    # Not a readback answer: nothing happens here.
+    assert await rc.answer_readback(agent, SimpleNamespace(text_content="Ναι.")) is False
+    rc._confirmation_id, rc._confirmation_armed = "conf-1", True
+
+    # Not a plain yes: the model answers, and the caller's line is left to the SDK.
+    assert await rc.answer_readback(agent, SimpleNamespace(text_content="Όχι, την Τετάρτη.")) is False
+    assert added == [] and said == []
+
+    # A plain yes: the line is stored first, then the backend books and words the reply.
+    yes = SimpleNamespace(text_content="Ναι, σωστά.")
+    assert await rc.answer_readback(agent, yes) is True
+    assert added == [yes] and agent._chat_ctx.items == [yes]
+    assert calls[-1] == ("confirm_pending", {"confirmation_id": "conf-1", "confirmation_text": "Ναι, σωστά.", "execute": True})
+    assert said == ["Έγινε, το ραντεβού σας κλείστηκε για την Τρίτη 3 Νοεμβρίου στις εννέα το πρωί."]
+    assert rc._confirmation_id is None and replies == []
+
+
+@pytest.mark.asyncio
+async def test_a_refused_readback_answer_goes_back_to_the_model():
+    replies, said = [], []
+
+    async def tool(name, args):
+        return {"yes": True} if not args.get("execute") else {"booked": False, "error": "slot_taken"}
+
+    rc = worker.ReceptionistCall(SimpleNamespace(), {"call_id": "call"}, "pipeline")
+    rc.tool = tool
+    rc._confirmation_id, rc._confirmation_armed = "conf-1", True
+    rc.session = SimpleNamespace(say=said.append, _conversation_item_added=lambda m: None,
+                                 generate_reply=lambda **kw: replies.append(kw))
+    assert await rc.answer_readback(SimpleNamespace(_chat_ctx=SimpleNamespace(items=[])),
+                                    SimpleNamespace(text_content="Ναι.")) is True
+    assert said == [] and "slot_taken" in replies[0]["instructions"]
+    assert rc._confirmation_id == "conf-1"  # still pending: the model may offer another time

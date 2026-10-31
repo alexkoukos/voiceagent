@@ -38,6 +38,7 @@ from livekit.agents import (
     JobProcess,
     WorkerOptions,
     RunContext,
+    StopResponse,
     cli,
     function_tool,
     get_job_context,
@@ -544,6 +545,8 @@ class ReceptionistAgent(Agent):
         return await self._tool("admin_confirm", {"confirmation_text": self._rc._last_user_text})
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+        if await self._rc.answer_readback(self, new_message):
+            raise StopResponse()
         # The PIN: taken from the caller's words here and replaced in the history, transcript
         # and model input by a note with the result (audit P0-5).
         if not self._rc.awaiting_pin:
@@ -1030,6 +1033,35 @@ class ReceptionistCall:
         if self._confirmation_id and self._confirmation_armed and self._user_turn > self._confirmation_floor:
             return {"confirmation_id": self._confirmation_id, "confirmation_text": self._last_user_text}
         return {}
+
+    async def answer_readback(self, agent: Agent, message: llm.ChatMessage) -> bool:
+        """A plain yes to the readback: the backend carries out what it read back and words the
+        reply, with no model round. Gemini's own book call after a «Ναι» came back malformed four
+        times in a row and the booking was lost (scripted calls, 2026-10-31). True when this
+        turn was answered here."""
+        text = (message.text_content or "").strip()
+        if (self.engine not in ("pipeline", "text_pipeline") or not text
+                or not (self._confirmation_id and self._confirmation_armed)):
+            return False
+        ask = {"confirmation_id": self._confirmation_id, "confirmation_text": text}
+        if not (await self.tool("confirm_pending", ask)).get("yes"):
+            return False  # anything but a plain yes: the model answers it as before
+        # The turn skips the model's reply, so the SDK leaves the caller's line out of the
+        # history and the transcript (StopResponse). Add it the way the SDK does for a skipped
+        # reply; the backend then checks the yes against the stored line.
+        agent._chat_ctx.items.append(message)
+        self.session._conversation_item_added(message)
+        await self.caller_line_stored()
+        result = await self.tool("confirm_pending", {**ask, "execute": True})
+        if result.get("say") and not result.get("error"):
+            self.clear_confirmation()
+            if self.telemetry:
+                self.telemetry.answer_started(None)
+            self.session.say(result["say"])
+        else:
+            # Refused (slot taken, expired, ...): the model explains, with the result as context.
+            self.session.generate_reply(instructions=f"The booking system answered: {json.dumps(result, ensure_ascii=False)}")
+        return True
 
     async def caller_line_stored(self, timeout: float = 3.0) -> None:
         """Wait until the caller's latest line is stored; the backend checks the yes against it."""
