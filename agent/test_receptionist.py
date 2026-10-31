@@ -1,3 +1,4 @@
+import json
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -177,13 +178,13 @@ async def test_first_availability_lookup_uses_the_recognized_caller_day():
 
     async def call_tool(name, payload):
         sent.append(payload)
-        return '{"error":"no_date"}' if len(sent) == 1 else '{"date":"2026-09-29"}'
+        return {"error": "no_date"} if len(sent) == 1 else {"date": "2026-09-29"}
 
     rc = SimpleNamespace(
         metadata={"direction": "web"}, _last_user_text="Θέλω κούρεμα με τον Νίκο",
-        _availability_checked=False,
+        _availability_checked=False, tool=call_tool,
     )
-    receiver = SimpleNamespace(_rc=rc, _tool=call_tool)
+    receiver = SimpleNamespace(_rc=rc, _speak=lambda result: result)
     await worker.ReceptionistAgent.check_availability.__wrapped__(
         receiver, when="σήμερα", service_id="haircut", staff="Νίκος",
     )
@@ -372,3 +373,21 @@ async def test_pin_is_taken_in_code_and_never_reaches_the_model():
     rc.tool.assert_awaited_once_with("admin_login", {"pin": "4821"})
     assert not rc.awaiting_pin
     assert worker.spoken_digits(said.text_content) == "" and "ok" in said.text_content
+
+
+@pytest.mark.parametrize("engine,direct", [("pipeline", True), ("text_pipeline", True), ("realtime", False)])
+def test_a_reply_the_backend_worded_is_spoken_without_a_second_model_round(engine, direct):
+    said = []
+    rc = SimpleNamespace(engine=engine, telemetry=None)
+    receiver = SimpleNamespace(_rc=rc, session=SimpleNamespace(say=said.append))
+    line = "Την Τρίτη 3 Νοεμβρίου έχουμε ελεύθερα στις εννέα ή στις εννέα και μισή το πρωί. Σας βολεύει κάποια;"
+    out = worker.ReceptionistAgent._speak(receiver, {"date": "2026-11-03", "free_times": ["09:00", "09:30"], "say": line})
+    if direct:
+        assert said == [line]
+        assert out.reply_required is False
+        # The model keeps what was offered (for prepare_action) and knows it was said.
+        assert json.loads(out.output) == {"date": "2026-11-03", "free_times": ["09:00", "09:30"], "already_said": line}
+    else:
+        assert said == [] and json.loads(out)["say"] == line
+    # Without a worded line the model replies as before.
+    assert worker.ReceptionistAgent._speak(receiver, {"error": "no_date"}) == '{"error": "no_date"}'
