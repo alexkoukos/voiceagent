@@ -368,6 +368,13 @@ class ReceptionistAgent(Agent):
         result = await self._rc.tool("check_availability", payload)
         if result.get("date"):
             self._rc._availability_checked = True
+        spoken = (self._rc._user_turn, result.get("say"))
+        if result.get("say") and spoken == self._rc._spoken_offer:
+            # The same offer again in the same turn (the model looping on a refused readback,
+            # EVAL-013): say it once, then the model words what happens next.
+            result = {k: v for k, v in result.items() if k != "say"}
+        elif result.get("say"):
+            self._rc._spoken_offer = spoken
         return self._speak(result)
 
     @function_tool
@@ -930,6 +937,7 @@ class ReceptionistCall:
         self._handoff_pending = False
         self._tool_lock = asyncio.Lock()
         self.caller_reports: set[asyncio.Task] = set()
+        self._spoken_offer: tuple[int, str] | None = None  # (caller turn, offer) last spoken
         self.awaiting_pin = False
         self.turns = turns_for(engine, self.language)
 
