@@ -290,7 +290,11 @@ class Harness:
 
         async def recording_tool(name, args):
             result = await original_tool(name, args)
-            tools.append((name, args, result))
+            if name == "turn":
+                # The state-machine flow: the steps the backend took this turn.
+                tools.extend(tuple(step) for step in result.get("actions", []))
+            else:
+                tools.append((name, args, result))
             return result
         rc.tool = recording_tool
 
