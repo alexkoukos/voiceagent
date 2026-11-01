@@ -58,7 +58,7 @@ async def test_a_booking_from_hello_to_booked(sessions):
         call = await db.get(Call, call.id)
         appt = await db.get(Appointment, call.appointment_id)
         assert appt.service_id == "cleaning" and appt.customer_name == "Γιώργος Παπαδόπουλος"
-        assert [a[0] for a in out["actions"]] == ["confirm_pending"]
+        assert [a[0] for a in out["actions"]] == ["book_appointment"]
 
 
 @pytest.mark.asyncio
@@ -152,3 +152,6 @@ async def test_cancel_finds_the_callers_appointment_and_reads_it_back(sessions):
         assert out.get("readback") and out["say"].startswith("Βρήκα το ραντεβού σας")
         out = await say(db, call, "Ναι.", intent="none")
         assert out["say"].startswith("Το ραντεβού ακυρώθηκε")
+        # Saying it again doesn't start a new cancellation (EVAL-005).
+        out = await say(db, call, "Ναι, ακυρώστε το.", intent="cancel")
+        assert out["say"].startswith("Το ραντεβού έχει ήδη ακυρωθεί")

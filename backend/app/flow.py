@@ -35,6 +35,10 @@ LINES = {
         "message_name": "Με ποιο όνομα να αφήσω το μήνυμα;",
         "message_saved": "Το μήνυμα καταγράφηκε και θα σας καλέσουν πίσω. Θα θέλατε κάτι άλλο;",
         "help": "Πώς μπορώ να βοηθήσω;",
+        "already_book": "Το ραντεβού σας έχει ήδη κλειστεί. Θα θέλατε κάτι άλλο;",
+        "already_change": "Το ραντεβού σας έχει ήδη αλλάξει. Θα θέλατε κάτι άλλο;",
+        "already_cancel": "Το ραντεβού έχει ήδη ακυρωθεί. Θα θέλατε κάτι άλλο;",
+        "same_day": "Έχουμε όμως ελεύθερα {times}. Σας βολεύει κάποια;",
         "change_what": "Εντάξει. Τι θέλετε να αλλάξουμε;",
         "not_free": "Στις {time} δεν είναι ελεύθερα.",
         "nothing_that_day": "{day} δεν έχουμε ελεύθερη ώρα{part}.",
@@ -60,6 +64,10 @@ LINES = {
         "message_name": "What name should I leave the message under?",
         "message_saved": "Your message is saved and they'll call you back. Is there anything else?",
         "help": "How can I help you?",
+        "already_book": "Your appointment is already booked. Is there anything else?",
+        "already_change": "Your appointment has already been moved. Is there anything else?",
+        "already_cancel": "The appointment is already cancelled. Is there anything else?",
+        "same_day": "We do have {times} free. Would any of those suit you?",
         "change_what": "All right. What would you like to change?",
         "not_free": "{time} isn't free.",
         "nothing_that_day": "On {day} we have nothing free{part}.",
@@ -77,6 +85,7 @@ LINES = {
         "and": " and ",
     },
 }
+WRITES = {"book": "book_appointment", "reschedule": "reschedule_appointment", "cancel": "cancel_appointment"}
 HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 
@@ -120,9 +129,10 @@ async def _decide(t: Turn) -> dict:
         if receptionist._affirmative(t.text):
             result = await t.tool("confirm_pending", receptionist.tool_confirm_pending, schemas.ConfirmPendingArgs(
                 confirmation_id=st["confirmation_id"], confirmation_text=t.text, execute=True))
+            t.actions[-1][0] = WRITES.get(st.get("pending"), "confirm_pending")
             st.pop("confirmation_id")
             if result.get("say") and not result.get("error"):
-                st.update(task=None, done=True)
+                st.update(task=None, done=True, last_done=st.get("task"))
                 for slot in ("time", "offer", "appointment_id"):
                     st.pop(slot, None)
                 return {"say": result["say"]}
@@ -151,6 +161,9 @@ async def _decide(t: Turn) -> dict:
                     "say_transferring": t.line("transferring"), "say_waiting": t.line("waiting")}
         st["task"] = "message"
         return {"say": t.line("unavailable")}
+
+    if intent in TASKS and intent == st.get("last_done") and not st.get("task") and not _new_slots(u):
+        return {"say": t.line("already_" + intent) if intent != "message" else t.line("message_saved")}
 
     if intent in TASKS and st.get("task") != intent:
         st.update(task=intent, done=False)
@@ -313,6 +326,8 @@ async def _offer(t: Turn, service: dict) -> dict:
     candidates += result.get("next_days_with_free_times") or []
     for c in candidates:
         line = booking.offer_line({"date_spoken": c["date_spoken"], "free_times": c["free_times"]}, t.lang)
+        if line and lead and c["date"] == result["date"]:
+            line = t.line("same_day", times=booking._times_spoken(c["free_times"][:3], t.lang))
         if line:
             st["offer"] = {"date": c["date"], "free_times": c["free_times"]}
             return {"say": " ".join(lead + [line])}
@@ -327,7 +342,7 @@ async def _readback(t: Turn, action: str, service: dict, day: str, time: str) ->
         appointment_id=st.get("appointment_id") if action != "book" else None,
         customer_phone=st.get("phone") if action == "book" else None))
     if result.get("confirmation_id"):
-        st["confirmation_id"] = result["confirmation_id"]
+        st.update(confirmation_id=result["confirmation_id"], pending=action)
         return {"say": result["say"], "readback": True}
     error = result.get("error")
     if error == "name_is_staff":
@@ -351,7 +366,7 @@ async def _cancel(t: Turn, *, peek: bool) -> dict | None:
     result = await t.tool("prepare_action", receptionist.tool_prepare_action, schemas.PrepareAction(
         action="cancel", appointment_id=appointment_id))
     if result.get("confirmation_id"):
-        t.st["confirmation_id"] = result["confirmation_id"]
+        t.st.update(confirmation_id=result["confirmation_id"], pending="cancel")
         return {"say": " ".join(filter(None, [lead, result["say"]])), "readback": True}
     return {"reply": "model"}
 
