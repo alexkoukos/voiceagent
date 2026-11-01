@@ -11,7 +11,9 @@ import os
 from providers import llm, stt, tts
 
 ENGINES = {
-    "pipeline": ("scribe", "gemini-flash-lite", "elevenlabs"),
+    # OpenAI live transcription: Scribe realtime invented text and dropped short answers
+    # («Ναι.») on Greek phone audio (stt_bakeoff.py and scripted calls, 2026-11-01).
+    "pipeline": ("openai", "gemini-flash-lite", "elevenlabs"),
     "text_pipeline": ("deepgram", "gemini-flash-lite", "gemini"),
 }
 
