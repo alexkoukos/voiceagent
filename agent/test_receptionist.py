@@ -182,7 +182,7 @@ async def test_first_availability_lookup_uses_the_recognized_caller_day():
 
     rc = SimpleNamespace(
         metadata={"direction": "web"}, _last_user_text="Θέλω κούρεμα με τον Νίκο",
-        _availability_checked=False, tool=call_tool,
+        _availability_checked=False, tool=call_tool, _user_turn=1, _spoken_offer=None,
     )
     receiver = SimpleNamespace(_rc=rc, _speak=lambda result: result)
     await worker.ReceptionistAgent.check_availability.__wrapped__(
@@ -443,3 +443,20 @@ async def test_a_refused_readback_answer_goes_back_to_the_model():
                                     SimpleNamespace(text_content="Ναι.")) is True
     assert said == [] and "slot_taken" in replies[0]["instructions"]
     assert rc._confirmation_id == "conf-1"  # still pending: the model may offer another time
+
+
+@pytest.mark.asyncio
+async def test_the_same_offer_is_spoken_once_per_caller_turn():
+    line = "Την Πέμπτη 19 Νοεμβρίου έχουμε ελεύθερα στις εννέα και μισή το πρωί. Σας βολεύει;"
+
+    async def call_tool(name, payload):
+        return {"date": "2026-11-19", "free_times": ["09:30"], "say": line}
+
+    rc = SimpleNamespace(metadata={"direction": "inbound"}, _last_user_text="", _availability_checked=True,
+                         tool=call_tool, _user_turn=3, _spoken_offer=None)
+    receiver = SimpleNamespace(_rc=rc, _speak=lambda result: result)
+    check = worker.ReceptionistAgent.check_availability.__wrapped__
+    assert (await check(receiver, when="την Πέμπτη"))["say"] == line
+    assert "say" not in await check(receiver, when="2026-11-19")  # looping in the same turn
+    rc._user_turn = 4
+    assert (await check(receiver, when="την Πέμπτη"))["say"] == line  # the caller asked again
