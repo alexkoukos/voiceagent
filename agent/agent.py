@@ -24,6 +24,7 @@ import os
 import re
 import time
 import uuid
+from urllib.parse import unquote
 from collections.abc import Callable
 
 import httpx
@@ -607,19 +608,25 @@ def prewarm(proc: JobProcess) -> None:
 # FLOW_ENGINE=fsm: the backend's state machine runs the conversation (backend/app/flow.py).
 # "tools" keeps the model-driven tool flow.
 FLOW_ENGINE = os.environ.get("FLOW_ENGINE", "tools")
-FLOW_COMMIT_TIMEOUT = 20.0  # longest wait for the turn the model started on to be final
+FLOW_COMMIT_TIMEOUT = 20.0
+RECOVERY_LINE = {"el": "Συγγνώμη, μπορείτε να το πείτε ξανά;", "en": "Sorry, could you say that again?"}  # longest wait for the turn the model started on to be final
 
 
-def _understood(line: str) -> dict | None:
-    """The model's first line: its reading of the caller's turn, as JSON."""
-    line = line.strip().removeprefix("```json").removeprefix("```").strip()
-    if not line.startswith("{"):
-        return None
+def _understood(text: str) -> tuple[dict | None, str]:
+    """The model's reading of the caller's turn: the JSON object it starts with, and the text
+    after it. Gemini sometimes writes the reply on the same line, or Greek percent-encoded
+    («α%CF%8D%CF%81%CE%B9%CE%BF» for «αύριο», EVAL-013, 2026-11-01)."""
+    body = text.lstrip().removeprefix("```json").removeprefix("```").lstrip()
+    if not body.startswith("{"):
+        return None, text
     try:
-        value = json.loads(line)
+        value, end = json.JSONDecoder().raw_decode(body)
     except ValueError:
-        return None
-    return value if isinstance(value, dict) else None
+        return None, text
+    if not isinstance(value, dict):
+        return None, text
+    value = {k: unquote(v) if isinstance(v, str) and "%" in v else v for k, v in value.items()}
+    return value, body[end:].lstrip().lstrip("`").lstrip()
 
 
 class FlowAgent(ReceptionistAgent):
@@ -642,20 +649,23 @@ class FlowAgent(ReceptionistAgent):
             chat_ctx.items.insert(max(0, len(chat_ctx.items) - 1), llm.ChatMessage(role="system", content=[note]))
         started = time.perf_counter()
         stream = Agent.default.llm_node(self, chat_ctx, [], model_settings)
-        head, rest = "", ""
+        head, understood, rest = "", None, ""
         try:
             async for chunk in stream:
                 head += _chunk_text(chunk)
-                if "\n" in head:
-                    head, rest = head.split("\n", 1)
-                    break
-            understood = _understood(head)
+                if "}" in head:
+                    understood, rest = _understood(head)
+                    if understood is not None:
+                        break
             if understood is None:
+                if head.lstrip().startswith(("{", "`")):
+                    # A broken first line: never read JSON out loud.
+                    logger.warning("call %s: unreadable flow line", rc.call_id)
+                    yield RECOVERY_LINE["el" if self.language == "el" else "en"]
+                    return
                 # The model skipped the format: speak what it wrote, change nothing.
                 logger.warning("call %s: flow reply without its first line", rc.call_id)
-                yield head + rest
-                async for chunk in stream:
-                    yield _chunk_text(chunk)
+                yield head
                 return
             # The model may have started before the turn was final (preemptive generation):
             # the backend only acts on a final turn whose line is stored.
@@ -681,11 +691,17 @@ class FlowAgent(ReceptionistAgent):
                     rc._set_endpointing(patient=True)
                 yield out["say"]
                 return
+            said = rest.strip()
             if rest:
                 yield rest
             async for chunk in stream:
-                yield _chunk_text(chunk)
-            if out.get("then"):
+                text = _chunk_text(chunk)
+                said = said or text.strip()
+                yield text
+            if not said:
+                # The model wrote nothing after its first line: the backend's line instead of silence.
+                yield out.get("fallback") or ""
+            elif out.get("then"):
                 yield " " + out["then"]
         finally:
             await stream.aclose()
@@ -1168,7 +1184,13 @@ class ReceptionistCall:
         earlier). False if it never becomes final: the caller went on talking."""
         loop = asyncio.get_running_loop()
         deadline = loop.time() + FLOW_COMMIT_TIMEOUT
-        while text not in self._final_turns:
+
+        def same(a: str) -> bool:
+            # The SDK reuses an early reply when the final transcript only differs in
+            # punctuation or case; a strict match would wait here and leave the caller in silence.
+            return re.findall(r"\w+", a.lower()) == re.findall(r"\w+", text.lower())
+
+        while not any(same(t) for t in self._final_turns):
             self._turn_heard.clear()
             left = deadline - loop.time()
             if left <= 0:
@@ -1177,7 +1199,7 @@ class ReceptionistCall:
                 await asyncio.wait_for(self._turn_heard.wait(), timeout=left)
             except asyncio.TimeoutError:
                 return False
-        self._final_turns.remove(text)
+        self._final_turns.remove(next(t for t in self._final_turns if same(t)))
         return True
 
     async def caller_line_stored(self, timeout: float = 3.0) -> None:
