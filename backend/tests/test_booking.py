@@ -116,6 +116,34 @@ def test_say_time_reads_times_as_words():
     assert say_time("17:30", "en") == "at 5:30 p.m."
 
 
+def test_the_backend_words_a_plain_offer_itself():
+    from app.booking import offer_line
+    tuesday = {"date_spoken": "Τρίτη 3 Νοεμβρίου", "free_times": ["09:00", "09:15", "09:30", "10:00"]}
+    assert offer_line(tuesday, "el") == ("Την Τρίτη 3 Νοεμβρίου έχουμε ελεύθερα στις εννέα, στις εννέα και τέταρτο "
+                                         "ή στις εννέα και μισή το πρωί. Σας βολεύει κάποια;")
+    assert offer_line({"date_spoken": "Σάββατο 31 Οκτωβρίου", "free_times": ["12:30", "16:00"]}, "el") == (
+        "Το Σάββατο 31 Οκτωβρίου έχουμε ελεύθερα στις δώδεκα και μισή το μεσημέρι ή στις τέσσερις το απόγευμα. "
+        "Σας βολεύει κάποια;")
+    assert offer_line({"date_spoken": "Δευτέρα 2 Νοεμβρίου", "free_times": ["17:00"]}, "el") == (
+        "Τη Δευτέρα 2 Νοεμβρίου έχουμε ελεύθερα στις πέντε το απόγευμα. Σας βολεύει;")
+    assert offer_line({"date_spoken": "Tuesday November 3", "free_times": ["09:00", "14:30"]}, "en") == (
+        "On Tuesday November 3 we're free at 9 a.m. or at 2:30 p.m. Would any of those suit you?")
+    # The model words the rest: nothing free, a closure, an exact-time check.
+    assert offer_line({"date_spoken": "Τρίτη 3 Νοεμβρίου", "free_times": []}, "el") is None
+    assert offer_line({**tuesday, "business_closed": "x"}, "el") is None
+    assert offer_line({**tuesday, "after": "09:00", "before": "09:00"}, "el") is None
+
+
+def test_the_backend_words_what_was_booked():
+    from app.receptionist import done_line
+    done = {"date_spoken": "Τρίτη 3 Νοεμβρίου", "time_spoken": "στις εννέα το πρωί"}
+    assert done_line("booked", done, "el") == (
+        "Έγινε, το ραντεβού σας κλείστηκε για την Τρίτη 3 Νοεμβρίου στις εννέα το πρωί. Θα θέλατε κάτι άλλο;")
+    assert done_line("cancelled", {}, "el") == "Το ραντεβού ακυρώθηκε. Θα θέλατε κάτι άλλο;"
+    assert done_line("booked", {"date_spoken": "Tuesday November 3", "time_spoken": "at 9 a.m."}, "en") == (
+        "Done, you're booked for Tuesday November 3 at 9 a.m. Is there anything else?")
+
+
 def test_say_phone_digit_by_digit():
     from app.booking import say_phone
     assert say_phone("+306912345678") == "6 9 1 2 3 4 5 6 7 8"

@@ -1,3 +1,4 @@
+import json
 import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -177,13 +178,13 @@ async def test_first_availability_lookup_uses_the_recognized_caller_day():
 
     async def call_tool(name, payload):
         sent.append(payload)
-        return '{"error":"no_date"}' if len(sent) == 1 else '{"date":"2026-09-29"}'
+        return {"error": "no_date"} if len(sent) == 1 else {"date": "2026-09-29"}
 
     rc = SimpleNamespace(
         metadata={"direction": "web"}, _last_user_text="Θέλω κούρεμα με τον Νίκο",
-        _availability_checked=False,
+        _availability_checked=False, tool=call_tool, _user_turn=1, _spoken_offer=None,
     )
-    receiver = SimpleNamespace(_rc=rc, _tool=call_tool)
+    receiver = SimpleNamespace(_rc=rc, _speak=lambda result: result)
     await worker.ReceptionistAgent.check_availability.__wrapped__(
         receiver, when="σήμερα", service_id="haircut", staff="Νίκος",
     )
@@ -357,7 +358,8 @@ def test_spoken_digits(said, digits):
 
 @pytest.mark.asyncio
 async def test_pin_is_taken_in_code_and_never_reaches_the_model():
-    rc = SimpleNamespace(awaiting_pin=True, tool=AsyncMock(return_value={"ok": True}), engine="pipeline")
+    rc = SimpleNamespace(awaiting_pin=True, tool=AsyncMock(return_value={"ok": True}), engine="pipeline",
+                         answer_readback=AsyncMock(return_value=False))
     agent = worker.ReceptionistAgent(call=rc, instructions="x", call_id="c", language="el")
     waiting = worker.llm.ChatMessage(role="user", content=["Ένα λεπτό να τον βρω"])
     await agent.on_user_turn_completed(None, waiting)
@@ -372,3 +374,89 @@ async def test_pin_is_taken_in_code_and_never_reaches_the_model():
     rc.tool.assert_awaited_once_with("admin_login", {"pin": "4821"})
     assert not rc.awaiting_pin
     assert worker.spoken_digits(said.text_content) == "" and "ok" in said.text_content
+
+
+@pytest.mark.parametrize("engine,direct", [("pipeline", True), ("text_pipeline", True), ("realtime", False)])
+def test_a_reply_the_backend_worded_is_spoken_without_a_second_model_round(engine, direct):
+    said = []
+    rc = SimpleNamespace(engine=engine, telemetry=None)
+    receiver = SimpleNamespace(_rc=rc, session=SimpleNamespace(say=said.append))
+    line = "Την Τρίτη 3 Νοεμβρίου έχουμε ελεύθερα στις εννέα ή στις εννέα και μισή το πρωί. Σας βολεύει κάποια;"
+    out = worker.ReceptionistAgent._speak(receiver, {"date": "2026-11-03", "free_times": ["09:00", "09:30"], "say": line})
+    if direct:
+        assert said == [line]
+        assert out.reply_required is False
+        # The model keeps what was offered (for prepare_action) and knows it was said.
+        assert json.loads(out.output) == {"date": "2026-11-03", "free_times": ["09:00", "09:30"], "already_said": line}
+    else:
+        assert said == [] and json.loads(out)["say"] == line
+    # Without a worded line the model replies as before.
+    assert worker.ReceptionistAgent._speak(receiver, {"error": "no_date"}) == '{"error": "no_date"}'
+
+
+@pytest.mark.asyncio
+async def test_a_plain_yes_to_the_readback_is_carried_out_without_the_model():
+    calls, said, added, replies = [], [], [], []
+
+    async def tool(name, args):
+        calls.append((name, dict(args)))
+        if not args.get("execute"):
+            return {"yes": args["confirmation_text"].startswith("Ναι")}
+        return {"booked": True, "say": "Έγινε, το ραντεβού σας κλείστηκε για την Τρίτη 3 Νοεμβρίου στις εννέα το πρωί."}
+
+    rc = worker.ReceptionistCall(SimpleNamespace(), {"call_id": "call"}, "pipeline")
+    rc.tool = tool
+    rc.session = SimpleNamespace(say=said.append, _conversation_item_added=added.append,
+                                 generate_reply=lambda **kw: replies.append(kw))
+    agent = SimpleNamespace(_chat_ctx=SimpleNamespace(items=[]))
+
+    # Not a readback answer: nothing happens here.
+    assert await rc.answer_readback(agent, SimpleNamespace(text_content="Ναι.")) is False
+    rc._confirmation_id, rc._confirmation_armed = "conf-1", True
+
+    # Not a plain yes: the model answers, and the caller's line is left to the SDK.
+    assert await rc.answer_readback(agent, SimpleNamespace(text_content="Όχι, την Τετάρτη.")) is False
+    assert added == [] and said == []
+
+    # A plain yes: the line is stored first, then the backend books and words the reply.
+    yes = SimpleNamespace(text_content="Ναι, σωστά.")
+    assert await rc.answer_readback(agent, yes) is True
+    assert added == [yes] and agent._chat_ctx.items == [yes]
+    assert calls[-1] == ("confirm_pending", {"confirmation_id": "conf-1", "confirmation_text": "Ναι, σωστά.", "execute": True})
+    assert said == ["Έγινε, το ραντεβού σας κλείστηκε για την Τρίτη 3 Νοεμβρίου στις εννέα το πρωί."]
+    assert rc._confirmation_id is None and replies == []
+
+
+@pytest.mark.asyncio
+async def test_a_refused_readback_answer_goes_back_to_the_model():
+    replies, said = [], []
+
+    async def tool(name, args):
+        return {"yes": True} if not args.get("execute") else {"booked": False, "error": "slot_taken"}
+
+    rc = worker.ReceptionistCall(SimpleNamespace(), {"call_id": "call"}, "pipeline")
+    rc.tool = tool
+    rc._confirmation_id, rc._confirmation_armed = "conf-1", True
+    rc.session = SimpleNamespace(say=said.append, _conversation_item_added=lambda m: None,
+                                 generate_reply=lambda **kw: replies.append(kw))
+    assert await rc.answer_readback(SimpleNamespace(_chat_ctx=SimpleNamespace(items=[])),
+                                    SimpleNamespace(text_content="Ναι.")) is True
+    assert said == [] and "slot_taken" in replies[0]["instructions"]
+    assert rc._confirmation_id == "conf-1"  # still pending: the model may offer another time
+
+
+@pytest.mark.asyncio
+async def test_the_same_offer_is_spoken_once_per_caller_turn():
+    line = "Την Πέμπτη 19 Νοεμβρίου έχουμε ελεύθερα στις εννέα και μισή το πρωί. Σας βολεύει;"
+
+    async def call_tool(name, payload):
+        return {"date": "2026-11-19", "free_times": ["09:30"], "say": line}
+
+    rc = SimpleNamespace(metadata={"direction": "inbound"}, _last_user_text="", _availability_checked=True,
+                         tool=call_tool, _user_turn=3, _spoken_offer=None)
+    receiver = SimpleNamespace(_rc=rc, _speak=lambda result: result)
+    check = worker.ReceptionistAgent.check_availability.__wrapped__
+    assert (await check(receiver, when="την Πέμπτη"))["say"] == line
+    assert "say" not in await check(receiver, when="2026-11-19")  # looping in the same turn
+    rc._user_turn = 4
+    assert (await check(receiver, when="την Πέμπτη"))["say"] == line  # the caller asked again
