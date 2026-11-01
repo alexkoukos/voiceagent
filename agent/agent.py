@@ -692,12 +692,12 @@ class FlowAgent(ReceptionistAgent):
                 yield out["say"]
                 return
             said = rest.strip()
-            if rest:
-                yield rest
+            if said:
+                yield rest.lstrip()
             async for chunk in stream:
                 text = _chunk_text(chunk)
+                yield text if said else text.lstrip()
                 said = said or text.strip()
-                yield text
             if not said:
                 # The model wrote nothing after its first line: the backend's line instead of silence.
                 yield out.get("fallback") or ""
@@ -1320,9 +1320,10 @@ class ReceptionistCall:
             logger.warning("call %s: emergency phrase heard", self.call_id)
             self.spawn(self.tool("emergency", {}))
             self.session.interrupt()
-            then = ("Μόλις είπες τη φράση έκτακτης ανάγκης. Τώρα κράτα επείγον μήνυμα (take_message με urgent true)."
-                    if self.language == "el" else
-                    "You just said the emergency line. Now take an urgent message (take_message with urgent true).")
+            then = None if isinstance(self.agent, FlowAgent) else (
+                "Μόλις είπες τη φράση έκτακτης ανάγκης. Τώρα κράτα επείγον μήνυμα (take_message με urgent true)."
+                if self.language == "el" else
+                "You just said the emergency line. Now take an urgent message (take_message with urgent true).")
             self.spawn(self._say_then(script, then))
 
     async def _say_then(self, line: str, then: str | None = None) -> None:

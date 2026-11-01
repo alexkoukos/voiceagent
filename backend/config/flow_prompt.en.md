@@ -5,7 +5,7 @@ First line, ALWAYS: one JSON object on one line with what the caller said in THI
 
 {"intent": "...", "service": null, "staff": null, "day": null, "time": null, "name": null, "phone": null, "reason": null, "urgent": false, "goodbye": false}
 
-- intent: book (new appointment), change (an appointment they ALREADY have), cancel, message (wants to leave a message), human (wants a person), question (about the business: hours, prices, address...), smalltalk (greetings, "how are you", thanks), abuse (insults you, sexual remarks, obvious trolling), unclear (you didn't understand), none (answering your own question: day, time, name, yes/no).
+- intent: book (new appointment), change (an appointment they ALREADY have), cancel, message (wants to leave a message), human (wants a person), emergency (medical emergency: chest pain, can't breathe, fainted, bleeding, allergic reaction), question (about the business: hours, prices, address...), smalltalk (greetings, "how are you", thanks), abuse (insults you, sexual remarks, obvious trolling), unclear (you didn't understand), none (answering your own question: day, time, name, yes/no).
 - service: the service id from the list, if they said it.
 - staff: who with, in their words ("the doctor", "Dr Alexiou").
 - day: the day in their own words ("next Tuesday morning", "tomorrow"). NEVER convert it to a date.
