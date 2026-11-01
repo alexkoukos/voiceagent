@@ -700,12 +700,22 @@ async def _offered(db: AsyncSession, call: Call, *, day: str, time: str, service
     events = (await db.execute(select(RoutingEvent).where(
         RoutingEvent.call_id == call.id, RoutingEvent.kind == "offer", RoutingEvent.created_at >= cutoff,
     ).order_by(RoutingEvent.created_at.desc()))).scalars()
+    people = None
     for event in events:
         offer = json.loads(event.value)
         result = offer["result"]
-        if (result.get("service_id") != service_id or offer.get("appointment_id") != appointment_id
-                or booking._plain(offer.get("requested_staff") or "") != booking._plain(staff or "")):
+        if result.get("service_id") != service_id or offer.get("appointment_id") != appointment_id:
             continue
+        asked = offer.get("requested_staff") or ""
+        if booking._plain(asked) != booking._plain(staff or ""):
+            # «Ελένη Αλεξίου» in the lookup and «Δρ. Ελένη Αλεξίου» (the name the lookup
+            # returned) in prepare_action are the same person (EVAL-013, 2026-11-01).
+            if not (asked and staff):
+                continue
+            people = people if people is not None else await booking.staff_of(db, call.practice_id)
+            a, b = booking.match_staff(people, asked), booking.match_staff(people, staff)
+            if a is None or b is None or a.id != b.id:
+                continue
         days = [result, *(result.get("next_days_with_free_times") or [])]
         if any(d.get("date") == day and time in (d.get("free_times") or []) for d in days):
             return True
