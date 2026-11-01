@@ -235,14 +235,14 @@ async def build_metadata(
     purpose = await _purpose(db, practice, call, staff, language)
     _, admin = await _admin(db, call)
 
-    def prompt_for(lang: str) -> str:
+    def prompt_for(lang: str, flow: bool = False) -> str:
         prompt = build_receptionist_prompt(
             practice, now=now, caller_number=call.caller_number, language=lang, hours_state=state,
             next_open=next_open, customer_name=customer.name if customer else None,
             upcoming=[booking.describe(practice, a, staff, lang) for a in upcoming], staff=staff,
-            purpose=purpose.get(lang) if purpose else None,
+            purpose=purpose.get(lang) if purpose else None, flow=flow,
         )
-        if admin:
+        if admin and not flow:
             prompt += ("\n## Αλλαγές ρυθμίσεων\nΚαλεί από το κινητό του/της " + admin.name + ". Αν ζητήσει αλλαγή "
                        "(κλειστά, άδεια, ωράριο, τιμή, πληροφορία), κάλεσε πρώτα stop_recording, μετά admin_login (χωρίς στοιχεία) και ζήτα τον κωδικό PIN· "
                        "το σύστημα ελέγχει μόνο του τα ψηφία. Μετά admin_change με τα λόγια του, διάβασε το say_and_ask "
@@ -267,6 +267,7 @@ async def build_metadata(
         "direction": call.direction,
         "prompt": prompt_for(language),
         "prompts": {"el": prompt_for("el"), "en": prompt_for("en")},
+        "flow_prompts": {"el": prompt_for("el", flow=True), "en": prompt_for("en", flow=True)},
         "greeting": greeting,
         "greeting_without_recording": default_greeting(practice, language=language),
         "greeting_instruction": instruction,

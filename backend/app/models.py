@@ -291,6 +291,8 @@ class Call(Base):
     language: Mapped[str | None] = mapped_column(String, nullable=True)
     # Eval calls only: the call's clock starts here (UTC) instead of the real time.
     clock_start: Mapped[datetime | None] = mapped_column(nullable=True)
+    # The conversation state machine's state for this call (app/flow.py); None on the tool flow.
+    flow: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     status: Mapped[CallStatus] = mapped_column(
         Enum(CallStatus), default=CallStatus.pending

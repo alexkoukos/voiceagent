@@ -26,3 +26,5 @@ agent/evals/results/
 
 # Sales material and prospect data: local only (the repo is public)
 sales/
+agent/scripts/.stt_bakeoff_audio/
+agent/stt_bakeoff_result.json
