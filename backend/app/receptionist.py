@@ -13,7 +13,7 @@ from livekit import api
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import admin_changes, alerts, booking, events, notifications, routing, texts
+from app import admin_changes, alerts, booking, events, notifications, routing, schemas, texts
 from app.config import get_settings
 from app.models import (
     Appointment, Call, CallStatus, Customer, Handoff, Message, Practice, RoutingEvent, Staff, TranscriptEntry,
@@ -700,12 +700,22 @@ async def _offered(db: AsyncSession, call: Call, *, day: str, time: str, service
     events = (await db.execute(select(RoutingEvent).where(
         RoutingEvent.call_id == call.id, RoutingEvent.kind == "offer", RoutingEvent.created_at >= cutoff,
     ).order_by(RoutingEvent.created_at.desc()))).scalars()
+    people = None
     for event in events:
         offer = json.loads(event.value)
         result = offer["result"]
-        if (result.get("service_id") != service_id or offer.get("appointment_id") != appointment_id
-                or booking._plain(offer.get("requested_staff") or "") != booking._plain(staff or "")):
+        if result.get("service_id") != service_id or offer.get("appointment_id") != appointment_id:
             continue
+        asked = offer.get("requested_staff") or ""
+        if booking._plain(asked) != booking._plain(staff or ""):
+            # «Ελένη Αλεξίου» in the lookup and «Δρ. Ελένη Αλεξίου» (the name the lookup
+            # returned) in prepare_action are the same person (EVAL-013, 2026-11-01).
+            if not (asked and staff):
+                continue
+            people = people if people is not None else await booking.staff_of(db, call.practice_id)
+            a, b = booking.match_staff(people, asked), booking.match_staff(people, staff)
+            if a is None or b is None or a.id != b.id:
+                continue
         days = [result, *(result.get("next_days_with_free_times") or [])]
         if any(d.get("date") == day and time in (d.get("free_times") or []) for d in days):
             return True
@@ -834,6 +844,31 @@ async def _confirmed(db: AsyncSession, call: Call, args, action: str) -> bool:
     return matches
 
 
+async def tool_confirm_pending(db: AsyncSession, call: Call, args) -> dict:
+    """The caller answered a readback with a plain yes: carry out exactly what was read back,
+    with no model in between. Gemini's own book call after a «Ναι» came back malformed four
+    times in a row and the booking was lost (scripted calls, 2026-10-31). The write tools
+    still check the yes against the caller's stored line (_confirmed)."""
+    if not _affirmative(args.confirmation_text):
+        return {"yes": False}
+    if not args.execute:
+        return {"yes": True}
+    event = await db.get(RoutingEvent, args.confirmation_id)
+    if event is None or event.call_id != call.id or event.kind != "confirmation":
+        return {"yes": True, "error": "unknown_confirmation"}
+    data = json.loads(event.value)
+    confirm = {"confirmation_id": args.confirmation_id, "confirmation_text": args.confirmation_text}
+    if data["action"] == "book":
+        return await tool_book(db, call, schemas.BookAppointment(
+            date=data["date"], time=data["time"], service_id=data["service_id"],
+            customer_name=data["customer_name"], customer_phone=data.get("customer_phone"),
+            staff=data.get("staff") or None, **confirm))
+    if data["action"] == "reschedule":
+        return await tool_reschedule(db, call, schemas.RescheduleArgs(
+            appointment_id=data["appointment_id"], date=data["date"], time=data["time"], **confirm))
+    return await tool_cancel(db, call, schemas.AppointmentRef(appointment_id=data["appointment_id"], **confirm))
+
+
 async def _customer_sms(db: AsyncSession, practice: Practice, call: Call, kind: str, appt: Appointment) -> None:
     if not appt.customer_phone or (practice.notifications or {}).get("customer_sms") is False:
         return
@@ -847,6 +882,22 @@ async def _customer_sms(db: AsyncSession, practice: Practice, call: Call, kind: 
         body=texts.customer_sms(practice, kind, booking.describe(practice, appt, staff, language), language),
         call_id=call.id if call else None, dedupe_key=key,
     )
+
+
+def done_line(kind: str, done: dict, language: str) -> str:
+    """What the agent says after a booking write, worded here so it needs no second model round."""
+    when = f"{booking.on_day(done.get('date_spoken', ''), language)} {done.get('time_spoken', '')}".removesuffix(".")
+    if language == "el":
+        return {
+            "booked": f"Έγινε, το ραντεβού σας κλείστηκε για {when}. Θα θέλατε κάτι άλλο;",
+            "rescheduled": f"Έγινε, το ραντεβού σας μεταφέρθηκε για {when}. Θα θέλατε κάτι άλλο;",
+            "cancelled": "Το ραντεβού ακυρώθηκε. Θα θέλατε κάτι άλλο;",
+        }[kind]
+    return {
+        "booked": f"Done, you're booked for {when}. Is there anything else?",
+        "rescheduled": f"Done, your appointment is now {when}. Is there anything else?",
+        "cancelled": "The appointment is cancelled. Is there anything else?",
+    }[kind]
 
 
 async def tool_book(db: AsyncSession, call: Call, args) -> dict:
@@ -887,7 +938,8 @@ async def tool_book(db: AsyncSession, call: Call, args) -> dict:
     await db.commit()
     notifications.kick()
     staff = await booking.staff_of(db, practice.id)
-    return {"booked": True, **booking.describe(practice, appt, staff, language)}
+    done = booking.describe(practice, appt, staff, language)
+    return {"booked": True, **done, "say": done_line("booked", done, language)}
 
 
 async def _found_ids(db: AsyncSession, call: Call) -> set[str]:
@@ -1036,7 +1088,9 @@ async def tool_reschedule(db: AsyncSession, call: Call, args) -> dict:
     await db.commit()
     notifications.kick()
     staff = await booking.staff_of(db, practice.id)
-    return {"rescheduled": True, **booking.describe(practice, appt, staff, _lang(call, practice))}
+    language = _lang(call, practice)
+    done = booking.describe(practice, appt, staff, language)
+    return {"rescheduled": True, **done, "say": done_line("rescheduled", done, language)}
 
 
 async def tool_cancel(db: AsyncSession, call: Call, args) -> dict:
@@ -1068,7 +1122,7 @@ async def tool_cancel(db: AsyncSession, call: Call, args) -> dict:
     notifications.kick()
     from app.dispatcher import start_next_queued
     await start_next_queued(db)
-    return {"cancelled": True}
+    return {"cancelled": True, "say": done_line("cancelled", {}, _lang(call, practice))}
 
 
 async def tool_confirm(db: AsyncSession, call: Call, args) -> dict:

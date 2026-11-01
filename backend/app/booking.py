@@ -195,6 +195,48 @@ def say_time(hhmm: str, language: str = "el") -> str:
     return f"{'στη' if words.startswith('μία') else 'στις'} {words} {part}"
 
 
+ON_DAY_EL = {"Σάββατο": "το", "Δευτέρα": "τη"}  # every other weekday takes «την»
+PARTS_OF_DAY_EL = ("το πρωί", "το μεσημέρι", "το απόγευμα", "το βράδυ")
+
+
+def _times_spoken(times: list[str], language: str) -> str:
+    """'09:00', '09:15' -> 'στις εννέα και στις εννέα και τέταρτο το πρωί': the part of the day
+    once, at the end, when every time shares it."""
+    spoken = [say_time(t, language) for t in times]
+    if language == "el":
+        parts = {next((p for p in PARTS_OF_DAY_EL if s.endswith(" " + p)), None) for s in spoken}
+        if len(parts) == 1 and None not in parts:
+            tail = " " + parts.pop()
+            spoken = [s.removesuffix(tail) for s in spoken[:-1]] + spoken[-1:]
+        joiner = " ή "
+    else:
+        joiner = " or "
+    return spoken[0] if len(spoken) == 1 else ", ".join(spoken[:-1]) + joiner + spoken[-1]
+
+
+def on_day(date_spoken: str, language: str) -> str:
+    """'Τρίτη 3 Νοεμβρίου' -> 'την Τρίτη 3 Νοεμβρίου' (Greek takes the article)."""
+    if language != "el":
+        return date_spoken
+    return f"{ON_DAY_EL.get(date_spoken.split(' ', 1)[0], 'την')} {date_spoken}"
+
+
+def offer_line(result: dict, language: str) -> str | None:
+    """The spoken offer for a plain availability result: the first three free times of the day.
+    None when the model should word it (closures, an exact-time check, nothing free)."""
+    times = result.get("free_times") or []
+    if (not times or result.get("business_closed") or result.get("staff_away")
+            or ("after" in result and result.get("after") == result.get("before"))):
+        return None
+    times = times[:3]
+    day = on_day(result["date_spoken"], language)
+    if language == "el":
+        ask = "Σας βολεύει;" if len(times) == 1 else "Σας βολεύει κάποια;"
+        return f"{day[:1].upper()}{day[1:]} έχουμε ελεύθερα {_times_spoken(times, language)}. {ask}"
+    ask = "Does that suit you?" if len(times) == 1 else "Would any of those suit you?"
+    return f"On {day} we're free {_times_spoken(times, language).removesuffix('.')}. {ask}"
+
+
 def say_phone(phone: str) -> str:
     """A phone number read back digit by digit, without the Greek country code."""
     digits = phone[3:] if phone.startswith("+30") else phone.lstrip("+")
@@ -533,6 +575,11 @@ async def check_availability(
         out["next_days_with_free_times"] = await _next_free_days(
             db, practice, search_from, service, now, resources=resources, language=language, exclude_id=exclude_id
         )
+    # The backend words a plain offer itself, so the agent speaks it without a second model
+    # round (these turns took a median 1.9 s against 1.2 s without a tool; scripted calls 2026-10-31).
+    line = offer_line(out, language) if language else None
+    if line:
+        out["say"] = line
     return out
 
 
