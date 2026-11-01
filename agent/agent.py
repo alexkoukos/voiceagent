@@ -604,6 +604,93 @@ def prewarm(proc: JobProcess) -> None:
         proc.userdata["vad"] = silero.VAD.load()
 
 
+# FLOW_ENGINE=fsm: the backend's state machine runs the conversation (backend/app/flow.py).
+# "tools" keeps the model-driven tool flow.
+FLOW_ENGINE = os.environ.get("FLOW_ENGINE", "tools")
+FLOW_COMMIT_TIMEOUT = 20.0  # longest wait for the turn the model started on to be final
+
+
+def _understood(line: str) -> dict | None:
+    """The model's first line: its reading of the caller's turn, as JSON."""
+    line = line.strip().removeprefix("```json").removeprefix("```").strip()
+    if not line.startswith("{"):
+        return None
+    try:
+        value = json.loads(line)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+class FlowAgent(ReceptionistAgent):
+    """One model call per turn, no tools: the model writes its reading of the caller's turn as
+    a JSON line, then a natural reply. The backend's state machine decides the next step and
+    usually words it itself (offers, readback, booked, the next question); the model's reply is
+    spoken for free conversation (small talk, questions about the business). No tool calls means
+    no second model round after a tool and no malformed tool calls (scripted calls, 2026-10-31)."""
+
+    async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+        return  # the readback's yes is part of the backend's turn
+
+    async def llm_node(self, chat_ctx, tools, model_settings):
+        rc = self._rc
+        user = next((i for i in reversed(chat_ctx.items) if getattr(i, "role", None) == "user"), None)
+        text = (user.text_content or "").strip() if user else ""
+        if rc.flow_state:
+            chat_ctx = chat_ctx.copy()
+            note = ("Κατάσταση: " if self.language == "el" else "State: ") + rc.flow_state
+            chat_ctx.items.insert(max(0, len(chat_ctx.items) - 1), llm.ChatMessage(role="system", content=[note]))
+        started = time.perf_counter()
+        stream = Agent.default.llm_node(self, chat_ctx, [], model_settings)
+        head, rest = "", ""
+        try:
+            async for chunk in stream:
+                head += _chunk_text(chunk)
+                if "\n" in head:
+                    head, rest = head.split("\n", 1)
+                    break
+            understood = _understood(head)
+            if understood is None:
+                # The model skipped the format: speak what it wrote, change nothing.
+                logger.warning("call %s: flow reply without its first line", rc.call_id)
+                yield head + rest
+                async for chunk in stream:
+                    yield _chunk_text(chunk)
+                return
+            # The model may have started before the turn was final (preemptive generation):
+            # the backend only acts on a final turn whose line is stored.
+            if not await rc.turn_final(text):
+                return
+            await rc.caller_line_stored()
+            out = await rc.tool("turn", {"text": text, "understood": understood})
+            rc.flow_state = out.get("state")
+            if rc.telemetry:
+                rc.telemetry.answer_started((time.perf_counter() - started) * 1000)
+            if out.get("end_call"):
+                rc.spawn(rc.end_with(out.get("say") or CLOSING_LINE["el" if self.language == "el" else "en"]))
+                return
+            if out.get("handoff") is not None:
+                result = await rc.start_handoff(out["handoff"])
+                yield (out.get("say_transferring") if result.get("status") == "transferring"
+                       else out.get("say_waiting")) or ""
+                return
+            if out.get("say"):
+                if out.get("readback"):
+                    # The caller's answer to a readback gets more time (as on the tool flow).
+                    rc._patient = True
+                    rc._set_endpointing(patient=True)
+                yield out["say"]
+                return
+            if rest:
+                yield rest
+            async for chunk in stream:
+                yield _chunk_text(chunk)
+            if out.get("then"):
+                yield " " + out["then"]
+        finally:
+            await stream.aclose()
+
+
 def text_llm():
     """The text engines' model; the text-mode evals use exactly this too."""
     return providers.for_engine("pipeline")[1].build()
@@ -937,6 +1024,9 @@ class ReceptionistCall:
         self._handoff_pending = False
         self._tool_lock = asyncio.Lock()
         self.caller_reports: set[asyncio.Task] = set()
+        self.flow_state: str | None = None  # FlowAgent: the backend's summary of the call so far
+        self._final_turns: list[str] = []  # final caller turns not yet answered by FlowAgent
+        self._turn_heard = asyncio.Event()
         self._spoken_offer: tuple[int, str] | None = None  # (caller turn, offer) last spoken
         self.awaiting_pin = False
         self.turns = turns_for(engine, self.language)
@@ -996,6 +1086,8 @@ class ReceptionistCall:
     def heard_user(self, text: str) -> None:
         self._user_turn += 1
         self._last_user_text = text
+        self._final_turns = [*self._final_turns[-4:], text]
+        self._turn_heard.set()
         if self._patient:
             self._patient = False
             self._set_endpointing(patient=False)
@@ -1071,6 +1163,23 @@ class ReceptionistCall:
             self.session.generate_reply(instructions=f"The booking system answered: {json.dumps(result, ensure_ascii=False)}")
         return True
 
+    async def turn_final(self, text: str) -> bool:
+        """Wait until the caller's turn with this text is final (a preemptive reply starts
+        earlier). False if it never becomes final: the caller went on talking."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + FLOW_COMMIT_TIMEOUT
+        while text not in self._final_turns:
+            self._turn_heard.clear()
+            left = deadline - loop.time()
+            if left <= 0:
+                return False
+            try:
+                await asyncio.wait_for(self._turn_heard.wait(), timeout=left)
+            except asyncio.TimeoutError:
+                return False
+        self._final_turns.remove(text)
+        return True
+
     async def caller_line_stored(self, timeout: float = 3.0) -> None:
         """Wait until the caller's latest line is stored; the backend checks the yes against it."""
         pending = [t for t in self.caller_reports if not t.done()]
@@ -1104,6 +1213,9 @@ class ReceptionistCall:
         return result
 
     def make_agent(self, language: str, parts: dict | None = None) -> ReceptionistAgent:
+        flow = (self.metadata.get("flow_prompts") or {}).get(language)
+        if FLOW_ENGINE == "fsm" and flow and self.engine in ("pipeline", "text_pipeline"):
+            return FlowAgent(call=self, instructions=flow, call_id=self.call_id, language=language, **(parts or {}))
         prompts = self.metadata.get("prompts") or {}
         return ReceptionistAgent(
             call=self, instructions=prompts.get(language) or self.metadata["prompt"], call_id=self.call_id,
