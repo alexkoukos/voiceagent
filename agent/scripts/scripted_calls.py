@@ -110,8 +110,20 @@ async def say(source: rtc.AudioSource, pcm: np.ndarray, sample_rate: int) -> Non
         await source.capture_frame(rtc.AudioFrame(silence, sample_rate, 1, chunk))
 
 
+def phone_quality(pcm: np.ndarray, sample_rate: int) -> np.ndarray:
+    """The caller's voice as the SIP trunk delivers it: 8 kHz G.711 μ-law, back at the
+    original rate."""
+    import audioop  # deprecated in 3.13; these scripts run on 3.12
+    narrow, _ = audioop.ratecv(pcm.tobytes(), 2, 1, sample_rate, 8000, None)
+    narrow = audioop.ulaw2lin(audioop.lin2ulaw(narrow, 2), 2)
+    wide, _ = audioop.ratecv(narrow, 2, 1, 8000, sample_rate, None)
+    return np.frombuffer(wide, dtype=np.int16)
+
+
 async def run_scenario(args, sc: dict, http: httpx.AsyncClient, caller: CallerVoice) -> dict:
     audio = [await caller.synthesize(line) for line in sc["lines"]]
+    if args.phone:
+        audio = [phone_quality(pcm, caller.sample_rate) for pcm in audio]
     headers = {"x-api-key": os.environ.get("ADMIN_API_TOKEN") or os.environ["APP_API_TOKEN"]}
     if args.isolated:
         await prepare_fixture(args, sc, http, headers)
@@ -255,6 +267,7 @@ async def main() -> None:
     p.add_argument("--only", help="run scenarios whose name contains this")
     p.add_argument("--limit", type=int, help="run only the first N selected scenarios")
     p.add_argument("--parallel", type=int, default=1, help="calls at the same time (with --isolated)")
+    p.add_argument("--phone", action="store_true", help="the caller's voice at phone quality (8 kHz μ-law)")
     p.add_argument("--caller-tts", choices=("auto", "gemini", "elevenlabs"), default="auto")
     p.add_argument("--isolated", action="store_true", help="Create synthetic fixtures; backend must enable TEST_SESSIONS_ENABLED")
     args = p.parse_args()

@@ -109,7 +109,20 @@ def deepgram(language: str, vocabulary: list[str] | None = None):
     return inference.STT("deepgram/nova-3", language=language, **options)
 
 
+def openai_live(language: str, vocabulary: list[str] | None = None):
+    """OpenAI's live transcription via LiveKit Inference (no separate account). On 120 Greek
+    phone-quality clips it got 11% of words wrong against Scribe realtime's 35%, which invents
+    continuations («…θα 'ρθω εγώ. Τι θα κάνουμε;», stt_bakeoff.py, 2026-11-01)."""
+    return inference.STT("openai/gpt-live-transcribe", language=language)
+
+
+def openai_turns(language: str) -> TurnMode:
+    # Like Scribe's: Greek turns end on 0.7 s of silence with the reply prepared meanwhile.
+    return "early" if language == "el" else "semantic"
+
+
 PROVIDERS = {
     "scribe": SttProvider("scribe", scribe, scribe_turns),
     "deepgram": SttProvider("deepgram", deepgram, lambda language: "pause"),
+    "openai": SttProvider("openai", openai_live, openai_turns),
 }
