@@ -155,3 +155,18 @@ async def test_cancel_finds_the_callers_appointment_and_reads_it_back(sessions):
         # Saying it again doesn't start a new cancellation (EVAL-005).
         out = await say(db, call, "Ναι, ακυρώστε το.", intent="cancel")
         assert out["say"].startswith("Το ραντεβού έχει ήδη ακυρωθεί")
+
+
+@pytest.mark.asyncio
+async def test_an_emergency_the_model_heard_is_routed_and_becomes_an_urgent_message(sessions):
+    async with sessions() as db:
+        _, call = await setup(db)
+        out = await say(db, call, "Βοήθεια! Ο πατέρας μου έχει πόνο στο στή", intent="emergency")
+        assert "112" in out["say"] and out["say"].endswith("Με ποιο όνομα να αφήσω το μήνυμα;")
+        call = await db.get(Call, call.id)
+        assert {"emergency", "urgent"} <= set(call.flags or [])
+        out = await say(db, call, "Γιάννης Μακρής.", intent="none", name="Γιάννης Μακρής")
+        assert out["say"].startswith("Το μήνυμα καταγράφηκε")
+        from sqlalchemy import select
+        m = (await db.execute(select(Message).where(Message.call_id == call.id))).scalar_one()
+        assert m.urgent and "πατέρας" in m.reason

@@ -158,6 +158,13 @@ async def _decide(t: Turn) -> dict:
             return {"say": result.get("say", ""), "end_call": True}
         return {"say": result["say"]} if result.get("say") else {"reply": "model"}
 
+    if intent == "emergency":
+        # Heard by the model when the code's phrase match missed it (a clipped transcript,
+        # «…πόνο στο στή», scripted calls 2026-11-01): the same emergency routing, then an urgent message.
+        result = await t.tool("route_call", receptionist.tool_route, schemas.RouteArgs(intent="emergency"))
+        st.update(task="message", urgent=True, reason=st.get("reason") or t.text[:300], done=False)
+        return {"say": " ".join(filter(None, [result.get("say"), t.line("message_name")]))}
+
     if intent == "human":
         result = await t.tool("route_call", receptionist.tool_route,
                               schemas.RouteArgs(intent="human", staff=u.get("staff") or None))
@@ -396,7 +403,7 @@ async def _message(t: Turn, *, peek: bool) -> dict | None:
         return None
     await t.tool("take_message", receptionist.tool_take_message, schemas.MessageArgs(
         caller_name=st["name"], reason=st["reason"], callback_number=st.get("phone") or None,
-        urgent=bool(t.u.get("urgent")), for_whom=st.get("staff") or None))
+        urgent=bool(t.u.get("urgent") or st.get("urgent")), for_whom=st.get("staff") or None))
     st.update(task=None, done=True)
     return {"say": t.line("message_saved")}
 
