@@ -128,6 +128,10 @@ async def turn(db: AsyncSession, call: Call, text: str, understood: dict) -> dic
 async def _decide(t: Turn) -> dict:
     u, st = t.u, t.st
     intent = u.get("intent") or "none"
+    if intent == "change" and st.get("task") == "book":
+        # «Όχι, την Πέμπτη ήθελα» at the readback corrects the booking in progress; the model
+        # sometimes calls it a change, which looked for an existing appointment (EVAL-003, 2026-11-01).
+        intent = "book"
 
     # A readback is waiting: only the caller's own plain yes carries it out.
     if st.get("confirmation_id"):
