@@ -37,6 +37,10 @@ async def test_endpoint_follows_settings(monkeypatch):
                    "/publishers/google/models/gemini-3.5-flash-lite:generateContent")
     assert kwargs["headers"] == {"Authorization": "Bearer tok"} and "params" not in kwargs
 
+    monkeypatch.setattr(s, "gemini_vertex_location", "eu")  # multi-region: own host, else Google answers 400
+    await gemini.generate("gemini-3.5-flash-lite", {"contents": []}, timeout=1)
+    assert sent[-1][0].startswith("https://aiplatform.eu.rep.googleapis.com/v1/projects/proj/locations/eu/")
+
     monkeypatch.setattr(s, "gemini_vertex_project", "")
     with pytest.raises(gemini.NotConfigured):
         await gemini.generate("m", {}, timeout=1)
