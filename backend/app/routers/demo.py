@@ -95,6 +95,8 @@ async def demo_page(slug: str, db: AsyncSession = Depends(get_db), embed: bool =
         services_title="Υπηρεσίες και τιμές" if greek else "Services & prices",
         hours_title="Ωράριο" if greek else "Opening hours",
         voice_label="Φωνή" if greek else "Voice",
+        voice_female="Γυναικεία" if greek else "Female",
+        voice_male="Ανδρική" if greek else "Male",
         timezone=escape(info["timezone"]),
         service_rows=service_rows,
         hours_rows=hours_rows,
@@ -103,7 +105,7 @@ async def demo_page(slug: str, db: AsyncSession = Depends(get_db), embed: bool =
 
 class DemoSessionRequest(BaseModel):
     gender: Literal["female", "male"] | None = None
-    voice: Literal["eleven_sarah", "eleven_jessica", "eleven_george", "eleven_brian", "Kore", "Zubenelgenubi"] | None = None
+    voice: Literal["Kore", "Zubenelgenubi"] | None = None
 
 
 @router.post("/{slug}/session")
