@@ -118,7 +118,8 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def load_receptionist_prompt(language: str = "el") -> str:
-    name = "receptionist_prompt.md" if language == "el" else "receptionist_prompt.en.md"
+def load_receptionist_prompt(language: str = "el", *, flow: bool = False) -> str:
+    base = "flow_prompt" if flow else "receptionist_prompt"
+    name = f"{base}.md" if language == "el" else f"{base}.en.md"
     return (CONFIG_DIR / name).read_text(encoding="utf-8")
 

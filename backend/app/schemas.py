@@ -615,6 +615,12 @@ class AdminChangeArgs(BaseModel):
     request: str = Field(min_length=2, max_length=500)
 
 
+class FlowTurnArgs(BaseModel):
+    """One caller turn on the state-machine flow: their words and the model's reading of them."""
+    text: str = Field(default="", max_length=LONG_TEXT)
+    understood: dict = Field(default_factory=dict)
+
+
 class ConfirmPendingArgs(BaseModel):
     """The caller's reply to a readback, from the transcript. Without `execute` it only says
     whether the reply is a plain yes; with it the backend carries out the stored action."""

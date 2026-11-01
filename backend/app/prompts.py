@@ -47,8 +47,10 @@ def build_receptionist_prompt(
     upcoming: list[dict] | None = None,
     staff: list | None = None,
     purpose: str | None = None,
+    flow: bool = False,
 ) -> str:
-    """Master receptionist prompt + this business's hours, services, staff and knowledge base."""
+    """Master receptionist prompt + this business's hours, services, staff and knowledge base.
+    flow: the state-machine flow's prompt (app/flow.py) instead of the tool flow's."""
     greek = language == "el"
     lb = RECEPTIONIST_LABELS["el" if greek else "other"]
     local = now.astimezone(ZoneInfo(practice.timezone))
@@ -105,7 +107,7 @@ def build_receptionist_prompt(
     info = [f"- {k}: {v}" for k, v in (practice.knowledge_base or {}).items()]
     if info:
         parts.append(f"{lb['info']}:\n" + "\n".join(info))
-    master = load_receptionist_prompt(language).strip().replace("{practice_name}", practice.name)
+    master = load_receptionist_prompt(language, flow=flow).strip().replace("{practice_name}", practice.name)
     out = master + "\n\n" + "\n\n".join(parts)
     if purpose:
         out += f"\n\n{lb['purpose']}\n{purpose}"
