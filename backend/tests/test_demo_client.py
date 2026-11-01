@@ -35,7 +35,7 @@ process.stdin.on('end', async () => {
   click() { return this.listeners.click(); }
  }
  const elements=new Map(['btn','status','call-panel','log','empty','jump','voice'].map(id=>[id,new Element(id)]));
- elements.get('voice').value='eleven_sarah';
+ elements.get('voice').value='Zubenelgenubi';
  elements.get('btn').dataset={call:'Start call',hangUp:'Hang up'};
  elements.get('log').dataset={you:'You',assistant:'Assistant'};
  const media=[];
@@ -52,7 +52,7 @@ process.stdin.on('end', async () => {
    if(mode==='microphone'){const error=Error('denied');error.name='NotAllowedError';throw error;}
    return {stop(){stopped++;}};
   },RoomEvent:{TrackSubscribed:'track',TrackUnsubscribed:'untrack',TranscriptionReceived:'text',Disconnected:'disconnected'}},addEventListener(){}},
-  console:{error(){}},AbortSignal,fetch:async(url, options)=>{assert.equal(JSON.parse(options.body).voice,"eleven_sarah");requested++;if(mode==='network')throw Error('offline');return {ok:mode!=='busy',status:mode==='busy'?429:200,json:async()=>({url:'wss://test',token:'test'})};}});
+  console:{error(){}},AbortSignal,fetch:async(url, options)=>{assert.equal(JSON.parse(options.body).voice,"Zubenelgenubi");requested++;if(mode==='network')throw Error('offline');return {ok:mode!=='busy',status:mode==='busy'?429:200,json:async()=>({url:'wss://test',token:'test'})};}});
  vm.runInContext(input,context);
  await vm.runInContext('start()',context);
  assert.equal(elements.get('btn').disabled,false);

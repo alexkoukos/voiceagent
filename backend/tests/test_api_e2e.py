@@ -314,7 +314,7 @@ async def test_demo_voice_toggle_picks_the_call_voice(http, monkeypatch):
     monkeypatch.setattr(receptionist,"dispatch",dispatch)
     monkeypatch.setattr(receptionist,"room_token",lambda *args,**kwargs: "test-token")
     page=await http.get(f"/demo/{a['slug']}")
-    assert 'id="voice"' in page.text and 'value="eleven_sarah"' in page.text
+    assert 'id="voice"' in page.text and 'value="Kore"' in page.text and 'eleven_' not in page.text
     assert (await http.post(f"/demo/{a['slug']}/session",json={"gender":"male"})).status_code==200
     assert dispatch.await_args.args[1]["voice"]=="Zubenelgenubi"
 
