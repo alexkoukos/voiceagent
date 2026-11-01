@@ -15,6 +15,10 @@ The backend's AGENT_NAME decides which worker answers (prank-caller-test for a l
 
 import argparse
 import asyncio
+import copy
+import difflib
+import re
+import unicodedata
 import json
 import os
 import sys
@@ -151,7 +155,27 @@ async def run_scenario(args, sc: dict, http: httpx.AsyncClient, caller: CallerVo
         call = practice_calls.json()
         if call.get("outcome") and call.get("status") in ("completed", "failed"):
             break
-    return check(sc, call)
+    result = check(sc, call)
+    result["heard"] = heard(sc["lines"], [e["text"] for e in (call or {}).get("transcript_entries", [])
+                                          if e.get("role") == "friend"])
+    return result
+
+
+def _words(text: str) -> list[str]:
+    plain = unicodedata.normalize("NFD", text.lower())
+    plain = "".join(c for c in plain if unicodedata.category(c) != "Mn").replace("ς", "σ")
+    return re.findall(r"\w+", plain)
+
+
+def heard(said: list[str], transcribed: list[str]) -> dict:
+    """Word errors between the caller's script and the agent's transcript of it (substitutions,
+    missing and extra words), and how many lines arrived as more than one turn: the turn ended
+    mid-sentence."""
+    ref = [w for line in said for w in _words(line)]
+    hyp = [w for line in transcribed for w in _words(line)]
+    errors = sum(max(i2 - i1, j2 - j1) for op, i1, i2, j1, j2 in
+                 difflib.SequenceMatcher(None, ref, hyp, autojunk=False).get_opcodes() if op != "equal")
+    return {"words": len(ref), "errors": errors, "lines": len(said), "split": max(0, len(transcribed) - len(said))}
 
 
 def check(sc: dict, call: dict) -> dict:
@@ -230,6 +254,7 @@ async def main() -> None:
     p.add_argument("--scenarios", default="scripts/scenarios.el.json")
     p.add_argument("--only", help="run scenarios whose name contains this")
     p.add_argument("--limit", type=int, help="run only the first N selected scenarios")
+    p.add_argument("--parallel", type=int, default=1, help="calls at the same time (with --isolated)")
     p.add_argument("--caller-tts", choices=("auto", "gemini", "elevenlabs"), default="auto")
     p.add_argument("--isolated", action="store_true", help="Create synthetic fixtures; backend must enable TEST_SESSIONS_ENABLED")
     args = p.parse_args()
@@ -244,23 +269,33 @@ async def main() -> None:
     scenarios = scenarios[:args.limit] if args.limit else scenarios
     if not scenarios:
         p.error("No scenarios selected")
-    results = []
+    if args.parallel > 1 and not args.isolated:
+        p.error("--parallel needs --isolated: each call gets its own practice")
+    slots = asyncio.Semaphore(args.parallel)
+
+    async def one(sc: dict) -> dict:
+        async with slots:
+            try:
+                res = await run_scenario(copy.copy(args), sc, http, caller)
+            except Exception as e:
+                res = {"name": sc["name"], "ok": False, "problems": [f"{type(e).__name__}: {e}"]}
+            print(f"- {sc['name']}\n    " + ("OK" if res["ok"] else "FAIL: " + "; ".join(res["problems"])), flush=True)
+            await asyncio.sleep(3)
+            return res
+
     async with httpx.AsyncClient() as http:
         caller = CallerVoice(provider, http)
         try:
-            for sc in scenarios:
-                print(f"- {sc['name']}")
-                try:
-                    res = await run_scenario(args, sc, http, caller)
-                except Exception as e:
-                    res = {"name": sc["name"], "ok": False, "problems": [f"{type(e).__name__}: {e}"]}
-                results.append(res)
-                print("    " + ("OK" if res["ok"] else "FAIL: " + "; ".join(res["problems"])))
-                await asyncio.sleep(3)
+            results = list(await asyncio.gather(*(one(sc) for sc in scenarios)))
         finally:
             await caller.aclose()
     passed = sum(r["ok"] for r in results)
     print(f"\n{passed}/{len(results)} passed ({100 * passed / max(1, len(results)):.0f}%, target 95%)")
+    heard = [r["heard"] for r in results if r.get("heard")]
+    if heard:
+        words = sum(h["words"] for h in heard)
+        print(f"caller words misheard: {100 * sum(h['errors'] for h in heard) / max(1, words):.1f}% of {words}; "
+              f"lines split mid-sentence: {sum(h['split'] for h in heard)} of {sum(h['lines'] for h in heard)}")
     json.dump(results, open("scripted_calls_result.json", "w"), ensure_ascii=False, indent=2)
     sys.exit(0 if passed == len(results) else 1)
 
