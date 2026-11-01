@@ -62,6 +62,27 @@ async def test_a_booking_from_hello_to_booked(sessions):
 
 
 @pytest.mark.asyncio
+async def test_a_correction_at_the_readback_stays_a_booking(sessions):
+    async with sessions() as db:
+        _, call = await setup(db)
+        day = next_weekday()
+        other = (datetime.fromisoformat(day) + timedelta(days=7)).date().isoformat()
+        await say(db, call, "Ραντεβού για έλεγχο.", intent="book", service="checkup", day=day)
+        await say(db, call, "Στις δέκα.", intent="none", time="10:00")
+        out = await say(db, call, "Ελένη Γεωργίου.", intent="none", name="Ελένη Γεωργίου")
+        assert out.get("readback")
+        # The model reads the correction as a change of an existing appointment.
+        out = await say(db, call, "Όχι, άλλη μέρα ήθελα.", intent="change", day=other)
+        assert "έχουμε ελεύθερα" in out["say"]
+        out = await say(db, call, "Η πρώτη ώρα.", intent="none", time="09:00")
+        assert out.get("readback") and "Ελένη Γεωργίου" in out["say"]
+        out = await say(db, call, "Ναι, σωστά.", intent="none")
+        assert out["say"].startswith("Έγινε, το ραντεβού σας κλείστηκε")
+        appt = await db.get(Appointment, (await db.get(Call, call.id)).appointment_id)
+        assert appt.starts_at.astimezone(ZoneInfo("Europe/Athens")).date().isoformat() == other
+
+
+@pytest.mark.asyncio
 async def test_the_model_never_books_without_the_callers_own_yes(sessions):
     async with sessions() as db:
         _, call = await setup(db)
