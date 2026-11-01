@@ -381,7 +381,7 @@ Rules (the owner's, 2026-09-25):
 **Voices** (`voices.py`). The app and backend only know stable keys (`Kore`, `Zubenelgenubi`, `Puck`, …), and each engine maps them to its own voices:
 
 - **Greek calls use native Greek ElevenLabs voices**: female `Kore` → *Aria* (the default) and male `Zubenelgenubi` → *Fatsis*. The English premade voices sounded foreign, almost Cypriot, in Greek. A male/female toggle sits in the iOS settings (`PUT /practices/<id>/voice`) and on the web demo.
-- `ELEVENLABS_VOICE_MAP`, `ELEVENLABS_VOICE_MAP_EL` and `ELEVENLABS_VOICE_MAP_EN` override the defaults. The demo dashboard offers four extra voice keys (`eleven_sarah`, `eleven_jessica`, `eleven_george`, `eleven_brian`).
+- `ELEVENLABS_VOICE_MAP`, `ELEVENLABS_VOICE_MAP_EL` and `ELEVENLABS_VOICE_MAP_EN` override the defaults. The web demo offers the two Greek voices: Γυναικεία (`Kore` → Aria) and Ανδρική (`Zubenelgenubi` → Fatsis).
 
 **Pronunciation filter** (`speech.Pronunciation`). This runs on the text stream between the LLM and TTS only. Stored transcripts and booking data keep the original spelling.
 
