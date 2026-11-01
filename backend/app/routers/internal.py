@@ -7,7 +7,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import costs, events, finalize, health, routing
+from app import costs, events, finalize, flow, health, routing
 from app.auth import require_master_token
 from app.config import get_settings
 from app.database import get_db
@@ -16,7 +16,7 @@ from app import receptionist
 from app.models import Call, CallStatus, CallTelemetryEvent, Practice, TranscriptEntry, TranscriptRole
 from app.telemetry import TelemetryBatch, telemetry_expired
 from app.schemas import (
-    AdminChangeArgs, AdminConfirmArgs, AdminLoginArgs, AppointmentRef, BookAppointment, ConfirmPendingArgs, LanguageArgs, CallEvent, CheckAvailability, EvalSessionStart, FindArgs, FlagArgs, HandoffResult, InboundStart,
+    AdminChangeArgs, AdminConfirmArgs, AdminLoginArgs, AppointmentRef, BookAppointment, ConfirmPendingArgs, FlowTurnArgs, LanguageArgs, CallEvent, CheckAvailability, EvalSessionStart, FindArgs, FlagArgs, HandoffResult, InboundStart,
     MessageArgs, PrepareAction, RescheduleArgs, RouteArgs, TransferArgs, VerifyCodeArgs, WaitlistArgs, normalize_phone,
 )
 from app.storage import queue_recording_deletion
@@ -205,6 +205,11 @@ async def t_prepare_action(call_id: str, args: PrepareAction, db: AsyncSession =
 @tools.post("/book_appointment")
 async def t_book(call_id: str, args: BookAppointment, db: AsyncSession = Depends(get_db)):
     return await receptionist.tool_book(db, await _receptionist_call(db, call_id), args)
+
+
+@tools.post("/turn")
+async def t_turn(call_id: str, args: FlowTurnArgs, db: AsyncSession = Depends(get_db)):
+    return await flow.turn(db, await _receptionist_call(db, call_id), args.text, args.understood)
 
 
 @tools.post("/confirm_pending")
