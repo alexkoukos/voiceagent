@@ -123,6 +123,7 @@ def test_greek_turns_wait_the_same_silence_but_start_the_reply_early(monkeypatch
     detector = Mock(return_value="semantic-detector")
     monkeypatch.setattr(worker.inference, "TurnDetector", detector)
     monkeypatch.setattr(worker.provider_stt, "TURN_MODE_EL", mode)
+    monkeypatch.setenv("STT_PROVIDER", "scribe")  # TURN_MODE_EL is Scribe's setting
     stub_parts(monkeypatch)
     monkeypatch.setattr(worker, "AgentSession", lambda **kwargs: kwargs)
     ctx = SimpleNamespace(proc=SimpleNamespace(userdata={"vad": object()}))
@@ -173,4 +174,14 @@ def test_stt_provider_can_be_swapped_on_the_main_engine_only(monkeypatch):
     # The fallback engine keeps its own parts.
     assert worker.build_session(ctx, "text_pipeline", "Kore", "el")["tts"] == ("gemini", "Kore", "el")
     monkeypatch.delenv("STT_PROVIDER")
-    assert worker.build_session(ctx, "pipeline", "Kore", "el")["stt"] == ("scribe", "el", None)
+    assert worker.build_session(ctx, "pipeline", "Kore", "el")["stt"] == ("openai", "el", None)
+
+
+def test_openai_transcription_prepares_greek_replies_during_the_silence_wait(monkeypatch):
+    stub_parts(monkeypatch)
+    monkeypatch.setattr(worker, "AgentSession", lambda **kwargs: kwargs)
+    ctx = SimpleNamespace(proc=SimpleNamespace(userdata={"vad": object()}))
+    session = worker.build_session(ctx, "pipeline", "default", "el")
+    assert session["stt"][0] == "openai"
+    assert session["turn_handling"]["turn_detection"] == "vad"
+    assert session["turn_handling"]["endpointing"]["min_delay"] == worker.GREEK_TURN_SILENCE

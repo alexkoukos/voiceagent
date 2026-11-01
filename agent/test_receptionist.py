@@ -460,3 +460,106 @@ async def test_the_same_offer_is_spoken_once_per_caller_turn():
     assert "say" not in await check(receiver, when="2026-11-19")  # looping in the same turn
     rc._user_turn = 4
     assert (await check(receiver, when="την Πέμπτη"))["say"] == line  # the caller asked again
+
+
+def flow_agent(monkeypatch, model_text: str, backend: dict):
+    """A FlowAgent whose model streams `model_text` and whose backend answers `backend`."""
+    async def stream(*_args, **_kwargs):
+        for i in range(0, len(model_text), 7):
+            yield model_text[i:i + 7]
+
+    class Stream:
+        def __init__(self):
+            self.it = stream()
+
+        def __aiter__(self):
+            return self.it
+
+        async def aclose(self):
+            await self.it.aclose()
+
+    monkeypatch.setattr(worker.Agent.default, "llm_node", lambda *a, **k: Stream())
+    sent, ended, spawned = [], [], []
+
+    async def tool(name, args):
+        sent.append((name, args))
+        return backend
+
+    async def end_with(line):
+        ended.append(line)
+
+    rc = worker.ReceptionistCall(SimpleNamespace(), {"call_id": "call"}, "pipeline")
+    rc.tool, rc.end_with, rc.spawn = tool, end_with, lambda coro: spawned.append(coro)
+    rc.heard_user("Καλησπέρα, τι κάνετε;")
+    agent = SimpleNamespace(_rc=rc, language="el")
+    chat = SimpleNamespace(items=[SimpleNamespace(role="user", text_content="Καλησπέρα, τι κάνετε;")])
+    return agent, chat, sent, spawned
+
+
+async def spoken(agent, chat) -> str:
+    return "".join([c async for c in worker.FlowAgent.llm_node(agent, chat, [], None)])
+
+
+@pytest.mark.asyncio
+async def test_flow_speaks_the_models_reply_for_small_talk_then_the_next_question(monkeypatch):
+    agent, chat, sent, _ = flow_agent(
+        monkeypatch, '{"intent": "smalltalk", "goodbye": false}\nΚαλά, ευχαριστώ!',
+        {"reply": "model", "then": "Ποια μέρα θα σας βόλευε;", "state": "{}"})
+    assert await spoken(agent, chat) == "Καλά, ευχαριστώ! Ποια μέρα θα σας βόλευε;"
+    assert sent == [("turn", {"text": "Καλησπέρα, τι κάνετε;", "understood": {"intent": "smalltalk", "goodbye": False}})]
+
+
+@pytest.mark.asyncio
+async def test_flow_speaks_the_backends_sentence_instead_of_the_model(monkeypatch):
+    agent, chat, _, _ = flow_agent(
+        monkeypatch, '{"intent": "book"}\nΒεβαίως, να δω τι έχουμε.',
+        {"say": "Για ποια υπηρεσία; Έχουμε έλεγχο και καθαρισμό.", "state": "{}"})
+    assert await spoken(agent, chat) == "Για ποια υπηρεσία; Έχουμε έλεγχο και καθαρισμό."
+
+
+@pytest.mark.asyncio
+async def test_flow_goodbye_hangs_up_with_the_closing_line(monkeypatch):
+    agent, chat, _, spawned = flow_agent(monkeypatch, '{"intent": "smalltalk", "goodbye": true}\n', {"end_call": True})
+    assert await spoken(agent, chat) == ""
+    assert len(spawned) == 1
+    spawned[0].close()
+
+
+@pytest.mark.asyncio
+async def test_flow_without_its_first_line_speaks_the_text_and_changes_nothing(monkeypatch):
+    agent, chat, sent, _ = flow_agent(monkeypatch, "Καλά, ευχαριστώ! Πώς μπορώ να βοηθήσω;", {})
+    assert await spoken(agent, chat) == "Καλά, ευχαριστώ! Πώς μπορώ να βοηθήσω;"
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_flow_waits_for_the_turn_to_be_final_before_the_backend_acts(monkeypatch):
+    monkeypatch.setattr(worker, "FLOW_COMMIT_TIMEOUT", 0.2)
+    agent, chat, sent, _ = flow_agent(monkeypatch, '{"intent": "book"}\n', {"say": "x"})
+    agent._rc._final_turns.clear()  # the model started early; the caller then said something else
+    assert await spoken(agent, chat) == ""
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_flow_never_stays_silent_when_the_model_writes_no_reply(monkeypatch):
+    agent, chat, _, _ = flow_agent(monkeypatch, '{"intent": "none"}\n',
+                                   {"reply": "model", "fallback": "Θα θέλατε κάτι άλλο;", "state": "{}"})
+    assert await spoken(agent, chat) == "Θα θέλατε κάτι άλλο;"
+
+
+def test_flow_reads_the_first_line_however_the_model_writes_it():
+    assert worker._understood('{"intent": "book"}\nΒεβαίως.') == ({"intent": "book"}, "Βεβαίως.")
+    # Reply on the same line.
+    assert worker._understood('{"intent": "smalltalk"} Καλά, ευχαριστώ!') == ({"intent": "smalltalk"}, "Καλά, ευχαριστώ!")
+    # Percent-encoded Greek (EVAL-013).
+    assert worker._understood('{"day": "α%CF%8D%CF%81%CE%B9%CE%BF"}\n')[0] == {"day": "αύριο"}
+    assert worker._understood("```json\n{\"intent\": \"none\"}\n```\nΕντάξει.") == ({"intent": "none"}, "Εντάξει.")
+    assert worker._understood("Καλά, ευχαριστώ!") == (None, "Καλά, ευχαριστώ!")
+
+
+@pytest.mark.asyncio
+async def test_flow_never_reads_a_broken_first_line_out_loud(monkeypatch):
+    agent, chat, sent, _ = flow_agent(monkeypatch, '{"intent": "book", "day": "Τρίτη', {})
+    assert await spoken(agent, chat) == "Συγγνώμη, μπορείτε να το πείτε ξανά;"
+    assert sent == []
