@@ -15,6 +15,15 @@ class NotConfigured(Exception):
     pass
 
 
+def _vertex_host(location: str) -> str:
+    """Same rule as the google-genai SDK the agent uses: "eu"/"us" are multi-regions with their own host."""
+    if location == "global":
+        return "aiplatform.googleapis.com"
+    if location in {"eu", "us"}:
+        return f"aiplatform.{location}.rep.googleapis.com"
+    return f"{location}-aiplatform.googleapis.com"
+
+
 def configured() -> bool:
     s = get_settings()
     return bool(s.gemini_vertex_location or s.gemini_api_key)
@@ -44,7 +53,7 @@ async def generate(model: str, body: dict, *, timeout: float) -> httpx.Response:
         if not (s.gemini_vertex_project and s.google_service_account_json):
             raise NotConfigured("GEMINI_VERTEX_PROJECT and GOOGLE_SERVICE_ACCOUNT_JSON are needed for Vertex AI")
         loc = s.gemini_vertex_location
-        url = (f"https://{loc}-aiplatform.googleapis.com/v1/projects/{s.gemini_vertex_project}"
+        url = (f"https://{_vertex_host(loc)}/v1/projects/{s.gemini_vertex_project}"
                f"/locations/{loc}/publishers/google/models/{model}:generateContent")
         kwargs = {"headers": {"Authorization": f"Bearer {await _token()}"}}
     elif s.gemini_api_key:
