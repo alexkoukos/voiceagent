@@ -35,6 +35,7 @@ LINES = {
         "message_name": "Με ποιο όνομα να αφήσω το μήνυμα;",
         "message_saved": "Το μήνυμα καταγράφηκε και θα σας καλέσουν πίσω. Θα θέλατε κάτι άλλο;",
         "help": "Πώς μπορώ να βοηθήσω;",
+        "anything_else": "Θα θέλατε κάτι άλλο;",
         "already_book": "Το ραντεβού σας έχει ήδη κλειστεί. Θα θέλατε κάτι άλλο;",
         "already_change": "Το ραντεβού σας έχει ήδη αλλάξει. Θα θέλατε κάτι άλλο;",
         "already_cancel": "Το ραντεβού έχει ήδη ακυρωθεί. Θα θέλατε κάτι άλλο;",
@@ -64,6 +65,7 @@ LINES = {
         "message_name": "What name should I leave the message under?",
         "message_saved": "Your message is saved and they'll call you back. Is there anything else?",
         "help": "How can I help you?",
+        "anything_else": "Is there anything else?",
         "already_book": "Your appointment is already booked. Is there anything else?",
         "already_change": "Your appointment has already been moved. Is there anything else?",
         "already_cancel": "The appointment is already cancelled. Is there anything else?",
@@ -114,6 +116,9 @@ async def turn(db: AsyncSession, call: Call, text: str, understood: dict) -> dic
     practice = await receptionist._practice(db, call)
     t = Turn(db, call, practice, text, understood)
     out = await _decide(t)
+    if out.get("reply") == "model":
+        # Spoken if the model's own reply comes back empty: never silence.
+        out["fallback"] = out.get("then") or t.line("anything_else" if t.st.get("done") else "help")
     call = await db.get(Call, call_id)
     call.flow = t.st
     await db.commit()
@@ -286,9 +291,19 @@ async def _booking(t: Turn, *, peek: bool) -> dict | None:
 
 
 async def _availability(t: Turn, service: dict, *, after: str | None = None, before: str | None = None) -> dict:
-    return await t.tool("check_availability", receptionist.tool_check_availability, schemas.CheckAvailability(
-        when=t.st["day"], service_id=service["id"], staff=t.st.get("staff") or None,
-        appointment_id=t.st.get("appointment_id"), after=after, before=before))
+    def ask(when: str):
+        return t.tool("check_availability", receptionist.tool_check_availability, schemas.CheckAvailability(
+            when=when, service_id=service["id"], staff=t.st.get("staff") or None,
+            appointment_id=t.st.get("appointment_id"), after=after, before=before))
+
+    result = await ask(t.st["day"])
+    if result.get("error") == "no_date" and t.text and t.text != t.st["day"]:
+        # The model's day didn't read as a date: the caller's own words, as the tool flow does.
+        retry = await ask(t.text[:200])
+        if not retry.get("error"):
+            t.st["day"] = t.text[:200]
+            return retry
+    return result
 
 
 async def _offer(t: Turn, service: dict) -> dict:
