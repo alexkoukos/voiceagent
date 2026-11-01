@@ -45,6 +45,7 @@ jobs:
       INTERNAL_API_TOKEN: ci-agent-token
       ADMIN_API_TOKEN: ci-founder-token
       AGENT_VERSION: ${{ github.sha }}
+      FLOW_ENGINE: fsm  # the engine Railway runs; grade what callers hear
     steps:
       - name: Check for the model key
         id: key
