@@ -539,3 +539,27 @@ async def test_flow_waits_for_the_turn_to_be_final_before_the_backend_acts(monke
     agent._rc._final_turns.clear()  # the model started early; the caller then said something else
     assert await spoken(agent, chat) == ""
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_flow_never_stays_silent_when_the_model_writes_no_reply(monkeypatch):
+    agent, chat, _, _ = flow_agent(monkeypatch, '{"intent": "none"}\n',
+                                   {"reply": "model", "fallback": "Θα θέλατε κάτι άλλο;", "state": "{}"})
+    assert await spoken(agent, chat) == "Θα θέλατε κάτι άλλο;"
+
+
+def test_flow_reads_the_first_line_however_the_model_writes_it():
+    assert worker._understood('{"intent": "book"}\nΒεβαίως.') == ({"intent": "book"}, "Βεβαίως.")
+    # Reply on the same line.
+    assert worker._understood('{"intent": "smalltalk"} Καλά, ευχαριστώ!') == ({"intent": "smalltalk"}, "Καλά, ευχαριστώ!")
+    # Percent-encoded Greek (EVAL-013).
+    assert worker._understood('{"day": "α%CF%8D%CF%81%CE%B9%CE%BF"}\n')[0] == {"day": "αύριο"}
+    assert worker._understood("```json\n{\"intent\": \"none\"}\n```\nΕντάξει.") == ({"intent": "none"}, "Εντάξει.")
+    assert worker._understood("Καλά, ευχαριστώ!") == (None, "Καλά, ευχαριστώ!")
+
+
+@pytest.mark.asyncio
+async def test_flow_never_reads_a_broken_first_line_out_loud(monkeypatch):
+    agent, chat, sent, _ = flow_agent(monkeypatch, '{"intent": "book", "day": "Τρίτη', {})
+    assert await spoken(agent, chat) == "Συγγνώμη, μπορείτε να το πείτε ξανά;"
+    assert sent == []
