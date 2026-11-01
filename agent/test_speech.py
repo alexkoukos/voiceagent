@@ -228,12 +228,9 @@ async def test_greek_clock_times_in_every_stream_boundary(monkeypatch):
     assert Pronunciation("en").apply("09:30") == "09:30"
 
 
-def test_demo_voices_are_explicit_even_with_localized_default(monkeypatch):
-    from voices import gemini_voice
-    monkeypatch.setenv("ELEVENLABS_VOICE_MAP_EL", '{"default":"custom"}')
-    assert elevenlabs_voice("eleven_sarah", "el") == "EXAVITQu4vr4xnSDxMaL"
-    assert elevenlabs_voice("eleven_brian", "el") == "nPczCjzI2devNBz1zQrb"
-    assert gemini_voice("eleven_brian") == "Kore"
+def test_greek_calls_use_the_native_greek_voices():
+    assert elevenlabs_voice("Kore", "el") == "mRTQIE2xdk2oMdoKFGJu"  # Aria
+    assert elevenlabs_voice("Zubenelgenubi", "el") == "cuab90umcstNgL8U7orz"  # Fatsis
 
 @pytest.mark.asyncio
 async def test_greek_speech_has_no_exclamations():

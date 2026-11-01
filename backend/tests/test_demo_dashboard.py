@@ -141,14 +141,14 @@ async def test_session_attaches_link_before_dispatch(shared_http, sessions, monk
         async with sessions() as db:
             saved = await db.get(Call, metadata['call_id'])
             assert saved.demo_dashboard_id == link['id']
-            assert saved.voice == metadata['voice'] == 'eleven_sarah'
-            assert (await db.get(Practice, pid)).voice != 'eleven_sarah'
+            assert saved.voice == metadata['voice'] == 'Zubenelgenubi'
+            assert (await db.get(Practice, pid)).voice != 'Zubenelgenubi'
     monkeypatch.setattr(demo.receptionist, 'start_call', start_call)
     monkeypatch.setattr(demo.receptionist, 'dispatch', dispatch)
     monkeypatch.setattr(demo.receptionist, 'room_token', lambda *args: 'room-token')
     monkeypatch.setattr(demo, 'active_count', AsyncMock(return_value=0))
     assert (await http.post(link['path'] + '/call/session', json={'voice':'arbitrary-provider-id'})).status_code == 422
-    response = await http.post(link['path'] + '/call/session', json={'voice':'eleven_sarah'})
+    response = await http.post(link['path'] + '/call/session', json={'voice':'Zubenelgenubi'})
     assert response.status_code == 200, response.text
     assert response.json()['token'] == 'room-token'
 
