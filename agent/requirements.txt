@@ -1,5 +1,5 @@
 livekit-agents[google,elevenlabs,silero]==1.8.10
 livekit-plugins-noise-cancellation>=0.3.2
-livekit-api>=0.8
+livekit-api>=1.2.2
 python-dotenv>=1.0
 httpx>=0.27
