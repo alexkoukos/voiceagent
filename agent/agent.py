@@ -609,6 +609,8 @@ def prewarm(proc: JobProcess) -> None:
 # "tools" keeps the model-driven tool flow.
 FLOW_ENGINE = os.environ.get("FLOW_ENGINE", "tools")
 FLOW_COMMIT_TIMEOUT = 20.0
+SENTENCE_END = re.compile(r"[.!;;?·…]+\s+")
+QUESTION_MARKS = ("?", ";", ";")
 RECOVERY_LINE = {"el": "Συγγνώμη, μπορείτε να το πείτε ξανά;", "en": "Sorry, could you say that again?"}  # longest wait for the turn the model started on to be final
 
 
@@ -691,18 +693,35 @@ class FlowAgent(ReceptionistAgent):
                     rc._set_endpointing(patient=True)
                 yield out["say"]
                 return
-            said = rest.strip()
-            if said:
-                yield rest.lstrip()
+            then = out.get("then")
+            if not then:
+                said = rest.strip()
+                if said:
+                    yield rest.lstrip()
+                async for chunk in stream:
+                    text = _chunk_text(chunk)
+                    yield text if said else text.lstrip()
+                    said = said or text.strip()
+                if not said:
+                    # The model wrote nothing after its first line: the backend's line instead of silence.
+                    yield out.get("fallback") or ""
+                return
+            # The backend asks the next question itself, so a question the model ends on is
+            # dropped: «…Ποια μέρα θα θέλατε; Ποια μέρα θα σας βόλευε;» (demo call, 2026-11-05).
+            # Whole sentences are spoken as they come; the last one waits for the end.
+            pending, said = rest.lstrip(), ""
             async for chunk in stream:
-                text = _chunk_text(chunk)
-                yield text if said else text.lstrip()
-                said = said or text.strip()
-            if not said:
-                # The model wrote nothing after its first line: the backend's line instead of silence.
-                yield out.get("fallback") or ""
-            elif out.get("then"):
-                yield " " + out["then"]
+                pending += _chunk_text(chunk)
+                cut = max((m.end() for m in SENTENCE_END.finditer(pending)), default=0)
+                if cut:
+                    said += pending[:cut]
+                    yield pending[:cut]
+                    pending = pending[cut:]
+            last = pending.strip()
+            if last and not last.endswith(QUESTION_MARKS):
+                said += pending
+                yield pending
+            yield (" " + then) if said.strip() and not said[-1:].isspace() else then
         finally:
             await stream.aclose()
 
