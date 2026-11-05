@@ -378,10 +378,7 @@ Rules (the owner's, 2026-09-25):
 
 ## Speech output: voices, pronunciation, pre-rendered lines
 
-**Voices** (`voices.py`). The app and backend only know stable keys (`Kore`, `Zubenelgenubi`, `Puck`, …), and each engine maps them to its own voices:
-
-- **Greek calls use native Greek ElevenLabs voices**: female `Kore` → *Aria* (the default) and male `Zubenelgenubi` → *Fatsis*. The English premade voices sounded foreign, almost Cypriot, in Greek. A male/female toggle sits in the iOS settings (`PUT /practices/<id>/voice`) and on the web demo.
-- `ELEVENLABS_VOICE_MAP`, `ELEVENLABS_VOICE_MAP_EL` and `ELEVENLABS_VOICE_MAP_EN` override the defaults. The web demo offers the two Greek voices: Γυναικεία (`Kore` → Aria) and Ανδρική (`Zubenelgenubi` → Fatsis).
+**Voices** (`voices.py`). Every call, in Greek or English, uses one of two native Greek ElevenLabs voices: female `Kore` → *Aria* (the default) or male `Zubenelgenubi` → *Fatsis*. Any other stored key counts as female. The English premade voices sounded foreign, almost Cypriot, in Greek. The male/female toggle sits in the iOS settings (`PUT /practices/<id>/voice`) and on the web demo. The Gemini fallback has no such voices and uses its own `Kore` / `Zubenelgenubi`.
 
 **Pronunciation filter** (`speech.Pronunciation`). This runs on the text stream between the LLM and TTS only. Stored transcripts and booking data keep the original spelling.
 
@@ -682,7 +679,6 @@ The main settings are below. See `.env.example` for all of them.
 | `ELEVENLABS_TTS_MODEL` | `eleven_flash_v2_5` | Live replies |
 | `PRERENDER_TTS_MODEL` | `eleven_multilingual_v2` | Greeting and goodbye |
 | `TTS_SPEED` | 0.93 | ElevenLabs speed (0.7–1.2) |
-| `ELEVENLABS_VOICE_MAP[_EL/_EN]` | — | Voice overrides (JSON) |
 | `TTS_PRONUNCIATION_ALIASES` | — | Spoken-only word replacements |
 | `NOISE_CANCELLATION` | `on` | BVC / BVCTelephony; needs LiveKit Cloud transport |
 | `SCRIBE_SILENCE_SECS` | 0.7 | Scribe segment end |
