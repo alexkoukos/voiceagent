@@ -17,7 +17,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import receptionist
-from app.booking import WEEKDAY_KEYS, WEEKDAY_EL, WEEKDAY_EN
+from app.booking import WEEKDAY_KEYS, WEEKDAY_EN
 from app.config import get_settings
 from app.database import get_db
 from app.dispatcher import active_count
@@ -55,48 +55,44 @@ async def demo_info(slug: str, db: AsyncSession = Depends(get_db)):
 @router.get("/{slug}", response_class=HTMLResponse)
 async def demo_page(slug: str, db: AsyncSession = Depends(get_db), embed: bool = False):
     practice = await _practice(db, slug)
-    greek = practice.language == "el"
     info = public_info(practice)
-    weekdays = WEEKDAY_EL if greek else WEEKDAY_EN
-    unknown_price = "Ρωτήστε για την τιμή" if greek else "Ask for pricing"
-    minutes = "λεπτά" if greek else "min"
+    # The page is in English; the assistant speaks the practice's language.
+    speaks = ("It answers in Greek; say \u201cEnglish mode\u201d to switch to English. "
+              if practice.language == "el" else "")
     service_rows = "".join(
         '<div class="info-row"><dt>' + escape(str(service["name"] or "—"))
-        + '<small>' + escape(str(service["duration_minutes"] or "—")) + ' ' + minutes
-        + '</small></dt><dd>' + escape(str(service["price"] or unknown_price))
+        + '<small>' + escape(str(service["duration_minutes"] or "—")) + ' min'
+        + '</small></dt><dd>' + escape(str(service["price"] or "Ask for pricing"))
         + '</dd></div>' for service in info["services"]
     )
     hours_rows = "".join(
-        '<div class="info-row"><dt>' + escape(weekdays[i]) + '</dt><dd>'
-        + escape(", ".join(f"{start}–{end}" for start, end in info["hours"][day])
-                 or ("Κλειστά" if greek else "Closed")) + '</dd></div>'
+        '<div class="info-row"><dt>' + escape(WEEKDAY_EN[i]) + '</dt><dd>'
+        + escape(", ".join(f"{start}–{end}" for start, end in info["hours"][day]) or "Closed") + '</dd></div>'
         for i, day in enumerate(WEEKDAY_KEYS)
     )
     return PAGE.substitute(
-        lang=escape(practice.language),
+        lang="en",
         page_class="embed" if embed else "",
         name=escape(practice.name),
-        eyebrow="ΔΟΚΙΜΗ ΨΗΦΙΑΚΗΣ ΓΡΑΜΜΑΤΕΙΑΣ" if greek else "AI RECEPTIONIST DEMO",
-        subtitle="Ρωτήστε για τιμές και ωράριο ή δοκιμάστε να κλείσετε ραντεβού." if greek else "Ask about prices and opening hours, or try booking an appointment.",
-        call="Έναρξη κλήσης" if greek else "Start call",
-        hang_up="Τερματισμός" if greek else "Hang up",
-        note=("Επιτρέψτε το μικρόφωνο και μιλήστε φυσικά."
-              if greek else "Allow microphone access and speak naturally."),
-        s_ready="Έτοιμο για κλήση" if greek else "Ready to call",
-        s_connecting="Σύνδεση…" if greek else "Connecting…",
-        s_live="Σε κλήση" if greek else "On the call",
-        s_ended="Η κλήση τελείωσε" if greek else "Call ended",
-        s_busy="Όλες οι γραμμές είναι απασχολημένες. Δοκιμάστε σε λίγο." if greek else "All lines are busy. Try again shortly.",
-        s_error="Κάτι πήγε στραβά. Δοκιμάστε ξανά." if greek else "Something went wrong. Please try again.",
-        s_mic_error="Δώστε πρόσβαση στο μικρόφωνο και δοκιμάστε ξανά."
-                    if greek else "Allow microphone access and try again.",
-        info_title="Υπηρεσίες, τιμές και ωράριο" if greek else "Services, prices & opening hours",
-        info_note="Τα στοιχεία που χρησιμοποιεί και ο βοηθός στην κλήση." if greek else "The same information the assistant uses during your call.",
-        services_title="Υπηρεσίες και τιμές" if greek else "Services & prices",
-        hours_title="Ωράριο" if greek else "Opening hours",
-        voice_label="Φωνή" if greek else "Voice",
-        voice_female="Γυναικεία" if greek else "Female",
-        voice_male="Ανδρική" if greek else "Male",
+        eyebrow="AI RECEPTIONIST DEMO",
+        subtitle=speaks + "Ask about prices and opening hours, or try booking an appointment.",
+        call="Start call",
+        hang_up="Hang up",
+        note="Allow microphone access and speak naturally.",
+        s_ready="Ready to call",
+        s_connecting="Connecting…",
+        s_live="On the call",
+        s_ended="Call ended",
+        s_busy="All lines are busy. Try again shortly.",
+        s_error="Something went wrong. Please try again.",
+        s_mic_error="Allow microphone access and try again.",
+        info_title="Services, prices & opening hours",
+        info_note="The same information the assistant uses during your call.",
+        services_title="Services & prices",
+        hours_title="Opening hours",
+        voice_label="Voice",
+        voice_female="Female",
+        voice_male="Male",
         timezone=escape(info["timezone"]),
         service_rows=service_rows,
         hours_rows=hours_rows,
