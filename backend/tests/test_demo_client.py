@@ -14,9 +14,10 @@ async def test_demo_embedded_page_is_localized_and_escapes_practice_name(monkeyp
     monkeypatch.setattr(demo, "_practice", AsyncMock(return_value=SimpleNamespace(
         name="Κομμωτήριο <Αθηνά>", language="el", timezone="Europe/Athens", services=[], hours={})))
     html = await demo.demo_page("preview", None, embed=True)
-    assert '<html lang="el" class="embed">' in html
+    assert '<html lang="en" class="embed">' in html
     assert "Κομμωτήριο &lt;Αθηνά&gt;" in html
-    assert "Υπηρεσίες, τιμές και ωράριο" in html
+    assert "Services, prices &amp; opening hours" in html or "Services, prices & opening hours" in html
+    assert "English mode" in html
     assert 'id="log"' not in html
     assert "TranscriptionReceived" not in html
 
