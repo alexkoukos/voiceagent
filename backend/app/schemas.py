@@ -178,6 +178,7 @@ class CallRouting(BaseModel):
 
 class PracticeIn(BaseModel):
     name: str = Field(min_length=1, max_length=SHORT_TEXT)
+    public_name: str | None = Field(default=None, max_length=SHORT_TEXT)
     slug: str | None = Field(default=None, pattern=r"^[a-z0-9\-]{6,64}$")
     timezone: str = "Europe/Athens"
     language: Literal["el", "en"] = "el"
