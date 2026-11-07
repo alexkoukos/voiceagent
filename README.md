@@ -4,6 +4,15 @@ An AI phone receptionist for small practices (doctors, dentists, physios, vets, 
 
 > **Status:** pilot. The features are built and covered by tests and evals; live acceptance (real phone lines, handoffs, a recording notice) is done per deployment.
 
+## Highlights
+
+- **The model reports, the code decides.** Each caller turn is a single model call with no tool calls: the model writes its reading of the turn (intent, day, time, name) and a natural reply, and a state machine in the backend decides what happens and words every fact itself.
+- **Bookings are safe by construction.** Only times the backend offered can be booked; the backend speaks the readback; the caller's own transcribed yes is required, checked in code. Times and phone numbers are taken from the caller's words, not the model's.
+- **Evals pass or fail on the database.** Scripted conversations run against the real agent and backend, and each check reads what was actually booked, moved or cancelled, never an LLM judge.
+- **Greek speech, measured.** Speech-to-text providers were compared on Greek phone audio (11% word errors for the one in use against 35% for the runner-up), times are spoken as words, and fixed lines are voiced in advance.
+- **Latency and cost per call.** Content-free timing events for every turn (about 1.5 s from end of speech to first audio), and a per-call cost from a versioned price list.
+- **Multi-tenant backend.** Per-practice keys, field and recording encryption, booking under a Postgres advisory lock, Google Calendar sync, reminders and a notification outbox.
+
 ## How it works
 
 ```mermaid
