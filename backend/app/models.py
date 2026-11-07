@@ -41,6 +41,9 @@ class Practice(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String, nullable=False)
+    # Name shown on public web pages, e.g. an English name for an English page; the agent
+    # always says `name`. None shows `name`.
+    public_name: Mapped[str | None] = mapped_column(String, nullable=True)
     # Public web demo link: /demo/<slug>. None turns the demo off.
     slug: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     timezone: Mapped[str] = mapped_column(String, default="Europe/Athens")

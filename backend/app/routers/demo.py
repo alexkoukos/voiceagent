@@ -37,7 +37,7 @@ async def _practice(db: AsyncSession, slug: str) -> Practice:
 def public_info(practice: Practice) -> dict:
     """Explicit public fields only; never serialize the practice or its knowledge base."""
     return {
-        "name": practice.name,
+        "name": practice.public_name or practice.name,
         "timezone": practice.timezone,
         "services": [
             {key: service.get(key) for key in ("name", "duration_minutes", "price")}
@@ -73,7 +73,7 @@ async def demo_page(slug: str, db: AsyncSession = Depends(get_db), embed: bool =
     return PAGE.substitute(
         lang="en",
         page_class="embed" if embed else "",
-        name=escape(practice.name),
+        name=escape(practice.public_name or practice.name),
         eyebrow="AI RECEPTIONIST DEMO",
         subtitle=speaks + "Ask about prices and opening hours, or try booking an appointment.",
         call="Start call",

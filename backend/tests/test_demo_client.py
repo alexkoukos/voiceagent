@@ -12,12 +12,22 @@ from app.routers import demo
 @pytest.mark.asyncio
 async def test_demo_embedded_page_is_localized_and_escapes_practice_name(monkeypatch):
     monkeypatch.setattr(demo, "_practice", AsyncMock(return_value=SimpleNamespace(
-        name="Κομμωτήριο <Αθηνά>", language="el", timezone="Europe/Athens", services=[], hours={})))
+        name="Κομμωτήριο <Αθηνά>", public_name=None, language="el", timezone="Europe/Athens", services=[], hours={})))
     html = await demo.demo_page("preview", None, embed=True)
     assert '<html lang="en" class="embed">' in html
     assert "Κομμωτήριο &lt;Αθηνά&gt;" in html
     assert "Services, prices &amp; opening hours" in html or "Services, prices & opening hours" in html
     assert "English mode" in html
+
+
+@pytest.mark.asyncio
+async def test_demo_page_shows_the_public_name(monkeypatch):
+    monkeypatch.setattr(demo, "_practice", AsyncMock(return_value=SimpleNamespace(
+        name="Οδοντιατρείο Παπαδοπούλου", public_name="Papadopoulou Dental Clinic", language="el",
+        timezone="Europe/Athens", services=[], hours={})))
+    html = await demo.demo_page("preview", None)
+    assert "Papadopoulou Dental Clinic" in html and "Οδοντιατρείο" not in html
+    assert demo.public_info(await demo._practice(None, "preview"))["name"] == "Papadopoulou Dental Clinic"
     assert 'id="log"' not in html
     assert "TranscriptionReceived" not in html
 
@@ -77,7 +87,7 @@ process.stdin.on('end', async () => {
 async def test_demo_recovers_and_releases_audio(monkeypatch,mode):
     if not shutil.which("node"):
         pytest.skip("Node is required for client JavaScript checks")
-    monkeypatch.setattr(demo,"_practice",AsyncMock(return_value=SimpleNamespace(name="Test",language="en",timezone="Europe/Athens",services=[],hours={})))
+    monkeypatch.setattr(demo,"_practice",AsyncMock(return_value=SimpleNamespace(name="Test",public_name=None,language="en",timezone="Europe/Athens",services=[],hours={})))
     html=await demo.demo_page("test-demo",None)
     js=re.findall(r'<script>(.*?)</script>',html,re.S)[-1]
     result=subprocess.run(["node","-e",NODE_TEST,mode],input=js,text=True,capture_output=True,timeout=10)
@@ -88,7 +98,7 @@ async def test_demo_recovers_and_releases_audio(monkeypatch,mode):
 @pytest.mark.asyncio
 async def test_public_info_is_allowlisted_and_html_escaped(monkeypatch):
     practice = SimpleNamespace(
-        name="Dental", language="en", timezone="Europe/Athens",
+        name="Dental", public_name=None, language="en", timezone="Europe/Athens",
         services=[{"name": "<script>alert(1)</script>", "price": "40€", "duration_minutes": 30,
                    "internal_note": "private"}],
         hours={"mon": [["09:00", "14:00"]]}, knowledge_base={"PIN": "secret"},
@@ -118,7 +128,7 @@ async def test_public_demo_http_access_without_credentials(monkeypatch):
     from fastapi import FastAPI
     from app.database import get_db
 
-    practice = SimpleNamespace(name="Dental", language="en", timezone="Europe/Athens",
+    practice = SimpleNamespace(name="Dental", public_name=None, language="en", timezone="Europe/Athens",
                                services=[{"name": "Cleaning", "duration_minutes": 45, "price": "60€"}],
                                hours={})
     database = SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(
