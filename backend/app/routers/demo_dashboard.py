@@ -104,7 +104,7 @@ async def revoke_link(practice_id: str, link_id: str, db: AsyncSession = Depends
 @router.get("/demo-dashboard/{token}", response_class=HTMLResponse, include_in_schema=False)
 async def page(token: str, db: AsyncSession = Depends(get_db)):
     link, practice = await link_context(token, db)
-    return HTMLResponse(PAGE.substitute(name=escape(practice.name), expires=escape("Expires " + iso(link.expires_at) if link.expires_at else "No automatic expiry"),
+    return HTMLResponse(PAGE.substitute(name=escape(practice.public_name or practice.name), expires=escape("Expires " + iso(link.expires_at) if link.expires_at else "No automatic expiry"),
                                         call_path=f"/demo-dashboard/{token}/call"), headers=NO_STORE)
 
 

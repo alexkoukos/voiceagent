@@ -111,6 +111,8 @@ async def update_practice(practice_id: str, payload: PracticeIn, db: AsyncSessio
     # silently disable the clinic's configured forwarding profile.
     if "call_routing" not in payload.model_fields_set:
         columns["call_routing"] = practice.call_routing or {}
+    if "public_name" not in payload.model_fields_set:
+        columns["public_name"] = practice.public_name
     destination = (columns["call_routing"] or {}).get("ai_destination_number")
     if destination and destination not in columns["phone_numbers"]:
         raise HTTPException(status_code=422, detail="AI destination must be a provisioned inbound number")
