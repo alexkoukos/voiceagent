@@ -37,7 +37,7 @@ async def monitor_http(sessions, monkeypatch):
         call = Call(status=CallStatus.active, direction="web")
         db.add(call)
         await db.flush()
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="Γεια σας"))
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="Γεια σας"))
         for sequence, latency in enumerate([800, 1200, 3000], start=1):
             db.add(CallTelemetryEvent(call_id=call.id, session_id=str(uuid.uuid4()), sequence=sequence,
                                       payload=payload(call.id, sequence, "response_latency_estimate",
@@ -75,7 +75,7 @@ async def test_monitor_lists_latency_and_streams_by_cursor(monitor_http):
     assert (calls[0]["turns"], calls[0]["p50_ms"], calls[0]["p95_ms"]) == (3, 1200, 3000)
     live = (await http.get(f"/monitor/api/calls/{call_id}", headers=FOUNDER)).json()
     assert live["call"]["status"] == "active"
-    assert live["transcript"] == [{"role": "friend", "text": "Γεια σας", "at": live["transcript"][0]["at"]}]
+    assert live["transcript"] == [{"role": "caller", "text": "Γεια σας", "at": live["transcript"][0]["at"]}]
     assert len(live["events"]) == 4
     later = (await http.get(f"/monitor/api/calls/{call_id}", headers=FOUNDER,
                             params={"after": live["next_after"]})).json()

@@ -16,16 +16,10 @@ def main():
     parser.add_argument('--backend', default='http://localhost:8000')
     parser.add_argument('--permanent', action='store_true', help='Keep the link active until explicitly revoked')
     args = parser.parse_args()
-    # Explicit destinations keep founder credentials away from arbitrary URLs.
-    # Add a reviewed origin here when moving this repository to another host.
-    origins = {
-        'http://localhost:8000': 'http://localhost:8000',
-        'http://127.0.0.1:8000': 'http://127.0.0.1:8000',
-        'https://backend-production-c085.up.railway.app': 'https://backend-production-c085.up.railway.app',
-    }
-    base = origins.get(args.backend.rstrip('/'))
-    if base is None:
-        parser.error('Use a configured local or production backend origin.')
+    # The founder key only goes to a local backend or over HTTPS.
+    base = args.backend.rstrip('/')
+    if not base.startswith(('https://', 'http://localhost:', 'http://127.0.0.1:')):
+        parser.error('Use https://, or a local http://localhost: backend.')
     token = os.environ.get('ADMIN_API_TOKEN')
     if not token:
         parser.error('Set ADMIN_API_TOKEN in the environment.')

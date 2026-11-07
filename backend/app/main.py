@@ -35,7 +35,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(
-    title="AI Caller",
+    title="AI Receptionist",
     lifespan=lifespan,
     docs_url="/docs" if _docs else None,
     redoc_url=None,

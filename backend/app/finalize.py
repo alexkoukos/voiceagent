@@ -110,7 +110,7 @@ async def finalize(call_id: str) -> None:
                     RoutingEvent.call_id == call.id, RoutingEvent.kind == "admin_login").limit(1))).first():
                 from app import receptionist
                 await receptionist.scrub_pins(db, call)
-            caller_turns = sum(1 for e in entries if e.role == TranscriptRole.friend)
+            caller_turns = sum(1 for e in entries if e.role == TranscriptRole.caller)
             call.outcome = decide_outcome(call, caller_turns)
             if call.use_case is None:
                 call.use_case = "booking" if call.outcome in ("booked", "rescheduled", "cancelled", "confirmed") else "call_center"
@@ -119,7 +119,7 @@ async def finalize(call_id: str) -> None:
             call.cost_estimate = cost(call)
             await costs.recompute(db, call)
             language = practice.language
-            lines = [f"{'Πελάτης' if language == 'el' else 'Caller'}: {e.text}" if e.role == TranscriptRole.friend
+            lines = [f"{'Πελάτης' if language == 'el' else 'Caller'}: {e.text}" if e.role == TranscriptRole.caller
                      else f"{'Βοηθός' if language == 'el' else 'Assistant'}: {e.text}" for e in entries]
             call.summary = await summarize("\n".join(lines), language)
             if not call.summary:
