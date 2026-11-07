@@ -510,6 +510,19 @@ async def test_flow_speaks_the_models_reply_for_small_talk_then_the_next_questio
 
 
 @pytest.mark.asyncio
+async def test_flow_drops_the_models_own_question_when_the_backend_asks_the_next_one(monkeypatch):
+    # Demo call, 2026-11-05: «…Ποια μέρα θα θέλατε να κλείσουμε; Ποια μέρα θα σας βόλευε;»
+    agent, chat, _, _ = flow_agent(
+        monkeypatch, '{"intent": "question"}\nΣήμερα είναι Πέμπτη. Ποια μέρα θα θέλατε να κλείσουμε;',
+        {"reply": "model", "then": "Ποια μέρα θα σας βόλευε;", "state": "{}"})
+    assert await spoken(agent, chat) == "Σήμερα είναι Πέμπτη. Ποια μέρα θα σας βόλευε;"
+    agent, chat, _, _ = flow_agent(
+        monkeypatch, '{"intent": "smalltalk"}\nΤι μπορώ να κάνω για εσάς;',
+        {"reply": "model", "then": "Ποια μέρα θα σας βόλευε;", "state": "{}"})
+    assert await spoken(agent, chat) == "Ποια μέρα θα σας βόλευε;"
+
+
+@pytest.mark.asyncio
 async def test_flow_speaks_the_backends_sentence_instead_of_the_model(monkeypatch):
     agent, chat, _, _ = flow_agent(
         monkeypatch, '{"intent": "book"}\nΒεβαίως, να δω τι έχουμε.',

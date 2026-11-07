@@ -31,6 +31,8 @@ LINES = {
         "day": "Ποια μέρα θα σας βόλευε;",
         "name": "Ποιο είναι το ονοματεπώνυμό σας;",
         "phone": "Σε ποιο τηλέφωνο μπορούμε να σας βρούμε;",
+        "phone_again": "Δεν το έπιασα ολόκληρο. Μου λέτε το τηλέφωνό σας, και τα δέκα ψηφία;",
+        "which_time": "Ποια ώρα σας βολεύει, {times};",
         "reason": "Τι θέλετε να τους πω;",
         "message_name": "Με ποιο όνομα να αφήσω το μήνυμα;",
         "message_saved": "Το μήνυμα καταγράφηκε και θα σας καλέσουν πίσω. Θα θέλατε κάτι άλλο;",
@@ -61,6 +63,8 @@ LINES = {
         "day": "Which day would suit you?",
         "name": "Could I have your full name?",
         "phone": "Which number can we reach you on?",
+        "phone_again": "I didn't catch all of it. Could you give me the whole number?",
+        "which_time": "Which time suits you, {times}?",
         "reason": "What would you like me to tell them?",
         "message_name": "What name should I leave the message under?",
         "message_saved": "Your message is saved and they'll call you back. Is there anything else?",
@@ -155,6 +159,10 @@ async def _decide(t: Turn) -> dict:
 
     if u.get("goodbye"):
         return {"end_call": True}
+    if (st.get("done") and not st.get("task") and intent not in TASKS and not _new_slots(u)
+            and receptionist._negative(t.text)):
+        # «Όχι, ευχαριστώ» to «Θα θέλατε κάτι άλλο;»: the call is over (demo call, 2026-11-05).
+        return {"end_call": True}
 
     if intent == "abuse":
         result = await t.tool("route_call", receptionist.tool_route, schemas.RouteArgs(intent="off_topic"))
@@ -195,6 +203,19 @@ async def _decide(t: Turn) -> dict:
     if intent == "question" and not st.get("asked_question"):
         st["asked_question"] = True
         await t.tool("route_call", receptionist.tool_route, schemas.RouteArgs(intent="question"))
+
+    if u.get("time") and not names_a_time(t.text):
+        # The model picked a time the caller never named: «Μας βολεύει κάποια, ναι» became
+        # 09:00 (demo call, 2026-11-05). Only the caller's own choice counts.
+        u = t.u = {**u, "time": None}
+    if u.get("phone"):
+        phone = spoken_phone(t.text) or re.sub(r"\D", "", str(u["phone"]))
+        if not valid_phone(phone, t.lang):
+            # «Εξήντα πέντε πενήντα πενήντα» was stored as 695050 (demo call, 2026-11-03).
+            st["phone_invalid"] = True
+            st.pop("phone", None)
+            phone = None
+        u = t.u = {**u, "phone": phone}
 
     changed_day = u.get("day") and u.get("day") != st.get("day")
     for slot in SLOTS:
@@ -287,6 +308,13 @@ async def _booking(t: Turn, *, peek: bool) -> dict | None:
             out = await _offer(t, service)
             out["say"] = " ".join(filter(None, [lead, not_free[:1].upper() + not_free[1:], out["say"]]))
             return out
+    if offer and not time and not peek:
+        times = offer.get("free_times") or []
+        if len(times) == 1 and receptionist._affirmative(t.text):
+            # «Ναι» to a single offered time («Σας βολεύει;»).
+            time = st["time"] = times[0]
+        elif times:
+            return ask("which_time", times=booking._times_spoken(times[:3], t.lang))
     if not offer or not time:
         out = await _offer(t, service)
         if lead:
@@ -297,7 +325,7 @@ async def _booking(t: Turn, *, peek: bool) -> dict | None:
         if not st.get("name"):
             return ask("name")
         if not t.call.caller_number and not st.get("phone"):
-            return ask("phone")
+            return ask("phone_again" if st.pop("phone_invalid", False) else "phone")
     return await _readback(t, "book" if st["task"] == "book" else "reschedule", service, offer["date"], time)
 
 
@@ -410,6 +438,80 @@ async def _message(t: Turn, *, peek: bool) -> dict | None:
         urgent=bool(t.u.get("urgent") or st.get("urgent")), for_whom=st.get("staff") or None))
     st.update(task=None, done=True)
     return {"say": t.line("message_saved")}
+
+
+# Words that name a time or pick one of the offered times. «μία/ένα» only next to a time
+# word: «ή μια άλλη» is not one o'clock. Not «Δευτέρα»/«Τρίτη»: days, not choices.
+TIME_WORDS = re.compile(
+    r"\d|\b(?:δυο|τρεισ|τεσσερισ|πεντε|εξι|εφτα|επτα|οχτω|οκτω|εννια|εννεα|δεκα|εντεκα|δωδεκα|"
+    r"μισ\w*|τεταρτο|μεσημερ\w*|πρωτ\w*|δευτερη|δευτερο|τριτο|τριτη ωρα|τελευται\w*|νωριτερ\w*|αργοτερ\w*|"
+    r"νωρισ|οποια\w*|οποιαδηποτε|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|"
+    r"half|quarter|first|second|third|last|earliest|latest|earlier|later|any|whichever)\b"
+    r"|\b(?:στη|στισ|τη|η|at) (?:μια|ενα|one)\b(?! αλλ)(?! other)|\b(?:μια|one) (?:και|παρα|o clock)\b")
+
+
+def names_a_time(text: str) -> bool:
+    return bool(TIME_WORDS.search(" ".join(re.findall(r"\w+", booking._plain(text or "")))))
+
+
+UNITS = {"μηδεν": 0, "μηδενικο": 0, "ενα": 1, "μια": 1, "δυο": 2, "τρια": 3, "τρεισ": 3, "τεσσερα": 4,
+         "τεσσερισ": 4, "πεντε": 5, "εξι": 6, "επτα": 7, "εφτα": 7, "οκτω": 8, "οχτω": 8, "εννεα": 9,
+         "εννια": 9, "zero": 0, "oh": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+         "seven": 7, "eight": 8, "nine": 9}
+TEENS = {"δεκα": 10, "εντεκα": 11, "δωδεκα": 12, "δεκατρια": 13, "δεκατεσσερα": 14, "δεκαπεντε": 15,
+         "δεκαεξι": 16, "δεκαεφτα": 17, "δεκαεπτα": 17, "δεκαοχτω": 18, "δεκαοκτω": 18, "δεκαεννια": 19,
+         "δεκαεννεα": 19, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+         "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19}
+TENS = {"εικοσι": 20, "τριαντα": 30, "σαραντα": 40, "πενηντα": 50, "εξηντα": 60, "εβδομηντα": 70,
+        "ογδοντα": 80, "ενενηντα": 90, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+        "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+HUNDREDS = {"εκατο": 100, "εκατον": 100, "διακοσια": 200, "τριακοσια": 300, "τετρακοσια": 400,
+            "πεντακοσια": 500, "εξακοσια": 600, "επτακοσια": 700, "εφτακοσια": 700, "οκτακοσια": 800,
+            "οχτακοσια": 800, "εννιακοσια": 900, "εννεακοσια": 900}
+
+
+def spoken_phone(text: str) -> str:
+    """The digits of a phone number as the caller said it, digit by digit or in groups:
+    «εξήντα εννιά, τριακόσια είκοσι πέντε» -> "69325". Read in code, not by the model."""
+    words = re.findall(r"\d+|[^\W\d_]+", booking._plain(text or ""))
+    out, i = [], 0
+
+    def take(table):
+        nonlocal i
+        if i < len(words) and words[i] in table:
+            i += 1
+            return table[words[i - 1]]
+        return None
+
+    while i < len(words):
+        word = words[i]
+        if word.isdigit():
+            out.append(word)
+            i += 1
+        elif (hundred := take(HUNDREDS)) is not None:
+            rest = take(TEENS)
+            if rest is None and (rest := take(TENS)) is not None:
+                rest += take({k: v for k, v in UNITS.items() if v}) or 0
+            if rest is None:
+                rest = take({k: v for k, v in UNITS.items() if v}) or 0
+            out.append(f"{hundred + rest:03d}")
+        elif (tens := take(TENS)) is not None:
+            out.append(str(tens + (take({k: v for k, v in UNITS.items() if v}) or 0)))
+        elif (teen := take(TEENS)) is not None:
+            out.append(str(teen))
+        elif (unit := take(UNITS)) is not None:
+            out.append(str(unit))
+        else:
+            i += 1
+    return "".join(out)
+
+
+def valid_phone(digits: str, language: str) -> bool:
+    """A whole Greek number (10 digits, mobile or landline, maybe with 30 / 0030 in front);
+    on an English call, any 7 to 15 digits."""
+    if re.fullmatch(r"(?:0030|30)?(?:69\d{8}|2\d{9})", digits or ""):
+        return True
+    return language == "en" and 7 <= len(digits or "") <= 15
 
 
 def _hhmm(value) -> str | None:
