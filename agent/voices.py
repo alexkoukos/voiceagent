@@ -1,62 +1,27 @@
-"""The app's voice keys, mapped to a voice for each engine.
+"""The receptionist's two voices, used on every call in every language.
 
-The app and backend only know stable keys ("default", "Puck", ...). The realtime
-engine uses them as Gemini voice names; the pipeline engine maps them to
-ElevenLabs voices. ELEVENLABS_VOICE_MAP (JSON: {"key": "voice_id"}) overrides the
-mapping, e.g. to use your own ElevenLabs voices.
+The app and backend store a voice key: "Zubenelgenubi" is the male voice, anything else
+(normally "Kore") the female one. ElevenLabs speaks them as native Greek voices: the
+English premade voices sounded foreign, almost Cypriot, in Greek (2026-10-01). Gemini
+(the realtime engine and Gemini TTS) has no such voices and uses its own of the same name.
 """
 
-import json
-import logging
-import os
+FEMALE = "Kore"
+MALE = "Zubenelgenubi"
 
-logger = logging.getLogger("prank-caller")
-
-GEMINI_DEFAULT_VOICE = "Kore"
-
-# ElevenLabs premade voices, chosen to match each key's label in the app.
 ELEVENLABS_VOICES: dict[str, str] = {
-    "default": "EXAVITQu4vr4xnSDxMaL",  # Sarah: female, calm
-    "Aoede": "cgSgspJ2msm6clMCkdW9",  # Jessica: female, light and expressive
-    "Puck": "iP95p4xoKVk53GoZ742B",  # Chris: male, casual and upbeat
-    "Charon": "JBFqnCBsd6RMkjVDRZzb",  # George: male, warm and calm
-    "Fenrir": "TX3LPaxmHKxFdv7VOQHJ",  # Liam: male, energetic
-    "Algenib": "N2lVS1w4EtoT3dr4eOWO",  # Callum: male, husky and intense (the grumpy caller)
-    "Algieba": "nPczCjzI2devNBz1zQrb",  # Brian: male, deep and soothing
-    "Zubenelgenubi": "nPczCjzI2devNBz1zQrb",  # Brian: the receptionist default
+    FEMALE: "mRTQIE2xdk2oMdoKFGJu",  # Aria: female, warm
+    MALE: "cuab90umcstNgL8U7orz",  # Fatsis: male, Athenian, warm
 }
 
 
-# Native Greek voices for Greek calls (2026-10-01): the English premade voices spoke
-# Greek with a foreign, almost Cypriot accent. The practice's male/female toggle picks
-# Zubenelgenubi or Kore. ELEVENLABS_VOICE_MAP_EL still overrides these.
-ELEVENLABS_VOICES_EL: dict[str, str] = {
-    "Zubenelgenubi": "cuab90umcstNgL8U7orz",  # Fatsis: male, Athenian, warm
-    "Kore": "mRTQIE2xdk2oMdoKFGJu",  # Aria: female, warm
-}
+def voice_key(key: str | None) -> str:
+    return MALE if key == MALE else FEMALE
 
 
-def _overrides(variable: str = "ELEVENLABS_VOICE_MAP") -> dict[str, str]:
-    raw = os.environ.get(variable, "")
-    if not raw:
-        return {}
-    try:
-        mapping = json.loads(raw)
-        if not isinstance(mapping, dict) or any(not isinstance(v, str) or not v.strip() for v in mapping.values()):
-            raise ValueError
-        return mapping
-    except (ValueError, AttributeError):
-        logger.warning("%s is not a valid voice mapping; ignoring it", variable)
-        return {}
+def elevenlabs_voice(key: str | None) -> str:
+    return ELEVENLABS_VOICES[voice_key(key)]
 
 
-def elevenlabs_voice(key: str, language: str | None = None) -> str:
-    mapping = {**ELEVENLABS_VOICES, **_overrides()}
-    localized = _overrides(f"ELEVENLABS_VOICE_MAP_{language.upper()}") if language in {"el", "en"} else {}
-    native = ELEVENLABS_VOICES_EL.get(key) if language == "el" else None
-    return (localized.get(key) or localized.get("default") or native
-            or mapping.get(key) or mapping["default"])
-
-
-def gemini_voice(key: str) -> str:
-    return GEMINI_DEFAULT_VOICE if key == "default" else key
+def gemini_voice(key: str | None) -> str:
+    return voice_key(key)

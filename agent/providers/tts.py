@@ -24,7 +24,7 @@ class TtsProvider:
 
 def eleven_labs(voice: str, language: str):
     return elevenlabs.TTS(
-        voice_id=elevenlabs_voice(voice, language), model=ELEVENLABS_TTS_MODEL,
+        voice_id=elevenlabs_voice(voice), model=ELEVENLABS_TTS_MODEL,
         language=language, encoding="pcm_24000",
         voice_settings=elevenlabs.VoiceSettings(**elevenlabs_voice_settings()),
         apply_text_normalization="auto",

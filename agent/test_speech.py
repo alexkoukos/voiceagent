@@ -6,7 +6,7 @@ import pytest
 import agent as worker
 import fixed_lines
 from speech import Pronunciation, elevenlabs_voice_settings, env_number, noise_cancellation_enabled
-from voices import elevenlabs_voice
+from voices import elevenlabs_voice, gemini_voice
 
 
 async def chunks(values):
@@ -68,18 +68,6 @@ async def test_only_tts_receives_spoken_aliases(monkeypatch):
     assert original == "Call OpenAI."
 
 
-def test_language_voice_overrides_preserve_existing_mapping(monkeypatch):
-    monkeypatch.setenv("ELEVENLABS_VOICE_MAP", '{"default":"generic","Puck":"legacy"}')
-    monkeypatch.setenv("ELEVENLABS_VOICE_MAP_EL", '{"default":"greek","Puck":"greek-male"}')
-    monkeypatch.setenv("ELEVENLABS_VOICE_MAP_EN", '{"default":"english"}')
-    assert elevenlabs_voice("Puck", "el") == "greek-male"
-    assert elevenlabs_voice("Kore", "el") == "greek"
-    assert elevenlabs_voice("Puck", "en") == "english"
-    assert elevenlabs_voice("Puck") == "legacy"
-    monkeypatch.setenv("ELEVENLABS_VOICE_MAP_EL", '{"default":null}')
-    assert elevenlabs_voice("Puck", "el") == "legacy"
-
-
 @pytest.mark.parametrize("engine", ["pipeline", "text_pipeline"])
 def test_language_switch_updates_both_recognition_and_speech(monkeypatch, engine):
     from dataclasses import replace
@@ -92,10 +80,9 @@ def test_language_switch_updates_both_recognition_and_speech(monkeypatch, engine
 
 
 def test_elevenlabs_uses_clear_audio_and_the_selected_language(monkeypatch):
-    monkeypatch.setenv("ELEVENLABS_VOICE_MAP_EL", '{"default":"greek-voice"}')
     monkeypatch.setattr(worker.providers.tts.elevenlabs, "TTS", lambda **kwargs: kwargs)
     tts = worker.providers.tts.eleven_labs("Kore", "el")
-    assert tts["voice_id"] == "greek-voice"
+    assert tts["voice_id"] == "mRTQIE2xdk2oMdoKFGJu"
     assert tts["language"] == "el"
     assert tts["encoding"] == "pcm_24000"
     assert 0.7 <= tts["voice_settings"].speed < 1
@@ -228,9 +215,12 @@ async def test_greek_clock_times_in_every_stream_boundary(monkeypatch):
     assert Pronunciation("en").apply("09:30") == "09:30"
 
 
-def test_greek_calls_use_the_native_greek_voices():
-    assert elevenlabs_voice("Kore", "el") == "mRTQIE2xdk2oMdoKFGJu"  # Aria
-    assert elevenlabs_voice("Zubenelgenubi", "el") == "cuab90umcstNgL8U7orz"  # Fatsis
+def test_every_call_uses_aria_or_fatsis():
+    assert elevenlabs_voice("Kore") == "mRTQIE2xdk2oMdoKFGJu"  # Aria
+    assert elevenlabs_voice("Zubenelgenubi") == "cuab90umcstNgL8U7orz"  # Fatsis
+    # Older keys and no key at all get the female voice, as the iOS toggle shows them.
+    assert elevenlabs_voice("Puck") == elevenlabs_voice("default") == elevenlabs_voice(None) == elevenlabs_voice("Kore")
+    assert gemini_voice("Algieba") == "Kore" and gemini_voice("Zubenelgenubi") == "Zubenelgenubi"
 
 @pytest.mark.asyncio
 async def test_greek_speech_has_no_exclamations():
@@ -238,13 +228,3 @@ async def test_greek_speech_has_no_exclamations():
     assert Pronunciation("en").apply("Great!") == "Great!"
     parts = [part async for part in Pronunciation("el").stream(chunks(["Ναι", "! Γεια"]))]
     assert "".join(parts) == "Ναι. Γεια"
-
-
-def test_greek_calls_use_native_greek_voices(monkeypatch):
-    from voices import ELEVENLABS_VOICES_EL
-    monkeypatch.delenv("ELEVENLABS_VOICE_MAP", raising=False)
-    monkeypatch.delenv("ELEVENLABS_VOICE_MAP_EL", raising=False)
-    assert elevenlabs_voice("Zubenelgenubi", "el") == ELEVENLABS_VOICES_EL["Zubenelgenubi"]
-    assert elevenlabs_voice("Kore", "el") == ELEVENLABS_VOICES_EL["Kore"]
-    # English calls keep the English voices.
-    assert elevenlabs_voice("Zubenelgenubi", "en") != ELEVENLABS_VOICES_EL["Zubenelgenubi"]
