@@ -876,7 +876,7 @@ async def elevenlabs_usable() -> bool:
     try:
         async with httpx.AsyncClient(timeout=2.5) as client:
             r = await client.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{elevenlabs_voice('default')}",
+                f"https://api.elevenlabs.io/v1/text-to-speech/{elevenlabs_voice(None)}",
                 params={"output_format": "mp3_22050_32"},
                 headers={"xi-api-key": os.environ["ELEVEN_API_KEY"]},
                 json={"text": "ok", "model_id": ELEVENLABS_TTS_MODEL},
@@ -1051,7 +1051,7 @@ class ReceptionistCall:
         """ElevenLabs voice for pre-voiced fixed lines (pipeline engine only)."""
         if self.engine != "pipeline" or not os.environ.get("ELEVEN_API_KEY"):
             return None
-        return elevenlabs_voice(self.metadata.get("voice", "default"), self.language)
+        return elevenlabs_voice(self.metadata.get("voice"))
 
     def prewarm_fixed_lines(self) -> None:
         """Voice the greeting and goodbyes while the call is being set up."""

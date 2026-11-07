@@ -13,7 +13,7 @@ from app.models import CallStatus, TranscriptRole
 SHORT_TEXT = 200
 LONG_TEXT = 2000
 
-Voice = Literal["default", "Puck", "Charon", "Fenrir", "Algenib", "Algieba", "Zubenelgenubi", "Kore", "Aoede"]
+Voice = Literal["Kore", "Zubenelgenubi"]
 
 
 def normalize_phone(value: str) -> str:
@@ -251,8 +251,8 @@ class PracticeOut(PracticeIn):
     publish_frozen: bool = False
 
 
-# The receptionist's voice toggle: female (Kore) or male (Zubenelgenubi). Greek calls use
-# native Greek voices for both (agent/voices.py).
+# The receptionist's voice toggle: female (Kore -> Aria) or male (Zubenelgenubi -> Fatsis),
+# the only two voices, on every call (agent/voices.py).
 VOICE_BY_GENDER = {"female": "Kore", "male": "Zubenelgenubi"}
 
 
