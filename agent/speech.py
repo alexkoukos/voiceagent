@@ -7,7 +7,7 @@ import os
 import re
 from collections.abc import AsyncIterable
 
-logger = logging.getLogger("prank-caller")
+logger = logging.getLogger("receptionist")
 
 
 def env_number(name: str, default: float, minimum: float, maximum: float) -> float:
