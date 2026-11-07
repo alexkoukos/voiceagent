@@ -53,7 +53,7 @@
   .scroll { overflow-x: auto; }
   #log { font-family: var(--mono); font-size: 12px; max-height: 60vh; overflow: auto; background: var(--soft); border-radius: 8px; padding: 8px; }
   #log div { padding: 2px 4px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; }
-  #log .friend { background: var(--caller); } #log .agent { background: var(--agent); }
+  #log .caller { background: var(--caller); } #log .agent { background: var(--agent); }
   #log .t { color: var(--muted); margin-right: 8px; }
   .controls { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; font-size: 13px; }
   #summary { max-width: 1500px; margin: 16px auto 0; padding: 0 16px; }
@@ -308,7 +308,7 @@
   function renderLog(transcript, routing) {
     const rows = [];
     if ($("f-transcript").checked) {
-      for (const t of transcript) rows.push({ at: new Date(t.at), text: `${t.role === "friend" ? "CALLER" : "AGENT "}  ${t.text}`, cls: t.role });
+      for (const t of transcript) rows.push({ at: new Date(t.at), text: `${t.role === "caller" ? "CALLER" : "AGENT "}  ${t.text}`, cls: t.role });
       for (const r of routing) rows.push({ at: new Date(r.at), text: `routing ${r.kind}=${r.value} ${r.rule}`.trim() });
     }
     for (const e of events) {

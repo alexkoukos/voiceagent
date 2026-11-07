@@ -56,7 +56,7 @@ async def export(db: AsyncSession, practice: Practice, phone: str) -> dict:
         for t in (await db.execute(select(TranscriptEntry).where(TranscriptEntry.call_id.in_(call_ids))
                                    .order_by(TranscriptEntry.created_at))).scalars():
             transcripts.setdefault(t.call_id, []).append(
-                {"speaker": "caller" if t.role.value == "friend" else "agent", "text": t.text,
+                {"speaker": "caller" if t.role.value == "caller" else "agent", "text": t.text,
                  "at": t.created_at.isoformat()})
     appointments = list((await db.execute(select(Appointment).where(
         Appointment.practice_id == practice.id, Appointment.customer_phone == phone

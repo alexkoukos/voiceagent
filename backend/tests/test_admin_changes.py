@@ -89,7 +89,7 @@ async def test_phone_pin_lockout_and_change(sessions, monkeypatch):
         await ops.set_admin_pin(practice.id, AdminPinIn(pin="4821"), db)
         call = new_call(OWNER)
         await db.commit()
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="ο κωδικός είναι 48 21"))
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="ο κωδικός είναι 48 21"))
         await db.commit()
         assert (await receptionist.tool_admin_change(db, call, AdminChangeArgs(request="Τρίτη 10-1")))["error"] == "login_first"
         for _ in range(3):
@@ -106,11 +106,11 @@ async def test_phone_pin_lockout_and_change(sessions, monkeypatch):
         assert "Τρίτη 10:00-13:00" in out["say_and_ask"]
         # The model's word is not enough: the caller's own reply after the readback decides.
         assert (await receptionist.tool_admin_confirm(db, call2, AdminConfirmArgs(confirmation_text="ναι")))["error"] == "confirmation_required"
-        db.add(TranscriptEntry(call_id=call2.id, role=TranscriptRole.friend, text="Ναι, σωστά, αλλά και τη Δευτέρα"))
+        db.add(TranscriptEntry(call_id=call2.id, role=TranscriptRole.caller, text="Ναι, σωστά, αλλά και τη Δευτέρα"))
         await db.commit()
         unclear = AdminConfirmArgs(confirmation_text="Ναι, σωστά, αλλά και τη Δευτέρα")
         assert (await receptionist.tool_admin_confirm(db, call2, unclear))["error"] == "confirmation_required"
-        db.add(TranscriptEntry(call_id=call2.id, role=TranscriptRole.friend, text="Ναι, σωστά.",
+        db.add(TranscriptEntry(call_id=call2.id, role=TranscriptRole.caller, text="Ναι, σωστά.",
                                created_at=datetime.utcnow() + timedelta(seconds=1)))
         await db.commit()
         yes = AdminConfirmArgs(confirmation_text="Ναι, σωστά.")

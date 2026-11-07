@@ -26,7 +26,7 @@ async def setup(db, *, caller="+306900000001"):
 
 async def say(db, call, text, **understood):
     """The caller's line is stored first, as the worker does before each turn."""
-    db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text=text))
+    db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text=text))
     await db.commit()
     return await flow.turn(db, await db.get(Call, call.id), text, understood)
 

@@ -10,7 +10,7 @@ the call record from the backend and checks the outcome and booking.
 
 Needs APP_API_TOKEN (to read the call log) and GEMINI_API_KEY or ELEVEN_API_KEY
 for the caller voice. Gemini is preferred when both are configured.
-The backend's AGENT_NAME decides which worker answers (prank-caller-test for a local one).
+The backend's AGENT_NAME decides which worker answers (receptionist-test for a local one).
 """
 
 import argparse
@@ -169,7 +169,7 @@ async def run_scenario(args, sc: dict, http: httpx.AsyncClient, caller: CallerVo
             break
     result = check(sc, call)
     result["heard"] = heard(sc["lines"], [e["text"] for e in (call or {}).get("transcript_entries", [])
-                                          if e.get("role") == "friend"])
+                                          if e.get("role") == "caller"])
     return result
 
 

@@ -234,7 +234,7 @@ async def retry_summary(practice_id: str, call_id: str, db: AsyncSession = Depen
         raise HTTPException(status_code=409, detail="Call has not been finalized")
     entries = (await db.execute(select(TranscriptEntry).where(TranscriptEntry.call_id == call.id)
                                 .order_by(TranscriptEntry.created_at))).scalars()
-    transcript = "\n".join(f"{'Caller' if e.role == TranscriptRole.friend else 'Assistant'}: {e.text}"
+    transcript = "\n".join(f"{'Caller' if e.role == TranscriptRole.caller else 'Assistant'}: {e.text}"
                            for e in entries)
     summary = await finalize.summarize(transcript, call.language or "el")
     if not summary:

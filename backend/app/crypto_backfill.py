@@ -2,7 +2,7 @@
 
 One transaction: every value is encrypted, decrypted again and compared before commit, so a
 wrong key or a bug rolls everything back and nothing is half-encrypted. Idempotent.
-Runs from scripts/encrypt_existing.py, or at startup when ENCRYPT_BACKFILL=1.
+Runs at startup when ENCRYPT_BACKFILL=1.
 """
 
 import logging

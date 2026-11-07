@@ -29,8 +29,8 @@ jobs:
         working-directory: ios
         run: >-
           xcodebuild -quiet
-          -project PrankCaller.xcodeproj
-          -scheme PrankCaller
+          -project Receptionist.xcodeproj
+          -scheme Receptionist
           -destination 'generic/platform=iOS Simulator'
           -configuration Debug
           CODE_SIGNING_ALLOWED=NO

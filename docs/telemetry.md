@@ -42,12 +42,12 @@ LiveKit minutes. It is recomputed when usage arrives, when the call ends and at 
 - The existing `cost_estimate` (EUR, flat per-minute) is unchanged and still drives the
   monthly cost cap.
 - Not included: the ElevenLabs availability probe (about 1 credit per call), the opening
-  line pre-rendered during the ring, Railway compute and storage.
+  line pre-rendered during the ring, hosting compute and storage.
 
 ## Retrieve
 
 `GET /internal/calls/{call_id}/telemetry` requires the founder's `x-api-key`.
-Worker keys, practice keys, dialer keys and unauthenticated requests cannot read it.
+Worker keys, practice keys and unauthenticated requests cannot read it.
 
 The response has `events`, `next_after`, and `has_more`. Pass `after=next_after`
 to read the next page. The default `limit` is 200; the maximum is 500. A cursor

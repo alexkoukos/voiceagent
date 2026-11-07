@@ -22,7 +22,7 @@ import sys
 from dotenv import load_dotenv
 from livekit import api
 
-AGENT_NAME = os.environ.get("AGENT_NAME", "prank-caller")
+AGENT_NAME = os.environ.get("AGENT_NAME", "receptionist")
 
 
 def allowed_addresses() -> list[str]:

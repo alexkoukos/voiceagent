@@ -1,4 +1,4 @@
-"""Public Greek receptionist landing page and demo requests."""
+"""Public landing page and demo requests."""
 
 import hashlib
 import hmac
@@ -83,10 +83,10 @@ async def home(request: Request):
     settings = get_settings()
     slug = settings.landing_demo_slug.strip()
     if slug and re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", slug):
-        demo = f'<iframe title="Ζωντανή δοκιμή φωνής" data-src="/demo/{escape(slug)}?embed=1" allow="microphone; autoplay" loading="lazy"></iframe>'
+        demo = f'<iframe title="Live voice demo" data-src="/demo/{escape(slug)}?embed=1" allow="microphone; autoplay" loading="lazy"></iframe>'
         demo_class = "has-demo"
     else:
-        demo = '<p class="demo-unavailable">Η ζωντανή δοκιμή δεν είναι διαθέσιμη αυτή τη στιγμή. Ζητήστε ένα προσωπικό demo και θα σας δείξουμε πώς λειτουργεί.</p>'
+        demo = '<p class="demo-unavailable">The live demo isn\'t available right now. Ask for a personal demo and we\'ll show you how it works.</p>'
         demo_class = ""
     base = settings.backend_public_url.rstrip("/")
     og_image = escape(f"{base}/landing-assets/social.png", quote=True)
@@ -98,33 +98,33 @@ async def home(request: Request):
 
 
 def _legal_page(title: str, content: str) -> HTMLResponse:
-    page = (f'<!doctype html><html lang="el"><head><meta charset="utf-8">'
+    page = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f'<title>{escape(title)} · Ψηφιακή Γραμματεία</title>'
+            f'<title>{escape(title)} · AI Receptionist</title>'
             '<link rel="icon" href="/landing-assets/favicon.svg" type="image/svg+xml">'
             '<link rel="stylesheet" href="/landing-assets/landing.css"></head><body>'
             '<header class="site-header"><div class="shell header-inner"><a class="brand" href="/">'
-            'γραμματεία<span class="brand-accent">.</span></a>'
-            '<a class="button button-small button-primary" href="/#contact">Ζητήστε demo ↗</a></div></header>'
-            f'<main class="shell legal-page"><p class="eyebrow">ΠΛΗΡΟΦΟΡΙΕΣ</p><h1>{escape(title)}</h1>{content}'
-            '<p><a class="text-link" href="/">← Επιστροφή στην αρχική</a></p></main></body></html>')
+            'receptionist<span class="brand-accent">.</span></a>'
+            '<a class="button button-small button-primary" href="/#contact">Book a demo ↗</a></div></header>'
+            f'<main class="shell legal-page"><p class="eyebrow">INFORMATION</p><h1>{escape(title)}</h1>{content}'
+            '<p><a class="text-link" href="/">← Back to home</a></p></main></body></html>')
     return HTMLResponse(page)
 
 
 @router.get("/privacy", response_class=HTMLResponse)
 async def privacy():
-    return _legal_page("Απόρρητο", """
-      <p>Η φόρμα demo συλλέγει το όνομα, την επιχείρηση, τον τύπο της, τον τρόπο και τα στοιχεία επικοινωνίας, καθώς και έναν προαιρετικό σύνδεσμο. Τα χρησιμοποιούμε για να οργανώσουμε το demo που ζητήσατε.</p>
-      <p>Τα αιτήματα αποθηκεύονται στην εφαρμογή και προωθούνται στο εταιρικό inbox πωλήσεων. Κρατάμε επίσης ένα μη αναστρέψιμο τεχνικό αποτύπωμα της σύνδεσης για περιορισμό ανεπιθύμητων αιτημάτων. Δεν ζητάμε στοιχεία ασθενών ή πελατών στη φόρμα. Για πρόσβαση, διόρθωση ή διαγραφή των στοιχείων σας, επικοινωνήστε μαζί μας μέσω της φόρμας και αναφέρετε το αίτημά σας.</p>
-      <p>Η ζωντανή δοκιμή φωνής είναι ξεχωριστή από τη φόρμα. Πριν την ενεργοποιήσουμε δημόσια, θα δημοσιεύσουμε τους ειδικούς όρους για ηχογραφήσεις, απομαγνητοφωνήσεις και χρόνο διατήρησης.</p>
+    return _legal_page("Privacy", """
+      <p>The demo form collects your name, your business, its type, how to contact you, and an optional link. We use them only to set up the demo you asked for.</p>
+      <p>Requests are stored in the application and forwarded to our sales inbox. We also keep a one-way technical fingerprint of the connection to limit spam. The form never asks for patient or customer data. To see, correct or delete your details, contact us through the form and say what you need.</p>
+      <p>The live voice demo is separate from the form. Before it is opened to the public, we will publish specific terms for recordings, transcripts and how long they are kept.</p>
     """)
 
 
 @router.get("/terms", response_class=HTMLResponse)
 async def terms():
-    return _legal_page("Όροι demo", """
-      <p>Η δοκιμή παρουσιάζει τον βοηθό σε φανταστική επιχείρηση. Δεν δημιουργεί πραγματικά ραντεβού και δεν πρέπει να χρησιμοποιείται για επείγοντα ή ιατρικά αιτήματα.</p>
-      <p>Το προσωπικό demo και η πιλοτική περίοδος 14 ημερών οργανώνονται κατόπιν επικοινωνίας. Η τιμή, η χρήση που περιλαμβάνεται και οι όροι της πιλοτικής συνεργασίας συμφωνούνται πριν από την ενεργοποίηση.</p>
+    return _legal_page("Demo terms", """
+      <p>The demo shows the assistant working for a fictional business. It makes no real appointments and must not be used for urgent or medical requests.</p>
+      <p>A personal demo and a 14-day pilot are arranged after we talk. The price, the usage included and the pilot's terms are agreed before anything is switched on.</p>
     """)
 
 
@@ -152,9 +152,9 @@ async def _payload(request: Request) -> LeadIn:
             raise HTTPException(415, "Unsupported form format")
         lead = LeadIn.model_validate(data)
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
-        raise HTTPException(422, "Ελέγξτε τα στοιχεία της φόρμας.")
+        raise HTTPException(422, "Please check the form.")
     if not lead.valid_contact():
-        raise HTTPException(422, "Ελέγξτε το email ή το τηλέφωνο επικοινωνίας.")
+        raise HTTPException(422, "Please check the contact email or phone.")
     return lead
 
 
@@ -167,7 +167,7 @@ async def submit_lead(request: Request, db: AsyncSession = Depends(get_db)):
         raise HTTPException(400, "Invalid request")
     settings = get_settings()
     if not (settings.founder_email and settings.smtp_host and settings.email_from and settings.data_encryption_key):
-        raise HTTPException(503, "Η φόρμα δεν είναι διαθέσιμη αυτή τη στιγμή. Δοκιμάστε ξανά αργότερα.")
+        raise HTTPException(503, "The form isn't available right now. Please try again later.")
     existing = (await db.execute(select(DemoLead.id).where(DemoLead.id == lead.request_id))).first()
     if existing:
         result = {"ok": True}
@@ -180,7 +180,7 @@ async def submit_lead(request: Request, db: AsyncSession = Depends(get_db)):
             DemoLead.created_at >= datetime.utcnow() - timedelta(hours=1),
         ))).scalar_one()
         if recent >= 5:
-            raise HTTPException(429, "Πολλά αιτήματα. Δοκιμάστε ξανά αργότερα.")
+            raise HTTPException(429, "Too many requests. Please try again later.")
         statement = insert(DemoLead).values(
             id=lead.request_id, name=lead.name, business_name=lead.business_name,
             business_type=lead.business_type, contact_method=lead.contact_method,
@@ -191,10 +191,10 @@ async def submit_lead(request: Request, db: AsyncSession = Depends(get_db)):
         if inserted:
             await notifications.queue(
                 db, practice_id=None, kind="demo_lead", channel="email", recipient=settings.founder_email,
-                subject="Νέο αίτημα για προσωπικό demo",
-                body=(f"Όνομα: {lead.name}\nΕπιχείρηση: {lead.business_name}\n"
-                      f"Τύπος: {lead.business_type}\nΕπικοινωνία ({lead.contact_method}): {lead.contact_detail}\n"
-                      f"Ιστότοπος: {lead.website or '—'}\n"),
+                subject="New personal demo request",
+                body=(f"Name: {lead.name}\nBusiness: {lead.business_name}\n"
+                      f"Type: {lead.business_type}\nContact ({lead.contact_method}): {lead.contact_detail}\n"
+                      f"Website: {lead.website or '—'}\n"),
                 dedupe_key=f"demo-lead:{lead.request_id}",
             )
             await db.commit()
@@ -204,4 +204,4 @@ async def submit_lead(request: Request, db: AsyncSession = Depends(get_db)):
         result = {"ok": True}
     if request.headers.get("accept", "").startswith("application/json"):
         return JSONResponse(result)
-    return HTMLResponse('<!doctype html><html lang="el"><meta charset="utf-8"><title>Ευχαριστούμε</title><main><h1>Λάβαμε το αίτημά σας.</h1><p>Θα επικοινωνήσουμε μαζί σας για να οργανώσουμε το demo.</p><a href="/">Επιστροφή στην αρχική</a></main></html>')
+    return HTMLResponse('<!doctype html><html lang="en"><meta charset="utf-8"><title>Thank you</title><main><h1>We got your request.</h1><p>We\'ll be in touch to set up the demo.</p><a href="/">Back to home</a></main></html>')

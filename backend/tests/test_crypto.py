@@ -39,7 +39,7 @@ async def test_rows_encrypted_at_rest(sessions, key):
                     status=CallStatus.completed, summary="Πονάει το δόντι της")
         db.add(call)
         await db.flush()
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="με πονάει το δόντι"))
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="με πονάει το δόντι"))
         await db.commit()
 
         raw = (await db.execute(text("select caller_number, summary from calls"))).one()

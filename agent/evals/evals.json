@@ -1,5 +1,5 @@
 {
-  "_readme": "Eval Suite V0.1 (ASTRA.md). mode=text runs in agent/evals/run_evals.py against a local backend; mode=audio needs the WebRTC harness (scripts/scripted_calls.py). Checks marked critical block a release. Add an eval for every meaningful real failure.",
+  "_readme": "Eval Suite V0.1. mode=text runs in agent/evals/run_evals.py against a local backend; mode=audio needs the WebRTC harness (scripts/scripted_calls.py). Checks marked critical block a release. Add an eval for every meaningful real failure.",
   "evals": [
     {
       "id": "EVAL-001",

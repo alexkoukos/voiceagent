@@ -8,7 +8,7 @@ function updateContact() {
   const method = form.elements.contact_method.value;
   contact.type = method === 'email' ? 'email' : 'tel';
   contact.autocomplete = method === 'email' ? 'email' : 'tel';
-  contactLabel.firstChild.textContent = method === 'email' ? 'Email επικοινωνίας ' : 'Τηλέφωνο επικοινωνίας ';
+  contactLabel.firstChild.textContent = method === 'email' ? 'Contact email ' : 'Contact phone ';
   contact.value = '';
 }
 
@@ -20,7 +20,7 @@ form.addEventListener('submit', async event => {
   const submit = form.querySelector('[type="submit"]');
   submit.disabled = true;
   status.className = 'form-status';
-  status.textContent = 'Στέλνουμε το αίτημά σας…';
+  status.textContent = 'Sending your request…';
   try {
     const response = await fetch(form.action, {
       method: 'POST',
@@ -28,11 +28,11 @@ form.addEventListener('submit', async event => {
       body: JSON.stringify(Object.fromEntries(new FormData(form))),
     });
     if (!response.ok) {
-      let message = 'Δεν μπορέσαμε να στείλουμε το αίτημα. Δοκιμάστε ξανά.';
+      let message = 'We couldn\'t send your request. Please try again.';
       try { const data = await response.json(); if (typeof data.detail === 'string') message = data.detail; } catch {}
       throw new Error(message);
     }
-    status.textContent = 'Λάβαμε το αίτημά σας. Θα επικοινωνήσουμε μαζί σας για να οργανώσουμε το demo.';
+    status.textContent = 'We got your request. We\'ll be in touch to set up the demo.';
     form.reset();
     updateContact();
     form.elements.request_id.value = crypto.randomUUID();
@@ -45,7 +45,7 @@ form.addEventListener('submit', async event => {
 });
 
 if (status.dataset.sent === 'true') {
-  status.textContent = 'Λάβαμε το αίτημά σας. Θα επικοινωνήσουμε μαζί σας για να οργανώσουμε το demo.';
+  status.textContent = 'We got your request. We\'ll be in touch to set up the demo.';
 }
 
 if (demoStart) {
