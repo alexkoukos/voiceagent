@@ -34,7 +34,7 @@ async def test_landing_renders_pilot_and_unavailable_demo(monkeypatch):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/")
         assert response.status_code == 200
-        assert 'lang="el"' in response.text
+        assert 'lang="en"' in response.text
         assert "14 days" in response.text
         assert "The live demo isn't available" in response.text
         assert '<iframe' not in response.text
