@@ -1,7 +1,6 @@
-"""LiveKit worker for AI Caller.
+"""LiveKit worker for the AI receptionist.
 
-Registered as agent "prank-caller" (the name predates the receptionist; renaming it needs a
-LiveKit dispatch-rule change). It answers a practice's phone: an inbound phone call
+Registered as agent "receptionist" (AGENT_NAME). It answers a practice's phone: an inbound phone call
 (dispatched by LiveKit's SIP dispatch rule, with no metadata; the backend finds the practice
 by the dialed number), a web demo (dispatched by the backend with mode "receptionist"), or
 an outbound reminder / waitlist call (metadata has dial_number). The agent greets first and
@@ -57,7 +56,7 @@ from speech import (
     noise_cancellation_enabled, speech_instructions,
 )
 
-logger = logging.getLogger("prank-caller")
+logger = logging.getLogger("receptionist")
 
 BACKEND_URL = os.environ.get("BACKEND_PUBLIC_URL", "http://localhost:8000")
 AGENT_TOKEN = os.environ.get("INTERNAL_API_TOKEN", "")
@@ -100,7 +99,7 @@ def turns_for(engine: str, language: str) -> str | None:
     return providers.for_engine(engine)[0].turns(language)
 # A reminder call waits this long for the customer's "Εμπρός;" before greeting.
 GREETING_WAIT_SECONDS = 4
-# Noise filter on the friend's audio before any model hears it; "off" to compare recognition without it.
+# Noise filter on the caller's audio before any model hears it; "off" to compare recognition without it.
 NOISE_CANCELLATION = noise_cancellation_enabled()
 
 
@@ -184,7 +183,7 @@ REALTIME_LANGUAGE = {"el": "el-GR", "en": "en-US"}
 
 # A caller who swears directly at the agent gets one calm, polite reminder. Directed insults
 # only — casual fillers ("γαμώτο", "ρε", bare "damn") are left alone. Used as a fallback when
-# the call's metadata carries no profanity block (prank/professional flow), matching the backend.
+# the call's metadata carries no profanity block, matching the backend.
 DEFAULT_PROFANITY_PHRASES = {
     "el": ["μαλακα", "καριολη", "γαμησου", "να γαμηθεις", "αρχιδι", "πουστη", "ηλιθιε", "βλακα",
            "χαζε", "κωλοπαιδο"],
@@ -605,9 +604,9 @@ def prewarm(proc: JobProcess) -> None:
         proc.userdata["vad"] = silero.VAD.load()
 
 
-# FLOW_ENGINE=fsm: the backend's state machine runs the conversation (backend/app/flow.py).
-# "tools" keeps the model-driven tool flow.
-FLOW_ENGINE = os.environ.get("FLOW_ENGINE", "tools")
+# FLOW_ENGINE=fsm (default): the backend's state machine runs the conversation
+# (backend/app/flow.py). "tools" is the model-driven tool flow, which the realtime engine uses.
+FLOW_ENGINE = os.environ.get("FLOW_ENGINE", "fsm")
 FLOW_COMMIT_TIMEOUT = 20.0
 SENTENCE_END = re.compile(r"[.!;;?·…]+\s+")
 QUESTION_MARKS = ("?", ";", ";")
@@ -926,15 +925,15 @@ async def publish_web_transcript(
     room: rtc.Room, role: str, text: str, caller_identity: str, language: str,
 ) -> None:
     """Publish final CallerTurns text, not the realtime model's raw events."""
-    if role == "friend" and language == "el":
+    if role == "caller" and language == "el":
         # Gemini's fallback transcript can turn Greek audio into Spanish/Italian text.
         # Keep an explicit "English" request so the caller can change language.
         if not re.search(r"[\u0370-\u03ff\u1f00-\u1fff]", text) and wants_language(text) != "en":
             return
     if not room.isconnected():
         return
-    identity = caller_identity if role == "friend" else room.local_participant.identity
-    participant = room.remote_participants.get(identity) if role == "friend" else room.local_participant
+    identity = caller_identity if role == "caller" else room.local_participant.identity
+    participant = room.remote_participants.get(identity) if role == "caller" else room.local_participant
     track_sid = ""
     if participant:
         track_sid = next((p.sid for p in participant.track_publications.values()
@@ -962,7 +961,7 @@ def track_transcript(
     def _line(role: str, text: str) -> None:
         logger.info("call %s: %s transcript received", call_id, role)
         task = asyncio.create_task(report(call_id, transcript_role=role, transcript_text=text))
-        if role == "friend" and caller_reports is not None:
+        if role == "caller" and caller_reports is not None:
             caller_reports.add(task)
             task.add_done_callback(caller_reports.discard)
         if room is not None and caller_identity and language:
@@ -974,11 +973,11 @@ def track_transcript(
         if getattr(ev.item, "type", None) == "message" and ev.item.role == "assistant" and ev.item.text_content:
             _line("agent", ev.item.text_content)
 
-    CallerTurns(session, engine, lambda text: _line("friend", text))
+    CallerTurns(session, engine, lambda text: _line("caller", text))
 
 
 # If the agent says roughly the same thing this many times in a row it's stuck (looping on
-# nonsense or a broken tool): end the call instead of leaving the friend with a broken bot.
+# nonsense or a broken tool): end the call instead of leaving the caller with a broken bot.
 REPEAT_HANGUP_COUNT = 3
 # How alike two consecutive agent turns must be to count as the same utterance.
 REPEAT_SIMILARITY = 0.9
@@ -1362,8 +1361,7 @@ class ReceptionistCall:
     # --- profanity: one calm, polite reminder when the caller swears at the agent ---
 
     def check_profanity(self, text: str) -> None:
-        # Falls back to built-in defaults so it also works on the prank/professional flow,
-        # where the metadata carries no profanity block.
+        # Built-in defaults when the call's metadata carries no profanity block.
         pr = self.metadata.get("profanity") or {}
         if self._profanity_said or not pr.get("enabled", True):
             return
@@ -1796,7 +1794,7 @@ if __name__ == "__main__":
     # AGENT_NAME lets a local test worker run without taking real calls from production.
     cli.run_app(WorkerOptions(
         entrypoint_fnc=entrypoint, prewarm_fnc=prewarm,
-        agent_name=os.environ.get("AGENT_NAME", "prank-caller"),
+        agent_name=os.environ.get("AGENT_NAME", "receptionist"),
         # Each standby process holds its own copy of the models; keep few so the worker
         # fits in a small container (MAX_CONCURRENT_CALLS is 1 by default anyway).
         num_idle_processes=int(os.environ.get("NUM_IDLE_PROCESSES", "1")),

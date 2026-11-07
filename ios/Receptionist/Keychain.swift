@@ -4,7 +4,7 @@ import Security
 
 /// Device-bound secrets. A fresh app unlock supplies the reusable authentication context.
 enum Keychain {
-    private static let service = "PrankCaller"
+    private static let service = "Receptionist"
     private static let mutex = NSLock()
     private static var storedContext: LAContext?
     static var context: LAContext? {

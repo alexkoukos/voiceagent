@@ -65,11 +65,11 @@ async def test_two_word_off_topic_is_not_a_strike(sessions, monkeypatch):
         call = Call(status=CallStatus.active, direction="web", practice_id=practice.id)
         db.add(call)
         await db.flush()
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="Μακρόνησος. Τίποτα."))
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="Μακρόνησος. Τίποτα."))
         await db.commit()
         result = await receptionist.tool_route(db, call, RouteArgs(intent="off_topic"))
         assert result["path"] == "clarify"
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="Πες μου ένα ανέκδοτο τώρα."))
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="Πες μου ένα ανέκδοτο τώρα."))
         await db.commit()
         assert (await receptionist.tool_route(db, call, RouteArgs(intent="off_topic")))["path"] == "refuse"
         rules = [e.rule for e in (await db.execute(select(RoutingEvent).where(RoutingEvent.call_id == call.id)
@@ -97,7 +97,7 @@ async def test_answer_to_our_clarification_is_not_a_strike(sessions, monkeypatch
         db.add_all([
             TranscriptEntry(call_id=call.id, role=TranscriptRole.agent, created_at=t,
                             text="Συγγνώμη, δεν σας κατάλαβα. Μπορείτε να επαναλάβετε τι χρειάζεστε;"),
-            TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, created_at=t + timedelta(seconds=3),
+            TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, created_at=t + timedelta(seconds=3),
                             text="Όχι, όχι, ρε, τώρα το έφτανα."),
             # This turn's filler, stored before the tool ran.
             TranscriptEntry(call_id=call.id, role=TranscriptRole.agent, created_at=t + timedelta(seconds=4),
@@ -109,7 +109,7 @@ async def test_answer_to_our_clarification_is_not_a_strike(sessions, monkeypatch
         db.add_all([
             TranscriptEntry(call_id=call.id, role=TranscriptRole.agent, created_at=t + timedelta(seconds=6),
                             text="Θα θέλετε να κλείσουμε ένα ραντεβού;"),
-            TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, created_at=t + timedelta(seconds=9),
+            TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, created_at=t + timedelta(seconds=9),
                             text="Πες μου ένα ανέκδοτο για γάτες."),
         ])
         await db.commit()

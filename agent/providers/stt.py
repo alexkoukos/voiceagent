@@ -112,7 +112,7 @@ def deepgram(language: str, vocabulary: list[str] | None = None):
 def openai_live(language: str, vocabulary: list[str] | None = None):
     """OpenAI's live transcription via LiveKit Inference (no separate account). On 120 Greek
     phone-quality clips it got 11% of words wrong against Scribe realtime's 35%, which invents
-    continuations («…θα 'ρθω εγώ. Τι θα κάνουμε;», stt_bakeoff.py, 2026-11-01)."""
+    continuations («…θα 'ρθω εγώ. Τι θα κάνουμε;», 2026-11-01)."""
     return inference.STT("openai/gpt-live-transcribe", language=language)
 
 

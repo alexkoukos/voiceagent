@@ -1,4 +1,4 @@
-name: PrankCaller
+name: Receptionist
 options:
   bundleIdPrefix: com.alekos
   deploymentTarget:
@@ -8,17 +8,17 @@ packages:
     url: https://github.com/livekit/client-sdk-swift
     from: 2.0.0
 targets:
-  PrankCaller:
+  Receptionist:
     type: application
     platform: iOS
-    sources: [PrankCaller]
+    sources: [Receptionist]
     dependencies:
       - package: LiveKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.alekos.prankcaller
+        PRODUCT_BUNDLE_IDENTIFIER: com.alekos.receptionist
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: AI Caller
+        INFOPLIST_KEY_CFBundleDisplayName: Γραμματεία
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES

@@ -60,7 +60,7 @@ async def test_booking_requires_trusted_offer_and_explicit_yes(sessions):
                                            "confirmation_text": "yes, correct"})
         # A yes the caller never said (nothing stored after the readback) is refused.
         assert (await receptionist.tool_book(db, call, confirmed))["error"] == "confirmation_required"
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="yes, correct"))
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="yes, correct"))
         await db.commit()
         assert (await receptionist.tool_book(db, call, confirmed))["booked"] is True
         assert await db.get(Appointment, call.appointment_id)
@@ -85,19 +85,19 @@ async def test_yes_must_be_the_callers_latest_line(sessions):
         offer = await receptionist.tool_check_availability(db, call, CheckAvailability(
             when=day.isoformat(), service_id="check"))
         slot = offer["free_times"][0]
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="yes"))  # before the readback
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="yes"))  # before the readback
         await db.commit()
         readback = await receptionist.tool_prepare_action(db, call, PrepareAction(
             action="book", date=day, time=slot, service_id="check", customer_name="Ada"))
         args = BookAppointment(date=day, time=slot, service_id="check", customer_name="Ada",
                                confirmation_id=readback["confirmation_id"], confirmation_text="yes")
         assert (await receptionist.tool_book(db, call, args))["error"] == "confirmation_required"
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="yes"))
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="hmm, no, wait",
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="yes"))
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="hmm, no, wait",
                                created_at=datetime.utcnow() + timedelta(seconds=1)))
         await db.commit()
         assert (await receptionist.tool_book(db, call, args))["error"] == "confirmation_required"
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="yes",
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="yes",
                                created_at=datetime.utcnow() + timedelta(seconds=2)))
         await db.commit()
         assert (await receptionist.tool_book(db, call, args))["booked"] is True
@@ -135,7 +135,7 @@ async def test_a_plain_yes_books_what_was_read_back_without_the_model(sessions):
         # The yes still has to be the caller's stored line.
         refused = await receptionist.tool_confirm_pending(db, call, answer("yes, correct", execute=True))
         assert refused["error"] == "confirmation_required"
-        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="yes, correct"))
+        db.add(TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="yes, correct"))
         await db.commit()
         done = await receptionist.tool_confirm_pending(db, call, answer("yes, correct", execute=True))
         assert done["booked"] is True and done["time"] == slot and done["customer_name"] == "Ada"

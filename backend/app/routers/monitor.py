@@ -113,7 +113,7 @@ def spread(values):
 
 @router.get("/monitor/api/summary", dependencies=[Depends(require_master_token)])
 async def summary(days: int = Query(default=7, ge=1, le=90), db: AsyncSession = Depends(get_db)):
-    """The small ASTRA dashboard: volume, outcomes, latency spread and cost for a window."""
+    """The founder dashboard: volume, outcomes, latency spread and cost for a window."""
     since = datetime.utcnow() - timedelta(days=days)
     calls = (await db.execute(select(Call).where(Call.created_at >= since))).scalars().all()
     ids = [call.id for call in calls]

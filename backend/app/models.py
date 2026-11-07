@@ -25,7 +25,7 @@ class CallStatus(str, enum.Enum):
 
 class TranscriptRole(str, enum.Enum):
     agent = "agent"
-    friend = "friend"
+    caller = "caller"
 
 
 class Practice(Base):
@@ -287,7 +287,7 @@ class Call(Base):
 
     voice: Mapped[str] = mapped_column(String, default="default")
     max_duration_seconds: Mapped[int] = mapped_column(Integer, default=300)
-    # Language the call starts in (e.g. "el"); the agent follows the friend if they switch.
+    # Language the call starts in (e.g. "el"); the agent follows the caller if they switch.
     language: Mapped[str | None] = mapped_column(String, nullable=True)
     # Eval calls only: the call's clock starts here (UTC) instead of the real time.
     clock_start: Mapped[datetime | None] = mapped_column(nullable=True)

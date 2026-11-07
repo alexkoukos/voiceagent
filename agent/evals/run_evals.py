@@ -1,4 +1,4 @@
-"""Eval Suite V0.1 and text benchmark (ASTRA.md).
+"""Eval Suite V0.1 and text benchmark.
 
 Drives the real receptionist agent (prompt, tools, pipeline LLM) in text mode against a
 LOCAL backend and Postgres, then asserts on backend state: appointments, messages,

@@ -130,7 +130,7 @@ async def block_if_spam(db: AsyncSession, call: Call) -> bool:
         Call.practice_id == call.practice_id, Call.caller_number == call.caller_number, Call.created_at >= since,
     ))).scalars())
     spoke = set((await db.execute(select(TranscriptEntry.call_id).where(
-        TranscriptEntry.call_id.in_([c.id for c in calls]), TranscriptEntry.role == TranscriptRole.friend,
+        TranscriptEntry.call_id.in_([c.id for c in calls]), TranscriptEntry.role == TranscriptRole.caller,
     ))).scalars())
     silent = [c for c in calls if c.id not in spoke and (c.duration_seconds or 0) <= SPAM_SECONDS
               and c.status in (CallStatus.completed, CallStatus.failed)]
@@ -565,7 +565,7 @@ async def _after_clarify(db: AsyncSession, call: Call) -> bool:
     """The caller is answering our own «δεν σας κατάλαβα»: confusion or frustration, not
     trolling («Όχι, όχι, ρε, τώρα το έφτανα» got a strike, 2026-10-01)."""
     caller = (await db.execute(select(TranscriptEntry).where(
-        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.friend,
+        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.caller,
     ).order_by(TranscriptEntry.created_at.desc()).limit(1))).scalar_one_or_none()
     if caller is None:
         return False
@@ -580,7 +580,7 @@ async def _after_clarify(db: AsyncSession, call: Call) -> bool:
 
 async def _short_last_turn(db: AsyncSession, call: Call) -> bool:
     last = (await db.execute(select(TranscriptEntry).where(
-        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.friend,
+        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.caller,
     ).order_by(TranscriptEntry.created_at.desc()).limit(1))).scalar_one_or_none()
     return last is not None and len(re.findall(r"\w+", last.text)) <= 2
 
@@ -809,7 +809,7 @@ async def _is_latest_caller_turn(db: AsyncSession, call: Call, text: str | None,
     if call.delete_requested:
         return True
     last = (await db.execute(select(TranscriptEntry).where(
-        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.friend,
+        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.caller,
     ).order_by(TranscriptEntry.created_at.desc()).limit(1))).scalar_one_or_none()
     return (last is not None and last.created_at >= since
             and " ".join(last.text.split()) == " ".join((text or "").split()))
@@ -1326,7 +1326,7 @@ async def tool_admin_login(db: AsyncSession, call: Call, args) -> dict:
 async def scrub_pins(db: AsyncSession, call: Call) -> None:
     """A spoken PIN must not stay in the transcript: mask 4-6 digit runs in what the caller said."""
     for e in (await db.execute(select(TranscriptEntry).where(
-        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.friend))).scalars():
+        TranscriptEntry.call_id == call.id, TranscriptEntry.role == TranscriptRole.caller))).scalars():
         masked = re.sub(r"(?<!\d)(\d[\s-]?){3,5}\d(?!\d)", "••••", e.text)
         if masked != e.text:
             e.text = masked

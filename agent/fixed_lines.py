@@ -17,7 +17,7 @@ import httpx
 from livekit import rtc
 from speech import ELEVENLABS_TTS_MODEL, Pronunciation, elevenlabs_voice_settings
 
-logger = logging.getLogger("prank-caller")
+logger = logging.getLogger("receptionist")
 
 SAMPLE_RATE = 24000
 _FRAME_SAMPLES = SAMPLE_RATE // 50  # 20 ms

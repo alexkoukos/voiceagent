@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     apns_key_p8: str = ""
     apns_key_id: str = ""
     apns_team_id: str = ""
-    apns_topic: str = "com.alekos.prankcaller"
+    apns_topic: str = "com.alekos.receptionist"
 
     # Operator alerts (OP9): failover, cost caps, blocked spam, failed notifications, emergencies.
     # Unacknowledged after ALERT_ACK_MINUTES they also go to the backup contact.
@@ -88,8 +88,8 @@ class Settings(BaseSettings):
     max_call_duration_seconds: int = 720  # 12 minutes
     max_concurrent_calls: int = 1
 
-    # Agent the backend dispatches receptionist web calls to; "prank-caller-test" for a local worker.
-    agent_name: str = "prank-caller"
+    # Agent the backend dispatches receptionist web calls to; "receptionist-test" for a local worker.
+    agent_name: str = "receptionist"
 
     # Patient data encryption at rest (app/crypto.py): base64 of 32 random bytes. Keep a copy
     # outside Railway: without it encrypted data can't be read.

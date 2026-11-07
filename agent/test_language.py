@@ -75,18 +75,18 @@ async def test_web_transcript_hides_latin_garble_in_greek_mode():
         isconnected=lambda: True, local_participant=local, remote_participants={"caller": caller},
     )
 
-    await worker.publish_web_transcript(room, "friend", "Edilcat di Calabria", "caller", "el")
+    await worker.publish_web_transcript(room, "caller", "Edilcat di Calabria", "caller", "el")
     assert published == []
 
-    await worker.publish_web_transcript(room, "friend", "Με πονάει το δόντι", "caller", "el")
+    await worker.publish_web_transcript(room, "caller", "Με πονάει το δόντι", "caller", "el")
     assert published[-1].participant_identity == "caller"
     assert published[-1].segments[0].text == "Με πονάει το δόντι"
     assert published[-1].segments[0].final is True
 
-    await worker.publish_web_transcript(room, "friend", "English", "caller", "el")
+    await worker.publish_web_transcript(room, "caller", "English", "caller", "el")
     assert published[-1].segments[0].text == "English"
 
-    await worker.publish_web_transcript(room, "friend", "I'd like an appointment", "caller", "en")
+    await worker.publish_web_transcript(room, "caller", "I'd like an appointment", "caller", "en")
     assert published[-1].segments[0].text == "I'd like an appointment"
 
 

@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct PrankCallerApp: App {
+struct ReceptionistApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var phase
 

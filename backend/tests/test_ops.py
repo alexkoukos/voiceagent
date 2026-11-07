@@ -53,7 +53,7 @@ async def test_export_then_erase_one_caller(sessions, monkeypatch):
                              service_name="Check-up", starts_at=start, ends_at=start + timedelta(minutes=30),
                              customer_id=customer.id)
         db.add_all([
-            TranscriptEntry(call_id=call.id, role=TranscriptRole.friend, text="Είμαι η Άντα"),
+            TranscriptEntry(call_id=call.id, role=TranscriptRole.caller, text="Είμαι η Άντα"),
             RoutingEvent(practice_id=practice.id, call_id=call.id, kind="known_caller", value=PHONE),
             Message(practice_id=practice.id, call_id=call.id, caller_name="Ada", callback_number=PHONE, reason="x"),
             WaitlistEntry(practice_id=practice.id, customer_name="Ada", phone=PHONE, service_id="check",
