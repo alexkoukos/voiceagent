@@ -11,7 +11,7 @@ a doctor and why. Two column types:
 
 The key is DATA_ENCRYPTION_KEY (base64, 32 bytes), kept outside the database. Without it
 values are stored as plain text (local development). Values written before the key was set
-stay readable; scripts/encrypt_existing.py rewrites them. Losing the key loses the data:
+stay readable; ENCRYPT_BACKFILL=1 rewrites them at startup (crypto_backfill.py). Losing the key loses the data:
 keep a copy somewhere other than Railway.
 """
 
