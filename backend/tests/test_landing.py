@@ -35,8 +35,8 @@ async def test_landing_renders_pilot_and_unavailable_demo(monkeypatch):
         response = await client.get("/")
         assert response.status_code == 200
         assert 'lang="el"' in response.text
-        assert "14 ημέρες" in response.text
-        assert "Η ζωντανή δοκιμή δεν είναι διαθέσιμη" in response.text
+        assert "14 days" in response.text
+        assert "The live demo isn't available" in response.text
         assert '<iframe' not in response.text
         assert (await client.get("/privacy")).status_code == 200
         assert (await client.get("/terms")).status_code == 200
