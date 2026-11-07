@@ -1,5 +1,5 @@
 """One place that calls Gemini's generateContent for the backend (call summaries, imports,
-settings changes). With GEMINI_VERTEX_LOCATION set (e.g. europe-west3) requests go to Vertex AI
+settings changes). With GEMINI_VERTEX_LOCATION set (e.g. eu) requests go to Vertex AI
 in that region, so they are processed in the EU; otherwise to the AI Studio API with the key."""
 
 import asyncio

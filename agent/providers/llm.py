@@ -21,7 +21,7 @@ class LlmProvider:
 
 def gemini_auth() -> dict:
     """AI Studio with the key, or Vertex AI in one region (GEMINI_VERTEX_LOCATION, e.g.
-    europe-west3) with the service account in GOOGLE_SERVICE_ACCOUNT_JSON: EU processing."""
+    eu) with the service account in GOOGLE_SERVICE_ACCOUNT_JSON: EU processing."""
     location = os.environ.get("GEMINI_VERTEX_LOCATION")
     if not location:
         return {"api_key": os.environ.get("GEMINI_API_KEY")}
